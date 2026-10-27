@@ -1140,20 +1140,22 @@ export function useEditorFile(group: Group, onError: (message: string) => void) 
     if (!current.relPath || current.readOnly) return false;
     setFile((previous) => ({ ...previous, saving: true }));
     try {
-      const before = await window.api.files.read(groupRef.current.path, current.relPath);
+      // 用打开时记录的 mtime 比对，才能发现外部修改；
+      // 保存成功后再读一次刷新本地 mtime。
       await window.api.files.write(
         groupRef.current.path,
         current.relPath,
         current.content,
         current.encoding,
-        before.mtime,
+        current.mtime,
       );
+      const after = await window.api.files.read(groupRef.current.path, current.relPath);
       setFile((previous) => ({
         ...previous,
         savedContent: previous.content,
         dirty: false,
         saving: false,
-        mtime: before.mtime,
+        mtime: after.mtime,
       }));
       return true;
     } catch (error) {
