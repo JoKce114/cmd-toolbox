@@ -112,3 +112,18 @@ export const GLOBAL_GROUP_KEY = 'global';
 export function projectGroupKey(projectId: string) {
   return `project:${projectId}`;
 }
+
+export type FileEntry = {
+  name: string;
+  relPath: string;
+  isDir: boolean;
+  isSymlink: boolean;
+};
+
+export type OpenedFile = {
+  content: string;
+  encoding: string;
+  size: number;
+  readOnly: boolean;
+  mtime: number;
+};

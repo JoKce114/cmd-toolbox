@@ -1,4 +1,4 @@
-import type { AppInfo, GitChange, GitStatus, Project } from './types';
+import type { AppInfo, FileEntry, GitChange, GitStatus, OpenedFile, Project } from './types';
 
 export interface ProjectSaveResult {
   projects: Project[];
@@ -86,6 +86,17 @@ declare global {
           filePath: string,
           changeStatus: GitChange['status'],
         ) => Promise<{ command: string }>;
+      };
+      files: {
+        list: (projectPath: string, relDir: string) => Promise<{ entries: FileEntry[] }>;
+        read: (projectPath: string, relPath: string) => Promise<OpenedFile>;
+        write: (
+          projectPath: string,
+          relPath: string,
+          content: string,
+          encoding: string,
+          mtime: number,
+        ) => Promise<{ ok: true }>;
       };
       panes: {
         sync: (panes: Array<Record<string, unknown>>) => void;

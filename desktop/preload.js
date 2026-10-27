@@ -64,6 +64,13 @@ contextBridge.exposeInMainWorld('api', {
       invoke('git:diff', projectPath, filePath, changeStatus),
   },
 
+  files: {
+    list: (projectPath, relDir) => invoke('fs:list', projectPath, relDir),
+    read: (projectPath, relPath) => invoke('fs:read', projectPath, relPath),
+    write: (projectPath, relPath, content, encoding, mtime) =>
+      invoke('fs:write', projectPath, relPath, content, encoding, mtime),
+  },
+
   panes: {
     sync: (panes) => ipcRenderer.send('panes:sync', panes),
     attachBrowser: (tabId, webContentsId) =>

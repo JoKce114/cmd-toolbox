@@ -9,6 +9,7 @@ const ptyHost = require('./pty-host');
 const paneApi = require('./pane-api');
 const mcpConfig = require('./mcp-config');
 const git = require('./git');
+const fileApi = require('./file-api');
 const { listShells, listTools, resolveShell } = require('./shells');
 
 const APP_NAME = 'Cmd Toolbox';
@@ -266,6 +267,18 @@ function registerIpc() {
 
   ipcMain.handle('git:diff', (_event, projectPath, filePath, changeStatus) =>
     git.diffCommand(assertProjectPath(projectPath), filePath, changeStatus),
+  );
+
+  ipcMain.handle('fs:list', (_event, projectPath, relDir) =>
+    fileApi.list(assertProjectPath(projectPath), relDir),
+  );
+
+  ipcMain.handle('fs:read', (_event, projectPath, relPath) =>
+    fileApi.read(assertProjectPath(projectPath), relPath),
+  );
+
+  ipcMain.handle('fs:write', (_event, projectPath, relPath, content, encoding, mtime) =>
+    fileApi.write(assertProjectPath(projectPath), relPath, content, encoding, mtime),
   );
 
   ipcMain.handle('dialog:pick-folder', async () => {
