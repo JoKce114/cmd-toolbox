@@ -14,6 +14,7 @@ import {
   CornerDownLeft,
   Cpu,
   Eraser,
+  FileCode,
   Gem,
   FolderOpen,
   GitBranch,
@@ -30,7 +31,7 @@ import { moveById, nextPaneNo, toErrorMessage } from './lib';
 import { accentFor, defaultTabTitle, GLOBAL_COLOR } from './theme';
 import type { TerminalThemeMode } from './theme';
 import { useGitStatus } from './gitStatus';
-import { GLOBAL_GROUP_KEY, isBrowserTab, projectGroupKey } from './types';
+import { GLOBAL_GROUP_KEY, isBrowserTab, isEditorTab, projectGroupKey } from './types';
 import type { AppInfo, GitChange, Group, MenuEntry, MenuState, Project, Tab } from './types';
 import { discardSession, startPtyBus, subscribeAllData, subscribeExit } from './ptyBus';
 import {
@@ -46,6 +47,7 @@ import { TAB_DRAG_TYPE, TabStrip } from './components/TabStrip';
 import { EmptyState } from './components/EmptyState';
 import { TerminalPane } from './components/TerminalPane';
 import { BrowserPane } from './components/BrowserPane';
+import { EditorPane } from './components/EditorPane';
 import type { TerminalMenuActions } from './components/TerminalPane';
 import { ProjectModal } from './components/ProjectModal';
 import { RenameTabModal } from './components/RenameTabModal';
@@ -71,6 +73,7 @@ function shellIcon(shellId: string) {
   if (shellId === 'claude') return <Bot size={14} />;
   if (shellId === 'gemini') return <Gem size={14} />;
   if (shellId === 'opencode') return <Code2 size={14} />;
+  if (shellId === 'editor') return <FileCode size={14} />;
   if (shellId === 'browser') return <Globe size={14} />;
   return <SquareTerminal size={14} />;
 }
@@ -338,6 +341,26 @@ export default function App() {
             continue;
           }
 
+          if (saved.shellId === 'editor') {
+            restoredTabs[saved.groupKey] = [
+              ...existing,
+              {
+                id: saved.id,
+                groupKey: saved.groupKey,
+                sessionId: '',
+                shellId: 'editor',
+                seq: saved.seq || 1,
+                paneNo,
+                descriptor: saved.descriptor || '编辑器',
+                custom: saved.custom,
+                cwd: group.path,
+                filePath: saved.filePath || '',
+                exited: false,
+              },
+            ];
+            continue;
+          }
+
           const shell = findLaunchTarget(appInfo, saved.shellId);
           if (!shell?.available) continue;
           try {
@@ -591,6 +614,7 @@ export default function App() {
           custom: tab.custom,
           cwd: tab.cwd,
           conversationId: tab.conversationId || '',
+          filePath: tab.filePath || '',
           paneNo: tab.paneNo,
           url: tab.url || '',
         }));
@@ -633,6 +657,7 @@ export default function App() {
           custom: tab.custom,
           cwd: tab.cwd,
           conversationId: tab.conversationId || '',
+          filePath: tab.filePath || '',
           paneNo: tab.paneNo,
           url: tab.url || '',
         }));
@@ -726,6 +751,45 @@ export default function App() {
       } else {
         setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
       }
+    },
+    [applyTabs, pushToast],
+  );
+
+  const setTabDescriptor = useCallback(
+    (groupKey: string, tabId: string, descriptor: string) => {
+      applyTabs({
+        ...tabsRef.current,
+        [groupKey]: (tabsRef.current[groupKey] || []).map((item) =>
+          item.id === tabId ? { ...item, descriptor, custom: true } : item,
+        ),
+      });
+    },
+    [applyTabs],
+  );
+
+  const createEditor = useCallback(
+    (group: Group, filePath = '') => {
+      if (!group.exists) {
+        pushToast('项目目录不存在，请先编辑项目路径', 'error');
+        return;
+      }
+      const groupTabs = tabsRef.current[group.key] || [];
+      const tab: Tab = {
+        id: crypto.randomUUID(),
+        groupKey: group.key,
+        sessionId: '',
+        shellId: 'editor',
+        seq: 1,
+        paneNo: nextPaneNo(groupTabs.map((item) => item.paneNo)),
+        descriptor: '编辑器',
+        custom: false,
+        cwd: group.path,
+        filePath,
+        exited: false,
+      };
+      applyTabs({ ...tabsRef.current, [group.key]: [...groupTabs, tab] });
+      setActiveGroupKey(group.key);
+      setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
     },
     [applyTabs, pushToast],
   );
@@ -1280,6 +1344,14 @@ export default function App() {
           disabled: !group.exists,
           onSelect: () => revealPath(group.path),
         },
+        {
+          type: 'item',
+          id: 'group-editor',
+          label: '打开编辑器',
+          icon: <FileCode size={14} />,
+          disabled: !group.exists,
+          onSelect: () => createEditor(group),
+        },
       ];
       if (group.kind === 'project') {
         items.push(
@@ -1303,7 +1375,7 @@ export default function App() {
       }
       setMenu({ x: event.clientX, y: event.clientY, items });
     },
-    [buildShellMenuItems, editGroupProject, requestDeleteProject, revealPath],
+    [buildShellMenuItems, createEditor, editGroupProject, requestDeleteProject, revealPath],
   );
 
   const openTabMenu = useCallback(
@@ -1576,6 +1648,19 @@ export default function App() {
           onClose={(target) => closeTabs(target.groupKey, [target.id])}
           onToast={pushToast}
           onUrlChange={updateBrowserUrl}
+        />
+      );
+    }
+    if (isEditorTab(tab)) {
+      return (
+        <EditorPane
+          key={tab.id}
+          tab={tab}
+          group={group}
+          active={active}
+          onClose={(target) => closeTabs(target.groupKey, [target.id])}
+          onToast={pushToast}
+          onTitleChange={(title) => setTabDescriptor(tab.groupKey, tab.id, title)}
         />
       );
     }

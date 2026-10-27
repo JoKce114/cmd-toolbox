@@ -16,6 +16,7 @@ export interface SessionTab {
   cwd: string;
   url?: string;
   conversationId?: string;
+  filePath?: string;
 }
 
 export interface SessionSnapshot {

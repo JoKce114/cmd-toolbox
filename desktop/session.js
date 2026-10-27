@@ -41,6 +41,7 @@ function normalizeTab(value) {
     cwd: typeof value.cwd === 'string' ? value.cwd : '',
     url: typeof value.url === 'string' ? value.url.trim().slice(0, 2000) : '',
     conversationId: typeof value.conversationId === 'string' ? value.conversationId.trim() : '',
+    filePath: typeof value.filePath === 'string' ? value.filePath.trim().slice(0, 500) : '',
   };
 }
 

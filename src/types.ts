@@ -48,6 +48,7 @@ export type Tab = {
   cwd: string;
   url?: string;
   conversationId?: string;
+  filePath?: string;
   exited: boolean;
   exitCode?: number;
 };
@@ -84,6 +85,10 @@ export type GitStatus =
 
 export function isBrowserTab(tab: { shellId: string }): boolean {
   return tab.shellId === 'browser';
+}
+
+export function isEditorTab(tab: { shellId: string }): boolean {
+  return tab.shellId === 'editor';
 }
 
 export type MenuEntry =
