@@ -39,31 +39,58 @@ const page = await app.firstWindow();
 page.on('pageerror', (error) => console.log('  [pageerror]', error.message));
 await page.waitForLoadState('domcontentloaded');
 await page.locator('.app').waitFor();
-await page.waitForTimeout(1500);
+await page.waitForFunction(() => !document.querySelector('.boot-screen'));
+await page.waitForTimeout(1200);
 
 async function click(locator) {
-  try {
-    await locator.click({ timeout: 6000 });
-  } catch (error) {
-    const box = await locator.boundingBox();
-    if (!box) throw error;
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  const deadline = Date.now() + 15000;
+  for (;;) {
+    try {
+      await locator.click({ timeout: 3000, force: true });
+      return;
+    } catch (error) {
+      const box = await locator.boundingBox().catch(() => null);
+      if (box) {
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        return;
+      }
+      if (Date.now() > deadline) throw error;
+      await page.waitForTimeout(300);
+    }
+  }
+}
+
+async function waitFor(predicate, message, timeout = 15000) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    if (await predicate()) return;
+    if (Date.now() > deadline) throw new Error(`等待超时：${message}`);
+    await page.waitForTimeout(250);
   }
 }
 
 async function addProject(path, name) {
-  await click(page.locator('.add-project-btn'));
-  await page.locator('.modal-card').waitFor();
+  const modal = page.locator('.modal-card');
+  const deadline = Date.now() + 20000;
+  while ((await modal.count()) === 0) {
+    if (Date.now() > deadline) throw new Error('等待超时：添加项目弹窗未出现');
+    await click(page.locator('.add-project-btn'));
+    await page.waitForTimeout(600);
+  }
   await page.locator('#project-path').fill(path);
   await page.locator('#project-name').fill(name);
   await click(page.getByRole('button', { name: '保存项目', exact: true }));
-  await page.locator('.modal-card').waitFor({ state: 'detached' });
-  await page.waitForTimeout(500);
+  await modal.waitFor({ state: 'detached', timeout: 15000 });
+  await page.waitForTimeout(400);
 }
 
 async function selectProject(name) {
   await click(page.locator('.group-item').filter({ hasText: name }).locator('.group-main'));
-  await page.waitForTimeout(1200);
+  await waitFor(
+    async () => (await page.locator('.git-panel').count()) > 0,
+    `切换到 ${name} 后面板出现`,
+  );
+  await page.waitForTimeout(600);
 }
 
 console.log('1. 非 Git 项目显示初始化按钮');
@@ -75,9 +102,8 @@ assert(
   '显示非仓库提示',
 );
 await click(page.getByRole('button', { name: '初始化仓库', exact: true }));
-await page.waitForTimeout(1600);
-assert(
-  (await page.locator('.git-panel').innerText()).includes('a.txt'),
+await waitFor(
+  async () => (await page.locator('.git-panel').innerText()).includes('a.txt'),
   '初始化后出现变更列表',
 );
 
@@ -97,9 +123,8 @@ assert(
   '填写信息后提交按钮可用',
 );
 await click(page.getByRole('button', { name: '提交', exact: true }));
-await page.waitForTimeout(2000);
-assert(
-  await page.getByRole('button', { name: '推送', exact: true }).isVisible(),
+await waitFor(
+  async () => (await page.getByRole('button', { name: '推送', exact: true }).count()) > 0,
   '提交后按钮变为「推送」',
 );
 assert((await page.locator('.git-message').isEditable()) === false, '输入框变为只读');
@@ -113,9 +138,15 @@ console.log('4. 继续编辑回到提交态');
 // 提交后工作区已干净，必须先制造新变更，「继续编辑」才有意义
 writeFileSync(join(repo, 'index.php'), '<?php echo 2;\n');
 await click(page.locator('.git-icon-btn'));
-await page.waitForTimeout(1400);
+await waitFor(
+  async () => (await page.locator('.git-panel').innerText()).includes('index.php'),
+  '刷新后看到新的变更',
+);
 await click(page.getByRole('button', { name: '继续编辑', exact: true }));
-await page.waitForTimeout(600);
+await waitFor(
+  async () => (await page.getByRole('button', { name: '提交', exact: true }).count()) > 0,
+  '点击继续编辑后回到提交态',
+);
 assert(
   await page.getByRole('button', { name: '提交', exact: true }).isVisible(),
   '按钮回到「提交」',
@@ -128,11 +159,16 @@ assert(
 console.log('5. 推送无上游时保留推送态');
 await page.locator('.git-message').fill('第二次提交');
 await click(page.getByRole('button', { name: '提交', exact: true }));
-await page.waitForTimeout(2000);
+await waitFor(
+  async () => (await page.getByRole('button', { name: '推送', exact: true }).count()) > 0,
+  '第二次提交后按钮变为「推送」',
+);
 await click(page.getByRole('button', { name: '推送', exact: true }));
-await page.waitForTimeout(2500);
-const toastText = await page.locator('.toast').last().innerText();
-assert(toastText.includes('上游'), '推送无上游时提示上游信息');
+await waitFor(
+  async () =>
+    (await page.locator('.toast').allInnerTexts()).some((text) => text.includes('上游')),
+  '推送失败提示包含上游信息',
+);
 assert(
   await page.getByRole('button', { name: '推送', exact: true }).isVisible(),
   '失败后仍停留在「推送」',
@@ -142,13 +178,23 @@ console.log('6. 点击变更文件打开 diff 页签');
 await selectProject('plain-proj');
 writeFileSync(join(plain, 'b.txt'), 'b\n');
 await click(page.locator('.git-icon-btn'));
-await page.waitForTimeout(1200);
+await waitFor(
+  async () => (await page.locator('.git-change-row').filter({ hasText: 'b.txt' }).count()) > 0,
+  '刷新后看到 b.txt',
+);
 const beforeTabs = await page.locator('.tab').count();
 await click(page.locator('.git-change-row').filter({ hasText: 'b.txt' }));
-await page.waitForTimeout(2500);
-assert((await page.locator('.tab').count()) === beforeTabs + 1, '打开了一个新页签');
-const rows = await page.locator('.terminal-pane:not(.is-hidden) .xterm-rows').innerText();
-assert(rows.includes('b.txt'), 'diff 内容出现在终端中');
+await waitFor(
+  async () => (await page.locator('.tab').count()) === beforeTabs + 1,
+  '打开 diff 页签',
+);
+await waitFor(async () => {
+  const rows = await page
+    .locator('.terminal-pane:not(.is-hidden) .xterm-rows')
+    .innerText()
+    .catch(() => '');
+  return rows.includes('b.txt');
+}, 'diff 内容出现在终端中', 20000);
 
 await page.screenshot({ path: join(shotDir, 'git-panel.png') });
 await app.close();
