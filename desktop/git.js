@@ -237,14 +237,23 @@ async function stageAll(projectPath) {
 }
 
 async function discardAll(projectPath) {
-  // 先清空暂存区再丢弃工作区改动，否则已暂存的新增文件会残留
-  const unstageResult = await runGit(projectPath, ['restore', '--staged', '.']);
-  if (!unstageResult.ok) throw new Error(cleanError(unstageResult.error, unstageResult.stderr));
+  // 空仓库（尚无 HEAD）没有可 restore 的对象，跳过前两步
+  const head = await runGit(projectPath, ['rev-parse', '--verify', '--quiet', 'HEAD']);
 
-  const restoreResult = await runGit(projectPath, ['restore', '.']);
-  if (!restoreResult.ok) throw new Error(cleanError(restoreResult.error, restoreResult.stderr));
+  if (head.ok) {
+    // 先清空暂存区再丢弃工作区改动，否则已暂存的新增文件会残留
+    const unstageResult = await runGit(projectPath, ['restore', '--staged', '.']);
+    if (!unstageResult.ok) {
+      throw new Error(cleanError(unstageResult.error, unstageResult.stderr));
+    }
 
-  // 未跟踪文件没有被 restore 覆盖，需要逐个删除
+    const restoreResult = await runGit(projectPath, ['restore', '.']);
+    if (!restoreResult.ok) {
+      throw new Error(cleanError(restoreResult.error, restoreResult.stderr));
+    }
+  }
+
+  // 未跟踪文件没有被 restore 覆盖，需要逐个删除；空仓库里它们就是全部内容
   const current = await status(projectPath);
   if (current.ok) {
     for (const change of current.changes) {

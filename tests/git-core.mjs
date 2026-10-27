@@ -99,6 +99,18 @@ await git.discardAll(repo);
 const allDiscarded = await git.status(repo);
 assert(allDiscarded.hasChanges === false, '全部放弃后工作区干净');
 
+console.log('5f. 空仓库的全部放弃');
+const unborn = mkdtempSync(join(tmpdir(), 'cmdtb-unborn-'));
+execFileSync('git', ['init', '-b', 'main'], { cwd: unborn, stdio: 'ignore' });
+execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: unborn });
+execFileSync('git', ['config', 'user.name', 'Test'], { cwd: unborn });
+execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: unborn });
+writeFileSync(join(unborn, 'only.txt'), 'x\n');
+const unbornResult = await git.discardAll(unborn);
+assert(unbornResult.ok === true, '空仓库全部放弃不报错');
+const unbornAfter = await git.status(unborn);
+assert(unbornAfter.hasChanges === false, '空仓库里的未跟踪文件被清除');
+
 console.log('6. 提交空信息被拒绝');
 let rejected = false;
 try {
