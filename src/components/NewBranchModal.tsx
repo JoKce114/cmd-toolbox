@@ -17,7 +17,8 @@ export function NewBranchModal({
   onConfirm,
 }: NewBranchModalProps) {
   const [name, setName] = useState('');
-  const [startPoint, setStartPoint] = useState(current);
+  // 空仓库还没有任何提交，不能把当前分支名当作起点
+  const [startPoint, setStartPoint] = useState(branches.length > 0 ? current : '');
 
   const canSubmit = name.trim().length > 0 && !busy;
 
@@ -44,20 +45,24 @@ export function NewBranchModal({
           />
         </label>
 
-        <label className="field">
-          <span className="field-label">起点分支</span>
-          <select
-            id="new-branch-start"
-            value={startPoint}
-            onChange={(event) => setStartPoint(event.target.value)}
-          >
-            {branches.map((branch) => (
-              <option key={branch} value={branch}>
-                {branch}
-              </option>
-            ))}
-          </select>
-        </label>
+        {branches.length > 0 ? (
+          <label className="field">
+            <span className="field-label">起点分支</span>
+            <select
+              id="new-branch-start"
+              value={startPoint}
+              onChange={(event) => setStartPoint(event.target.value)}
+            >
+              {branches.map((branch) => (
+                <option key={branch} value={branch}>
+                  {branch}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <p className="field-label">仓库尚无提交，将直接创建新分支</p>
+        )}
 
         <div className="modal-footer">
           <button type="button" className="btn btn-secondary" onClick={onClose} disabled={busy}>

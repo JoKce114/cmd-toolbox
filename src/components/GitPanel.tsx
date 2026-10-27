@@ -12,6 +12,7 @@ import {
 import { cn } from '../lib';
 import type { GitChange, GitChangeStatus, GitStatus } from '../types';
 import { BranchMenu } from './BranchMenu';
+import { ConfirmDialog } from './ConfirmDialog';
 import { NewBranchModal } from './NewBranchModal';
 
 type Phase = 'idle' | 'committing' | 'committed' | 'pushing';
@@ -106,8 +107,20 @@ export function GitPanel({
 
   const busy = phase === 'committing' || phase === 'pushing';
   const messageFilled = message.trim().length > 0;
-  const canCommit =
-    phase === 'idle' && messageFilled && Boolean(status?.ok && status.stagedCount > 0);
+
+  const changes = status?.ok ? status.changes : [];
+  // 冲突项没有可用的暂存/取消暂存语义，只能到终端解决
+  const stagedChanges = changes.filter(
+    (change) => change.indexStatus !== null && change.indexStatus !== 'conflicted',
+  );
+  const unstagedChanges = changes.filter((change) => change.worktreeStatus !== null);
+  const hasConflicts = changes.some(
+    (change) => change.indexStatus === 'conflicted' || change.worktreeStatus === 'conflicted',
+  );
+  const canCommit = phase === 'idle' && messageFilled && stagedChanges.length > 0;
+
+  const pathsFor = (change: GitChange) =>
+    change.origPath ? [change.origPath, change.path] : [change.path];
 
   const resetToIdle = () => {
     setPhase('idle');
@@ -199,13 +212,12 @@ export function GitPanel({
     );
   }
 
-  const stagedChanges = status.changes.filter((c) => c.indexStatus !== null);
-  const unstagedChanges = status.changes.filter((c) => c.worktreeStatus !== null);
-
   const renderRow = (change: GitChange, staged: boolean) => {
     const display = staged ? change.indexStatus : change.worktreeStatus;
     const badge = display ?? 'modified';
-    const busy = busyPaths.has(change.path);
+    const busy = busyPaths.has(change.path) || groupBusy;
+    const conflicted =
+      change.indexStatus === 'conflicted' || change.worktreeStatus === 'conflicted';
 
     return (
       <li key={`${staged ? 's' : 'w'}:${change.path}`} className="git-change-item">
@@ -214,7 +226,10 @@ export function GitPanel({
           className="git-change-row"
           title={change.origPath ? `${change.origPath} → ${change.path}` : change.path}
           onClick={() =>
-            change.worktreeStatus === 'deleted' ? onOpenDiff(change) : onOpenInEditor(change)
+            change.worktreeStatus === 'deleted' ||
+            (change.worktreeStatus === null && change.indexStatus === 'deleted')
+              ? onOpenDiff(change)
+              : onOpenInEditor(change)
           }
         >
           <span className={cn('git-change-badge', `is-${badge}`)}>{STATUS_LABEL[badge]}</span>
@@ -232,13 +247,17 @@ export function GitPanel({
           <FileDiff size={13} />
         </button>
 
-        {staged ? (
+        {conflicted ? (
+          <span className="git-conflict-hint" title="冲突需要先在终端解决">
+            需在终端解决
+          </span>
+        ) : staged ? (
           <button
             type="button"
             className="git-row-action"
             title="取消暂存"
             disabled={busy}
-            onClick={() => void runPathAction(change.path, () => onUnstage([change.path]))}
+            onClick={() => void runPathAction(change.path, () => onUnstage(pathsFor(change)))}
           >
             <Undo2 size={13} />
           </button>
@@ -258,7 +277,7 @@ export function GitPanel({
               className="git-row-action"
               title="暂存"
               disabled={busy}
-              onClick={() => void runPathAction(change.path, () => onStage([change.path]))}
+              onClick={() => void runPathAction(change.path, () => onStage(pathsFor(change)))}
             >
               <Plus size={13} />
             </button>
@@ -376,7 +395,7 @@ export function GitPanel({
               title="全部取消暂存"
               disabled={groupBusy}
               onClick={() =>
-                void runGroupAction(() => onUnstage(stagedChanges.map((c) => c.path)))
+                void runGroupAction(() => onUnstage(stagedChanges.flatMap((c) => pathsFor(c))))
               }
             >
               <Undo2 size={13} />
@@ -396,8 +415,8 @@ export function GitPanel({
             <button
               type="button"
               className="git-group-action"
-              title="全部放弃"
-              disabled={groupBusy}
+              title={hasConflicts ? '请先在终端解决冲突' : '全部放弃'}
+              disabled={groupBusy || hasConflicts}
               onClick={() => setConfirmDiscard({ kind: 'all' })}
             >
               <Trash2 size={13} />
@@ -405,8 +424,8 @@ export function GitPanel({
             <button
               type="button"
               className="git-group-action"
-              title="全部暂存"
-              disabled={groupBusy}
+              title={hasConflicts ? '请先在终端解决冲突' : '全部暂存'}
+              disabled={groupBusy || hasConflicts}
               onClick={() => void runGroupAction(() => onStageAll())}
             >
               <Plus size={13} />
@@ -419,37 +438,26 @@ export function GitPanel({
       ) : null}
 
       {confirmDiscard ? (
-        <div className="modal-overlay" role="dialog" aria-modal="true">
-          <div className="modal-card editor-confirm">
-            <p className="confirm-message">{discardMessage}</p>
-            <div className="modal-footer">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setConfirmDiscard(null)}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => {
-                  const target = confirmDiscard;
-                  setConfirmDiscard(null);
-                  if (target.kind === 'all') void runGroupAction(() => onDiscardAll());
-                  else {
-                    const change = target.change;
-                    const tracked = change.worktreeStatus === 'untracked' ? [] : [change.path];
-                    const untracked = change.worktreeStatus === 'untracked' ? [change.path] : [];
-                    void runPathAction(change.path, () => onDiscard({ tracked, untracked }));
-                  }
-                }}
-              >
-                确定放弃
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title="放弃修改"
+          message={discardMessage}
+          confirmLabel="确定放弃"
+          onClose={() => setConfirmDiscard(null)}
+          onConfirm={async () => {
+            const target = confirmDiscard;
+            if (!target) return;
+            if (target.kind === 'all') {
+              await runGroupAction(() => onDiscardAll());
+            } else {
+              const change = target.change;
+              const targetPaths = pathsFor(change);
+              const tracked = change.worktreeStatus === 'untracked' ? [] : targetPaths;
+              const untracked = change.worktreeStatus === 'untracked' ? targetPaths : [];
+              await runPathAction(change.path, () => onDiscard({ tracked, untracked }));
+            }
+            setConfirmDiscard(null);
+          }}
+        />
       ) : null}
     </section>
   );

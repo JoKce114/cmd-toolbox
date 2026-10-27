@@ -1,6 +1,6 @@
 import { _electron as electron } from 'playwright-core';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -262,7 +262,7 @@ const beforeDiscard = readFileSync(join(repo, 'index.php'), 'utf8');
 await click(
   page.locator('.git-change-item').filter({ hasText: 'index.php' }).locator('.git-row-action[title="放弃修改"]'),
 );
-await page.locator('.editor-confirm').waitFor({ timeout: 8000 });
+await page.getByRole('button', { name: '确定放弃', exact: true }).waitFor({ timeout: 8000 });
 await click(page.getByRole('button', { name: '取消', exact: true }));
 await page.waitForTimeout(400);
 assert(readFileSync(join(repo, 'index.php'), 'utf8') === beforeDiscard, '取消后文件未变');
@@ -271,11 +271,35 @@ console.log('10. 确认放弃后文件恢复');
 await click(
   page.locator('.git-change-item').filter({ hasText: 'index.php' }).locator('.git-row-action[title="放弃修改"]'),
 );
-await page.locator('.editor-confirm').waitFor({ timeout: 8000 });
+await page.getByRole('button', { name: '确定放弃', exact: true }).waitFor({ timeout: 8000 });
 await click(page.getByRole('button', { name: '确定放弃', exact: true }));
 await waitFor(
   async () => readFileSync(join(repo, 'index.php'), 'utf8') !== beforeDiscard,
   '放弃后文件恢复原内容',
+);
+
+console.log('10b. 放弃未跟踪目录');
+mkdirSync(join(repo, 'scratch-dir', 'nested'), { recursive: true });
+writeFileSync(join(repo, 'scratch-dir', 'nested', 'x.txt'), 'x\n');
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () =>
+    (await page.locator('.git-change-item').filter({ hasText: 'scratch-dir/' }).count()) > 0,
+  '刷新后看到未跟踪目录',
+);
+await click(
+  page
+    .locator('.git-change-item')
+    .filter({ hasText: 'scratch-dir/' })
+    .locator('.git-row-action[title="放弃修改"]'),
+);
+await page.getByRole('button', { name: '确定放弃', exact: true }).waitFor({ timeout: 8000 });
+await click(page.getByRole('button', { name: '确定放弃', exact: true }));
+await waitFor(async () => !existsSync(join(repo, 'scratch-dir')), '目录已从磁盘删除');
+await waitFor(
+  async () =>
+    (await page.locator('.git-change-item').filter({ hasText: 'scratch-dir' }).count()) === 0,
+  '刷新后目录行消失',
 );
 
 console.log('11. 未暂存时提交按钮禁用');
@@ -290,10 +314,14 @@ assert(
 );
 
 console.log('12. 分支列表与切换');
-writeFileSync(join(repo, 'index.php'), '<?php echo 8;\n');
+// 新建分支要求工作区干净：先清掉前面场景留下的改动
+execFileSync('git', ['reset', '--hard', 'HEAD'], { cwd: repo });
+rmSync(join(repo, 'new-file.txt'), { force: true });
 await click(page.locator('.git-icon-btn'));
-await page.waitForTimeout(800);
-await click(page.getByRole('button', { name: '全部暂存' })).catch(() => {});
+await waitFor(
+  async () => (await page.locator('.git-change-row').count()) === 0,
+  '刷新后工作区干净',
+);
 await page.locator('.git-branch-button').click();
 await page.locator('.branch-menu').waitFor({ timeout: 8000 });
 assert(

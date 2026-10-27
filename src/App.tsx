@@ -579,11 +579,13 @@ export default function App() {
       try {
         await action(group.path);
         if (successMessage) pushToast(successMessage, 'success');
-        await refreshGit();
         return true;
       } catch (error) {
         pushToast(toErrorMessage(error), 'error');
         return false;
+      } finally {
+        // 即使动作中途失败也要刷新，避免面板继续显示已经被处理的改动
+        await refreshGit();
       }
     },
     [pushToast, refreshGit],
@@ -619,25 +621,27 @@ export default function App() {
     async (branch: string) => {
       const group = gitGroupRef.current;
       if (!group) return;
-      const dirty = Boolean(
-        gitStatus?.ok && (gitStatus.stagedCount > 0 || gitStatus.unstagedCount > 0),
-      );
-      if (dirty) {
-        pushToast('有未提交的改动，请先提交或放弃后再切换分支', 'error');
-        return;
-      }
       setBranchBusy(true);
       try {
+        // 读最新状态：编辑器保存等操作不会触发 gitStatus 刷新
+        const fresh = await window.api.git.status(group.path);
+        const dirty = Boolean(
+          fresh.ok && (fresh.stagedCount > 0 || fresh.unstagedCount > 0),
+        );
+        if (dirty) {
+          pushToast('有未提交的改动，请先提交或放弃后再切换分支', 'error');
+          return;
+        }
         await window.api.git.checkout(group.path, branch);
         pushToast(`已切换到 ${branch}`, 'success');
-        await refreshGit();
       } catch (error) {
         pushToast(toErrorMessage(error), 'error');
       } finally {
+        await refreshGit();
         setBranchBusy(false);
       }
     },
-    [gitStatus, pushToast, refreshGit],
+    [pushToast, refreshGit],
   );
 
   const gitCreateBranch = useCallback(
@@ -646,12 +650,20 @@ export default function App() {
       if (!group) return;
       setBranchBusy(true);
       try {
+        const fresh = await window.api.git.status(group.path);
+        const dirty = Boolean(
+          fresh.ok && (fresh.stagedCount > 0 || fresh.unstagedCount > 0),
+        );
+        if (dirty) {
+          pushToast('有未提交的改动，请先提交或放弃后再新建分支', 'error');
+          return;
+        }
         await window.api.git.createBranch(group.path, name, startPoint);
         pushToast(`已创建并切换到 ${name}`, 'success');
-        await refreshGit();
       } catch (error) {
         pushToast(toErrorMessage(error), 'error');
       } finally {
+        await refreshGit();
         setBranchBusy(false);
       }
     },
@@ -670,10 +682,10 @@ export default function App() {
         } else {
           pushToast(`已合并 ${branch}`, 'success');
         }
-        await refreshGit();
       } catch (error) {
         pushToast(toErrorMessage(error), 'error');
       } finally {
+        await refreshGit();
         setBranchBusy(false);
       }
     },

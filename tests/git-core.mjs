@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -85,10 +85,57 @@ console.log('5c. 放弃已跟踪文件的修改');
 await git.discard(repo, { tracked: ['index.php'], untracked: [] });
 assert(readFileSync(join(repo, 'index.php'), 'utf8') === '<?php echo 1;\n', '内容恢复到已提交版本');
 
+console.log('5c2. 取消暂存重命名');
+execFileSync('git', ['mv', 'index.php', 'renamed.php'], { cwd: repo });
+const renamedStatus = await git.status(repo);
+const renameChange = renamedStatus.changes.find((c) => c.path === 'renamed.php');
+assert(
+  renameChange && renameChange.origPath === 'index.php',
+  '重命名同时返回新旧路径',
+);
+await git.unstage(repo, ['index.php', 'renamed.php']);
+const afterRenameUnstage = await git.status(repo);
+assert(
+  !afterRenameUnstage.changes.some(
+    (c) => c.indexStatus === 'deleted' && c.path === 'index.php',
+  ),
+  '取消暂存重命名后没有残留的暂存删除',
+);
+assert(
+  afterRenameUnstage.changes.some(
+    (c) => c.path === 'index.php' && c.worktreeStatus === 'deleted',
+  ),
+  '原路径显示为工作区删除',
+);
+assert(
+  afterRenameUnstage.changes.some(
+    (c) => c.path === 'renamed.php' && c.worktreeStatus === 'untracked',
+  ),
+  '新路径显示为未跟踪',
+);
+execFileSync('git', ['restore', '--', 'index.php'], { cwd: repo });
+rmSync(join(repo, 'renamed.php'), { force: true });
+
 console.log('5d. 放弃未跟踪文件等于删除');
 writeFileSync(join(repo, 'scratch.txt'), 'x\n');
 await git.discard(repo, { tracked: [], untracked: ['scratch.txt'] });
 assert(!existsSync(join(repo, 'scratch.txt')), '未跟踪文件已删除');
+
+console.log('5d2. 放弃未跟踪目录递归删除');
+mkdirSync(join(repo, 'newdir', 'nested'), { recursive: true });
+writeFileSync(join(repo, 'newdir', 'a.txt'), 'a\n');
+writeFileSync(join(repo, 'newdir', 'nested', 'b.txt'), 'b\n');
+const dirStatus = await git.status(repo);
+assert(
+  dirStatus.changes.some(
+    (c) => c.worktreeStatus === 'untracked' && c.path.startsWith('newdir/'),
+  ),
+  '未跟踪目录出现在状态中',
+);
+await git.discard(repo, { tracked: [], untracked: ['newdir/'] });
+assert(!existsSync(join(repo, 'newdir')), '未跟踪目录被递归删除');
+const afterDirDiscard = await git.status(repo);
+assert(!afterDirDiscard.hasChanges, '放弃目录后状态干净');
 
 console.log('5e. 全部暂存与全部放弃');
 writeFileSync(join(repo, 'index.php'), '<?php echo 4;\n');
@@ -209,5 +256,12 @@ try {
   badName = error.message;
 }
 assert(badName.length > 0, '非法分支名被拒绝');
+let dashName = '';
+try {
+  await git.createBranch(repo, '-f', 'main');
+} catch (error) {
+  dashName = error.message;
+}
+assert(dashName.length > 0, '以 - 开头的分支名被拒绝');
 
 console.log(`\n全部通过：${passed} 项`);

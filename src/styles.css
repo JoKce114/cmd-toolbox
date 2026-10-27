@@ -1109,6 +1109,14 @@ p {
   white-space: nowrap;
 }
 
+.git-conflict-hint {
+  flex: 0 0 auto;
+  padding-right: 4px;
+  color: #d92d20;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 /* ---------- Workspace & tabs ---------- */
 
 .workspace {

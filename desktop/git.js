@@ -16,6 +16,18 @@ function isDirectory(target) {
   }
 }
 
+// 未跟踪目录在 porcelain 里显示为 `? dir/`，fs.rm 不加 recursive 时不会删除目录
+async function removePath(projectPath, item) {
+  const target = resolveWithin(projectPath, item);
+  let recursive = false;
+  try {
+    recursive = (await fsp.stat(target)).isDirectory();
+  } catch {
+    // 路径已不存在时由 rm 的 force 静默处理
+  }
+  await fsp.rm(target, { force: true, recursive });
+}
+
 function cleanError(error, stderr) {
   const text = String(stderr || '').trim() || (error && error.message) || 'git 执行失败';
   return text.split('\n').filter(Boolean).slice(-3).join('\n').slice(0, 300);
@@ -223,8 +235,7 @@ async function discard(projectPath, payload) {
   }
 
   for (const item of untracked) {
-    const target = resolveWithin(projectPath, item);
-    await fsp.rm(target, { force: true });
+    await removePath(projectPath, item);
   }
 
   return { ok: true };
@@ -258,7 +269,7 @@ async function discardAll(projectPath) {
   if (current.ok) {
     for (const change of current.changes) {
       if (change.worktreeStatus !== 'untracked') continue;
-      await fsp.rm(resolveWithin(projectPath, change.path), { force: true });
+      await removePath(projectPath, change.path);
     }
   }
 
@@ -272,6 +283,7 @@ function assertBranchName(name) {
   if (!value) throw new Error('请填写分支名');
   if (value.length > 100) throw new Error('分支名过长');
   if (!BRANCH_NAME.test(value)) throw new Error('分支名包含不允许的字符');
+  if (value.startsWith('-')) throw new Error('分支名不能以 - 开头');
   if (value.startsWith('/') || value.endsWith('/') || value.endsWith('.lock')) {
     throw new Error('分支名格式不合法');
   }
@@ -330,16 +342,26 @@ async function merge(projectPath, branch) {
   const result = await runGit(projectPath, ['merge', name]);
   if (result.ok) return { ok: true, conflicted: [] };
 
-  const conflicted = [
+  // 优先看索引里的未合并条目：不受输出语言影响，也能识别 modify/delete 冲突
+  const current = await status(projectPath);
+  const conflicted = current.ok
+    ? current.changes
+        .filter((change) => change.indexStatus === 'conflicted')
+        .map((change) => change.path)
+    : [];
+  if (conflicted.length) return { ok: true, conflicted };
+
+  // 状态读取失败或冲突已被自动解决时，退回解析英文输出
+  const parsed = [
     ...new Set(
       `${result.stdout}\n${result.stderr}`
         .split('\n')
-        .map((line) => line.match(/Merge conflict in (.+)$/))
+        .map((line) => line.match(/(?:Merge conflict in|CONFLICT \([^)]*\):) (.+)$/))
         .filter(Boolean)
         .map((match) => match[1].trim()),
     ),
   ];
-  if (conflicted.length) return { ok: true, conflicted };
+  if (parsed.length) return { ok: true, conflicted: parsed };
 
   throw new Error(cleanError(result.error, result.stderr));
 }
