@@ -1657,6 +1657,7 @@ export default function App() {
           gitPanel={
             gitGroup ? (
               <GitPanel
+                key={gitGroup.key}
                 status={gitStatus}
                 refreshing={gitRefreshing}
                 onRefresh={() => void refreshGit()}

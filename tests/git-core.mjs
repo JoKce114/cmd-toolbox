@@ -100,7 +100,16 @@ try {
 }
 assert(escaped, '拒绝项目目录之外的路径');
 
-console.log('10. 初始化仓库');
+console.log('10. 命令注入相关字符被拒绝');
+let percentRejected = false;
+try {
+  await git.diffCommand(repo, '100%PATH%done.txt', 'modified');
+} catch {
+  percentRejected = true;
+}
+assert(percentRejected, '拒绝含 % 的路径（cmd 会展开变量）');
+
+console.log('11. 初始化仓库');
 const fresh = mkdtempSync(join(tmpdir(), 'cmdtb-init-'));
 writeFileSync(join(fresh, 'a.txt'), 'a\n');
 await git.init(fresh);

@@ -215,7 +215,10 @@ async function diffCommand(projectPath, filePath, changeStatus) {
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error('文件路径不在项目目录内');
   }
-  if (/["\r\n]/.test(relative)) throw new Error('文件路径包含不支持的字符');
+  // 命令最终输入 cmd，% 会被当作变量展开，双引号里的 " 也会截断参数
+  if (/["%\r\n]/.test(relative)) {
+    throw new Error('文件路径包含不支持的字符（" 或 %），请在终端手动查看');
+  }
 
   const quoted = `"${relative}"`;
   if (changeStatus === 'untracked') {
