@@ -252,6 +252,80 @@ async function discardAll(projectPath) {
   return { ok: true };
 }
 
+const BRANCH_NAME = /^(?!.*\.\.)(?!.*\s)[^\x00-\x20~^:?*\[\\]+$/;
+
+function assertBranchName(name) {
+  const value = String(name || '').trim();
+  if (!value) throw new Error('请填写分支名');
+  if (value.length > 100) throw new Error('分支名过长');
+  if (!BRANCH_NAME.test(value)) throw new Error('分支名包含不允许的字符');
+  if (value.startsWith('/') || value.endsWith('/') || value.endsWith('.lock')) {
+    throw new Error('分支名格式不合法');
+  }
+  return value;
+}
+
+async function branches(projectPath) {
+  const result = await runGit(projectPath, [
+    'for-each-ref',
+    '--format=%(refname:short)',
+    'refs/heads',
+  ]);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+
+  const head = await runGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const current = head.ok ? head.stdout.trim() : '';
+
+  const all = result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const list =
+    current && all.includes(current)
+      ? [current, ...all.filter((item) => item !== current).sort()]
+      : all.sort();
+
+  return { current, list };
+}
+
+async function checkout(projectPath, branch) {
+  const name = assertBranchName(branch);
+  const result = await runGit(projectPath, ['checkout', name]);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  return { ok: true };
+}
+
+async function createBranch(projectPath, name, startPoint) {
+  const branchName = assertBranchName(name);
+  const base = startPoint ? assertBranchName(startPoint) : '';
+  const args = base
+    ? ['checkout', '-b', branchName, base]
+    : ['checkout', '-b', branchName];
+  const result = await runGit(projectPath, args);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  return { ok: true };
+}
+
+async function merge(projectPath, branch) {
+  const name = assertBranchName(branch);
+  const result = await runGit(projectPath, ['merge', name]);
+  if (result.ok) return { ok: true, conflicted: [] };
+
+  const conflicted = [
+    ...new Set(
+      `${result.stdout}\n${result.stderr}`
+        .split('\n')
+        .map((line) => line.match(/Merge conflict in (.+)$/))
+        .filter(Boolean)
+        .map((match) => match[1].trim()),
+    ),
+  ];
+  if (conflicted.length) return { ok: true, conflicted };
+
+  throw new Error(cleanError(result.error, result.stderr));
+}
+
 async function push(projectPath) {
   const pre = await runGit(projectPath, [
     'rev-parse',
@@ -309,4 +383,8 @@ module.exports = {
   discard,
   stageAll,
   discardAll,
+  branches,
+  checkout,
+  createBranch,
+  merge,
 };

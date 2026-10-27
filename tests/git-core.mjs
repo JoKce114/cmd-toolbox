@@ -150,4 +150,52 @@ await git.init(fresh);
 const inited = await git.status(fresh);
 assert(inited.ok === true && inited.hasChanges === true, '初始化后能看到未跟踪文件');
 
+console.log('12. 分支列表与切换');
+const branchInfo = await git.branches(repo);
+assert(branchInfo.current === 'main', '当前分支为 main');
+assert(branchInfo.list[0] === 'main', '当前分支置顶');
+await git.createBranch(repo, 'feature-a', 'main');
+const afterCreate = await git.branches(repo);
+assert(afterCreate.current === 'feature-a', '新建后立即切换');
+assert(afterCreate.list.includes('main') && afterCreate.list.includes('feature-a'), '两个分支都在列表');
+
+writeFileSync(join(repo, 'a.txt'), 'feature\n');
+await git.stageAll(repo);
+await git.commit(repo, 'feature 提交');
+await git.checkout(repo, 'main');
+const backToMain = await git.branches(repo);
+assert(backToMain.current === 'main', '切回 main');
+
+console.log('13. 合并');
+const mergeResult = await git.merge(repo, 'feature-a');
+assert(mergeResult.ok === true && mergeResult.conflicted.length === 0, '无冲突合并成功');
+assert(existsSync(join(repo, 'a.txt')), '合并后文件出现');
+
+console.log('14. 合并冲突不抛错');
+await git.checkout(repo, 'feature-a');
+writeFileSync(join(repo, 'a.txt'), 'feature 版本\n');
+await git.stageAll(repo);
+await git.commit(repo, 'feature 改 a');
+await git.checkout(repo, 'main');
+writeFileSync(join(repo, 'a.txt'), 'main 版本\n');
+await git.stageAll(repo);
+await git.commit(repo, 'main 改 a');
+const conflictResult = await git.merge(repo, 'feature-a');
+assert(conflictResult.conflicted.includes('a.txt'), '返回冲突文件列表');
+const afterConflict = await git.status(repo);
+assert(
+  afterConflict.changes.some((c) => c.path === 'a.txt' && c.indexStatus === 'conflicted'),
+  '状态中标记为冲突',
+);
+execFileSync('git', ['merge', '--abort'], { cwd: repo });
+
+console.log('15. 分支名校验');
+let badName = '';
+try {
+  await git.createBranch(repo, 'bad name', 'main');
+} catch (error) {
+  badName = error.message;
+}
+assert(badName.length > 0, '非法分支名被拒绝');
+
 console.log(`\n全部通过：${passed} 项`);
