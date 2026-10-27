@@ -1,0 +1,92 @@
+{
+  "name": "cmd-toolbox",
+  "productName": "Cmd Toolbox",
+  "version": "1.0.0",
+  "private": true,
+  "description": "本地项目终端工作台",
+  "main": "desktop/main.js",
+  "author": "Cmd Toolbox",
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently -k -n VITE,APP \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env CMDTOOLBOX_DEV=1 electron .\"",
+    "typecheck": "tsc --noEmit",
+    "helper": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-coninject.ps1",
+    "launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-launcher.ps1",
+    "build": "tsc --noEmit && vite build && npm run helper && npm run launcher",
+    "start": "npm run build && electron .",
+    "icon": "node scripts/make-icon.mjs",
+    "dist": "npm run build && node scripts/clean-release.mjs && electron-builder --win dir",
+    "dist:portable": "npm run build && node scripts/clean-release.mjs && electron-builder --win portable",
+    "test:ui": "npm run build && node tests/smoke.mjs"
+  },
+  "dependencies": {
+    "node-pty": "1.1.0"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "33.4.11",
+    "electron-builder": "25.1.8",
+    "lucide-react": "^1.61.0",
+    "playwright-core": "^1.64.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.3.5",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "local.cmd.toolbox",
+    "productName": "Cmd Toolbox",
+    "copyright": "Cmd Toolbox",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "desktop/**/*",
+      "dist/**/*",
+      "build/icon.png",
+      "build/icon.ico",
+      "package.json",
+      "!**/*.map",
+      "!**/release/**",
+      "!**/release-build*/**"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**"
+    ],
+    "extraResources": [
+      {
+        "from": "build/coninject.exe",
+        "to": "coninject.exe"
+      }
+    ],
+    "npmRebuild": false,
+    "win": {
+      "icon": "build/icon.ico",
+      "executableName": "CmdToolbox",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "CmdToolbox.exe"
+    },
+    "portable": {
+      "artifactName": "CmdToolbox.exe",
+      "unpackDirName": "CmdToolbox"
+    }
+  }
+}

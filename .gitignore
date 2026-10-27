@@ -1,0 +1,6 @@
+node_modules/
+dist/
+release/
+test-shots/
+.test-data/
+*.log
