@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { ArrowUp, Check, RefreshCw } from 'lucide-react';
+import { ArrowUp, Check, FileCode, RefreshCw } from 'lucide-react';
 import { cn } from '../lib';
 import type { GitChange, GitChangeStatus, GitStatus } from '../types';
 
@@ -22,6 +22,7 @@ export type GitPanelProps = {
   onPush: () => Promise<boolean>;
   onInit: () => Promise<boolean>;
   onOpenDiff: (change: GitChange) => void;
+  onOpenInEditor: (change: GitChange) => void;
 };
 
 export function GitPanel({
@@ -32,6 +33,7 @@ export function GitPanel({
   onPush,
   onInit,
   onOpenDiff,
+  onOpenInEditor,
 }: GitPanelProps) {
   const [message, setMessage] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
@@ -193,7 +195,7 @@ export function GitPanel({
       {status.changes.length > 0 ? (
         <ul className="git-change-list">
           {status.changes.map((change) => (
-            <li key={`${change.status}:${change.path}`}>
+            <li key={`${change.status}:${change.path}`} className="git-change-item">
               <button
                 type="button"
                 className="git-change-row"
@@ -206,6 +208,14 @@ export function GitPanel({
                 <span className="git-change-path">
                   {change.origPath ? `${change.origPath} → ${change.path}` : change.path}
                 </span>
+              </button>
+              <button
+                type="button"
+                className="git-row-action"
+                title="用编辑器打开"
+                onClick={() => onOpenInEditor(change)}
+              >
+                <FileCode size={13} />
               </button>
             </li>
           ))}

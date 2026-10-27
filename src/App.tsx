@@ -795,6 +795,21 @@ export default function App() {
     [applyTabs, pushToast],
   );
 
+  const openEditorFile = useCallback(
+    (group: Group, relPath: string) => {
+      const existing = (tabsRef.current[group.key] || []).find(
+        (item) => item.shellId === 'editor' && item.filePath === relPath,
+      );
+      if (existing) {
+        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: existing.id }));
+        setActiveGroupKey(group.key);
+        return;
+      }
+      createEditor(group, relPath);
+    },
+    [createEditor],
+  );
+
   const createTerminal = useCallback(
     async (group: Group, shellId?: string): Promise<Tab | null> => {
       if (!info) return null;
@@ -1751,6 +1766,7 @@ export default function App() {
                 onPush={gitPush}
                 onInit={gitInit}
                 onOpenDiff={(change) => void gitOpenDiff(change)}
+                onOpenInEditor={(change) => openEditorFile(gitGroup, change.path)}
               />
             ) : null
           }

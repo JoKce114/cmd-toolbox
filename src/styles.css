@@ -852,6 +852,38 @@ p {
   list-style: none;
 }
 
+.git-change-item {
+  display: flex;
+  align-items: center;
+}
+
+.git-change-item .git-change-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.git-row-action {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+  opacity: 0;
+}
+
+.git-change-item:hover .git-row-action {
+  opacity: 1;
+}
+
+.git-row-action:hover {
+  background: #ebebef;
+  color: var(--text);
+}
+
 .git-change-row {
   width: 100%;
   display: flex;
