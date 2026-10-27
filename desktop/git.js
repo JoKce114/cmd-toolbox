@@ -1,6 +1,7 @@
 const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { resolveWithin } = require('./path-guard');
 
 const FAST_TIMEOUT = 15000;
 const PUSH_TIMEOUT = 120000;
@@ -210,9 +211,9 @@ async function init(projectPath) {
 
 async function diffCommand(projectPath, filePath, changeStatus) {
   const root = path.resolve(projectPath);
-  const target = path.resolve(root, String(filePath || ''));
+  const target = resolveWithin(root, String(filePath || ''));
   const relative = path.relative(root, target);
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+  if (!relative) {
     throw new Error('文件路径不在项目目录内');
   }
   // 命令最终输入 cmd，% 会被当作变量展开，双引号里的 " 也会截断参数
