@@ -87,6 +87,25 @@ declare global {
           filePath: string,
           changeStatus: NonNullable<GitChange['worktreeStatus']>,
         ) => Promise<{ command: string }>;
+        stage: (projectPath: string, paths: string[]) => Promise<{ ok: true }>;
+        unstage: (projectPath: string, paths: string[]) => Promise<{ ok: true }>;
+        discard: (
+          projectPath: string,
+          payload: { tracked: string[]; untracked: string[] },
+        ) => Promise<{ ok: true }>;
+        stageAll: (projectPath: string) => Promise<{ ok: true }>;
+        discardAll: (projectPath: string) => Promise<{ ok: true }>;
+        branches: (projectPath: string) => Promise<{ current: string; list: string[] }>;
+        checkout: (projectPath: string, branch: string) => Promise<{ ok: true }>;
+        createBranch: (
+          projectPath: string,
+          name: string,
+          startPoint: string,
+        ) => Promise<{ ok: true }>;
+        merge: (
+          projectPath: string,
+          branch: string,
+        ) => Promise<{ ok: true; conflicted: string[] }>;
       };
       files: {
         list: (projectPath: string, relDir: string) => Promise<{ entries: FileEntry[] }>;

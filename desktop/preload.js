@@ -62,6 +62,16 @@ contextBridge.exposeInMainWorld('api', {
     init: (projectPath) => invoke('git:init', projectPath),
     diff: (projectPath, filePath, changeStatus) =>
       invoke('git:diff', projectPath, filePath, changeStatus),
+    stage: (projectPath, paths) => invoke('git:stage', projectPath, paths),
+    unstage: (projectPath, paths) => invoke('git:unstage', projectPath, paths),
+    discard: (projectPath, payload) => invoke('git:discard', projectPath, payload),
+    stageAll: (projectPath) => invoke('git:stage-all', projectPath),
+    discardAll: (projectPath) => invoke('git:discard-all', projectPath),
+    branches: (projectPath) => invoke('git:branches', projectPath),
+    checkout: (projectPath, branch) => invoke('git:checkout', projectPath, branch),
+    createBranch: (projectPath, name, startPoint) =>
+      invoke('git:create-branch', projectPath, name, startPoint),
+    merge: (projectPath, branch) => invoke('git:merge', projectPath, branch),
   },
 
   files: {

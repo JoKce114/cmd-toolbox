@@ -269,6 +269,42 @@ function registerIpc() {
     git.diffCommand(assertProjectPath(projectPath), filePath, changeStatus),
   );
 
+  ipcMain.handle('git:stage', (_event, projectPath, paths) =>
+    git.stage(assertProjectPath(projectPath), paths),
+  );
+
+  ipcMain.handle('git:unstage', (_event, projectPath, paths) =>
+    git.unstage(assertProjectPath(projectPath), paths),
+  );
+
+  ipcMain.handle('git:discard', (_event, projectPath, payload) =>
+    git.discard(assertProjectPath(projectPath), payload),
+  );
+
+  ipcMain.handle('git:stage-all', (_event, projectPath) =>
+    git.stageAll(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:discard-all', (_event, projectPath) =>
+    git.discardAll(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:branches', (_event, projectPath) =>
+    git.branches(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:checkout', (_event, projectPath, branch) =>
+    git.checkout(assertProjectPath(projectPath), branch),
+  );
+
+  ipcMain.handle('git:create-branch', (_event, projectPath, name, startPoint) =>
+    git.createBranch(assertProjectPath(projectPath), name, startPoint),
+  );
+
+  ipcMain.handle('git:merge', (_event, projectPath, branch) =>
+    git.merge(assertProjectPath(projectPath), branch),
+  );
+
   ipcMain.handle('fs:list', (_event, projectPath, relDir) =>
     fileApi.list(assertProjectPath(projectPath), relDir),
   );

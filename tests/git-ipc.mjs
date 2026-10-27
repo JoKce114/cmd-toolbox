@@ -75,6 +75,26 @@ assert(subBlocked.includes('未保存'), '项目子目录也被白名单拒绝')
 const diff = await page.evaluate((p) => window.api.git.diff(p, 'a.txt', 'untracked'), repo);
 assert(diff.command.includes('--no-index'), 'diff 命令可获取');
 
+const staged = await page.evaluate((p) => window.api.git.stage(p, ['a.txt']), repo);
+assert(staged.ok === true, 'IPC 暂存');
+const afterStage = await page.evaluate((p) => window.api.git.status(p), repo);
+assert(afterStage.stagedCount === 1, '暂存后计数正确');
+
+await page.evaluate((p) => window.api.git.unstage(p, ['a.txt']), repo);
+const afterUnstage = await page.evaluate((p) => window.api.git.status(p), repo);
+assert(afterUnstage.stagedCount === 0, '取消暂存生效');
+
+const branchList = await page.evaluate((p) => window.api.git.branches(p), repo);
+assert(branchList.current === 'main', 'IPC 返回当前分支');
+
+let badName = '';
+try {
+  await page.evaluate((p) => window.api.git.createBranch(p, 'bad name', 'main'), repo);
+} catch (error) {
+  badName = error.message;
+}
+assert(badName.length > 0, 'IPC 拒绝非法分支名');
+
 await app.close();
 rmSync(dataDir, { recursive: true, force: true });
 console.log(`\n全部通过：${passed} 项`);
