@@ -29,8 +29,9 @@ import {
 import { moveById, nextPaneNo, toErrorMessage } from './lib';
 import { accentFor, defaultTabTitle, GLOBAL_COLOR } from './theme';
 import type { TerminalThemeMode } from './theme';
+import { useGitStatus } from './gitStatus';
 import { GLOBAL_GROUP_KEY, isBrowserTab, projectGroupKey } from './types';
-import type { AppInfo, Group, MenuEntry, MenuState, Project, Tab } from './types';
+import type { AppInfo, GitChange, Group, MenuEntry, MenuState, Project, Tab } from './types';
 import { discardSession, startPtyBus, subscribeAllData, subscribeExit } from './ptyBus';
 import {
   classifyModelOutput,
@@ -53,6 +54,7 @@ import { PopupMenu } from './components/PopupMenu';
 import { ToastViewport } from './components/Toast';
 import type { ToastItem, ToastKind } from './components/Toast';
 import { LogoMark } from './components/LogoMark';
+import { GitPanel } from './components/GitPanel';
 
 const ACTIVE_GROUP_STORAGE = 'cmd-toolbox.active-group';
 const TERMINAL_THEME_STORAGE = 'cmd-toolbox.terminal-theme';
@@ -458,6 +460,68 @@ export default function App() {
   const groupsByKey = useMemo(() => new Map(groups.map((group) => [group.key, group])), [groups]);
 
   const activeGroup = groups.find((group) => group.key === activeGroupKey) ?? groups[0] ?? null;
+
+  const gitGroup =
+    activeGroup && activeGroup.kind === 'project' && activeGroup.exists ? activeGroup : null;
+  const gitGroupRef = useRef<Group | null>(gitGroup);
+  gitGroupRef.current = gitGroup;
+
+  const {
+    status: gitStatus,
+    refreshing: gitRefreshing,
+    refresh: refreshGit,
+  } = useGitStatus(gitGroup, {
+    isSessionActive: (sessionId) => {
+      const key = activeGroupKeyRef.current;
+      return (tabsRef.current[key] || []).some((tab) => tab.sessionId === sessionId);
+    },
+  });
+
+  const gitCommit = useCallback(
+    async (message: string) => {
+      const group = gitGroupRef.current;
+      if (!group) return false;
+      try {
+        const result = await window.api.git.commit(group.path, message);
+        pushToast(`已提交 ${result.commit}`, 'success');
+        await refreshGit();
+        return true;
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+        return false;
+      }
+    },
+    [pushToast, refreshGit],
+  );
+
+  const gitPush = useCallback(async () => {
+    const group = gitGroupRef.current;
+    if (!group) return false;
+    try {
+      const result = await window.api.git.push(group.path);
+      pushToast(`已推送到 ${result.upstream}`, 'success');
+      await refreshGit();
+      return true;
+    } catch (error) {
+      pushToast(toErrorMessage(error), 'error');
+      return false;
+    }
+  }, [pushToast, refreshGit]);
+
+  const gitInit = useCallback(async () => {
+    const group = gitGroupRef.current;
+    if (!group) return false;
+    try {
+      await window.api.git.init(group.path);
+      pushToast('已初始化 Git 仓库', 'success');
+      await refreshGit();
+      return true;
+    } catch (error) {
+      pushToast(toErrorMessage(error), 'error');
+      return false;
+    }
+  }, [pushToast, refreshGit]);
+
   const activeTabs = activeGroup ? tabsByGroup[activeGroup.key] || [] : [];
   const rightIds = activeGroup ? rightIdsByGroup[activeGroup.key] || [] : [];
   const split = rightIds.length > 0;
@@ -667,24 +731,24 @@ export default function App() {
   );
 
   const createTerminal = useCallback(
-    async (group: Group, shellId?: string) => {
-      if (!info) return;
+    async (group: Group, shellId?: string): Promise<Tab | null> => {
+      if (!info) return null;
       if (shellId === 'browser') {
         createBrowser(group);
-        return;
+        return null;
       }
       const shell = findLaunchTarget(info, shellId);
       if (!shell) {
         pushToast('当前系统没有可用的终端类型', 'error');
-        return;
+        return null;
       }
       if (!shell.available) {
         pushToast(shell.hint || `未安装 ${shell.label}，装好后重启 Cmd Toolbox`, 'error');
-        return;
+        return null;
       }
       if (!group.exists) {
         pushToast('项目目录不存在，请先编辑项目路径', 'error');
-        return;
+        return null;
       }
 
       try {
@@ -728,12 +792,30 @@ export default function App() {
         } else {
           setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
         }
+        return tab;
       } catch (error) {
         pushToast(toErrorMessage(error), 'error');
         if (group.kind === 'project') void refreshProjects();
+        return null;
       }
     },
     [applyTabs, createBrowser, info, pushToast, refreshProjects],
+  );
+
+  const gitOpenDiff = useCallback(
+    async (change: GitChange) => {
+      const group = gitGroupRef.current;
+      if (!group) return;
+      try {
+        const { command } = await window.api.git.diff(group.path, change.path, change.status);
+        const tab = await createTerminal(group, 'cmd');
+        if (!tab || !tab.sessionId) return;
+        window.api.pty.write(tab.sessionId, `${command}`);
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+      }
+    },
+    [createTerminal, pushToast],
   );
 
   const closeTabs = useCallback(
@@ -1572,6 +1654,19 @@ export default function App() {
           onGroupMenu={openGroupMenu}
           onAddProject={() => setProjectModal({ mode: 'add' })}
           onReorderProjects={reorderProjects}
+          gitPanel={
+            gitGroup ? (
+              <GitPanel
+                status={gitStatus}
+                refreshing={gitRefreshing}
+                onRefresh={() => void refreshGit()}
+                onCommit={gitCommit}
+                onPush={gitPush}
+                onInit={gitInit}
+                onOpenDiff={(change) => void gitOpenDiff(change)}
+              />
+            ) : null
+          }
         />
 
         <main className="workspace">

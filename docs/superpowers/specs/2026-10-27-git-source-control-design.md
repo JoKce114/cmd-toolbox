@@ -76,7 +76,7 @@ type GitChange = {
 };
 
 type GitStatus =
-  | { ok: false; reason: 'no-git' | 'not-repo' | 'missing-dir'; message: string }
+  | { ok: false; reason: 'no-git' | 'not-repo' | 'missing-dir' | 'error'; message: string }
   | {
       ok: true;
       branch: string;

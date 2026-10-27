@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from 'react';
+import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { AlertTriangle, FolderPlus, PanelLeftClose, PanelLeftOpen, Plus, SquareTerminal } from 'lucide-react';
 import { cn } from '../lib';
 import { tint } from '../theme';
@@ -134,6 +134,7 @@ type SidebarProps = {
     toProjectId: string,
     position: 'before' | 'after',
   ) => void;
+  gitPanel: ReactNode;
 };
 
 function isProjectDrag(event: ReactDragEvent) {
@@ -152,6 +153,7 @@ export function Sidebar({
   onGroupMenu,
   onAddProject,
   onReorderProjects,
+  gitPanel,
 }: SidebarProps) {
   const globalGroup = groups.find((group) => group.kind === 'global');
   const projects = groups.filter((group) => group.kind === 'project');
@@ -295,6 +297,8 @@ export function Sidebar({
             </div>
           ) : null}
         </div>
+
+        {gitPanel}
       </div>
 
       <div className="sidebar-footer">
