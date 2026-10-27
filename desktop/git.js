@@ -202,7 +202,11 @@ async function unstage(projectPath, paths) {
   const list = (Array.isArray(paths) ? paths : []).filter(Boolean);
   if (!list.length) return { ok: true };
   list.forEach((item) => resolveWithin(projectPath, item));
-  const result = await runGit(projectPath, ['restore', '--staged', '--', ...list]);
+  const head = await runGit(projectPath, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  const args = head.ok
+    ? ['restore', '--staged', '--', ...list]
+    : ['rm', '--cached', '--force', '--', ...list];
+  const result = await runGit(projectPath, args);
   if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
   return { ok: true };
 }
@@ -274,7 +278,12 @@ async function branches(projectPath) {
   if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
 
   const head = await runGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  const current = head.ok ? head.stdout.trim() : '';
+  let current = head.ok ? head.stdout.trim() : '';
+  if (!current) {
+    // 空仓库（尚无提交）没有 HEAD，用符号引用获取当前分支名
+    const sym = await runGit(projectPath, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+    if (sym.ok) current = sym.stdout.trim();
+  }
 
   const all = result.stdout
     .split('\n')
