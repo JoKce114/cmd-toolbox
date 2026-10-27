@@ -595,6 +595,125 @@ p {
   color: #6b6f76;
 }
 
+/* ---------- Editor ---------- */
+
+.editor-pane {
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-encoding {
+  margin-left: auto;
+  padding: 0 8px;
+  font-size: 10.5px;
+  color: var(--faint);
+  letter-spacing: 0.04em;
+}
+
+.editor-notice {
+  margin: 0;
+  padding: 6px 12px;
+  background: #fff8e6;
+  border-bottom: 1px solid #f0e3bf;
+  font-size: 11.5px;
+  color: #8a6d1f;
+}
+
+.editor-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.file-tree {
+  flex: 0 0 220px;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 0;
+  border-right: 1px solid var(--border);
+  background: #fbfbfd;
+}
+
+.file-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.file-row:hover {
+  background: #f1f1f5;
+}
+
+.file-row.active {
+  background: #e9ecff;
+  color: var(--text);
+}
+
+.file-row.is-disabled {
+  opacity: 0.45;
+}
+
+.file-caret {
+  flex: 0 0 12px;
+  transition: transform 120ms ease;
+}
+
+.file-caret.open {
+  transform: rotate(90deg);
+}
+
+.file-caret-spacer {
+  flex: 0 0 12px;
+}
+
+.file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.editor-placeholder {
+  margin: 0;
+  padding: 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.codemirror-host {
+  height: 100%;
+}
+
+.codemirror-host .cm-editor {
+  height: 100%;
+  font-size: 12.5px;
+}
+
+.codemirror-host .cm-scroller {
+  font-family: "Cascadia Mono", "Cascadia Code", Consolas, "Microsoft YaHei", monospace;
+  line-height: 1.5;
+}
+
+.editor-confirm {
+  max-width: 420px;
+}
+
 /* ---------- Git panel ---------- */
 
 .git-panel {
