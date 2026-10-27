@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { ArrowUp, Check, FileCode, RefreshCw } from 'lucide-react';
+import { ArrowUp, Check, FileDiff, RefreshCw } from 'lucide-react';
 import { cn } from '../lib';
 import type { GitChange, GitChangeStatus, GitStatus } from '../types';
 
@@ -200,7 +200,9 @@ export function GitPanel({
                 type="button"
                 className="git-change-row"
                 title={change.origPath ? `${change.origPath} → ${change.path}` : change.path}
-                onClick={() => onOpenDiff(change)}
+                onClick={() =>
+                  change.status === 'deleted' ? onOpenDiff(change) : onOpenInEditor(change)
+                }
               >
                 <span className={cn('git-change-badge', `is-${change.status}`)}>
                   {STATUS_LABEL[change.status]}
@@ -212,10 +214,10 @@ export function GitPanel({
               <button
                 type="button"
                 className="git-row-action"
-                title="用编辑器打开"
-                onClick={() => onOpenInEditor(change)}
+                title="在终端查看差异"
+                onClick={() => onOpenDiff(change)}
               >
-                <FileCode size={13} />
+                <FileDiff size={13} />
               </button>
             </li>
           ))}

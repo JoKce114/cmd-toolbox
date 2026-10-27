@@ -179,10 +179,7 @@ await waitFor(
 );
 const beforeTabs = await page.locator('.tab').count();
 await click(
-  page
-    .locator('.git-change-item')
-    .filter({ hasText: 'index.php' })
-    .locator('.git-row-action'),
+  page.locator('.git-change-item').filter({ hasText: 'index.php' }).locator('.git-change-row'),
 );
 await waitFor(
   async () => (await page.locator('.tab').count()) === beforeTabs + 1,
