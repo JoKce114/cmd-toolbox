@@ -61,8 +61,13 @@ function encodeContent(content, encoding) {
   if (encoding === 'utf8bom') {
     return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(content, 'utf8')]);
   }
-  if (encoding === 'utf16le') return iconv.encode(content, 'utf16-le');
-  if (encoding === 'utf16be') return iconv.encode(content, 'utf16-be');
+  // UTF-16 仅在检测到 BOM 时才会被识别，写回时同样保留 BOM
+  if (encoding === 'utf16le') {
+    return Buffer.concat([Buffer.from([0xff, 0xfe]), iconv.encode(content, 'utf16-le')]);
+  }
+  if (encoding === 'utf16be') {
+    return Buffer.concat([Buffer.from([0xfe, 0xff]), iconv.encode(content, 'utf16-be')]);
+  }
   if (encoding === 'gbk') return iconv.encode(content, 'gbk');
   return Buffer.from(content, 'utf8');
 }
@@ -82,7 +87,11 @@ async function read(projectPath, relPath) {
   }
 
   const buffer = await fsp.readFile(target);
-  if (buffer.includes(0)) {
+
+  // 先做 BOM 检测：UTF-16 文本天然包含 NUL 字节，不能先按 NUL 判成二进制
+  const { encoding, offset } = detectEncoding(buffer);
+  const isUtf16 = encoding === 'utf16le' || encoding === 'utf16be';
+  if (!isUtf16 && buffer.includes(0)) {
     return {
       content: '',
       encoding: 'utf8',
@@ -92,7 +101,31 @@ async function read(projectPath, relPath) {
     };
   }
 
-  const { encoding, offset } = detectEncoding(buffer);
+  // 疑似 GBK 时验证往返完整性；无法无损解码的文件按识别失败只读打开
+  if (encoding === 'gbk') {
+    const text = decodeContent(buffer, encoding, offset);
+    const roundTrip = iconv.encode(text, 'gbk');
+    if (
+      text.includes(String.fromCharCode(0xfffd)) ||
+      Buffer.compare(roundTrip, buffer.subarray(offset)) !== 0
+    ) {
+      return {
+        content: '',
+        encoding: 'utf8',
+        size: stat.size,
+        readOnly: true,
+        mtime: stat.mtimeMs,
+      };
+    }
+    return {
+      content: text,
+      encoding,
+      size: stat.size,
+      readOnly: false,
+      mtime: stat.mtimeMs,
+    };
+  }
+
   return {
     content: decodeContent(buffer, encoding, offset),
     encoding,

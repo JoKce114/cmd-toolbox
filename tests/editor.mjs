@@ -17,6 +17,11 @@ writeFileSync(join(repo, 'index.php'), '<?php echo 1;\n');
 writeFileSync(join(repo, 'src', 'app.js'), 'console.log(1);\n');
 writeFileSync(join(repo, 'gbk.txt'), iconv.encode('中文内容\n', 'gbk'));
 writeFileSync(join(repo, 'bin.dat'), Buffer.from([0, 1, 2, 3]));
+writeFileSync(join(repo, 'big.txt'), 'x'.repeat(2 * 1024 * 1024 + 10));
+writeFileSync(
+  join(repo, 'utf16.txt'),
+  Buffer.concat([Buffer.from([0xff, 0xfe]), iconv.encode('UTF-16 内容\n', 'utf-16-le')]),
+);
 
 // 步骤 7 依赖 Git 面板列出变更，临时目录需要先初始化仓库
 execFileSync('git', ['init', '-b', 'main'], { cwd: repo, stdio: 'ignore' });
@@ -183,6 +188,85 @@ await waitFor(
   async () => (await page.locator('.tab').count()) === beforeTabs + 1,
   '新开编辑器页签',
 );
+
+// 切回最初的空编辑器页签（未绑定 filePath，文件树可以自由切换）
+await click(page.locator('.tab').first());
+await page.waitForTimeout(400);
+const activePane = page.locator('.editor-pane:not(.is-hidden)');
+
+console.log('8. 关闭脏页签需确认');
+await click(activePane.locator('.file-row').filter({ hasText: 'index.php' }));
+await waitFor(
+  async () => (await activePane.locator('.cm-content').count()) > 0,
+  'index.php 在编辑器加载',
+);
+await activePane.locator('.cm-content').click();
+await page.keyboard.press('Control+A');
+await page.keyboard.type('未保存内容\n');
+await waitFor(
+  async () => (await page.locator('.tab.active .tab-func').innerText()).includes('•'),
+  '脏标记出现',
+);
+const tabsBeforeClose = await page.locator('.tab').count();
+let closeConfirm = '';
+page.once('dialog', async (dialog) => {
+  closeConfirm = dialog.message();
+  await dialog.dismiss();
+});
+await click(page.locator('.tab.active .tab-close'));
+await page.waitForTimeout(500);
+assert(closeConfirm.includes('未保存'), '关闭脏页签弹出确认');
+assert(
+  (await page.locator('.tab').count()) === tabsBeforeClose,
+  '拒绝关闭后页签保留',
+);
+// 重新聚焦编辑区并保存，恢复干净状态供后续用例使用
+await activePane.locator('.cm-content').click();
+await page.keyboard.press('Control+S');
+await waitFor(
+  async () => !(await page.locator('.tab.active .tab-func').innerText()).includes('•'),
+  '保存后脏标记消失',
+);
+assert(readFileSync(join(repo, 'index.php'), 'utf8') === '未保存内容\n', '确认框取消后仍可正常保存');
+
+console.log('9. 超过 2MB 的文件只读');
+await click(activePane.locator('.file-row').filter({ hasText: 'big.txt' }));
+await waitFor(
+  async () => (await activePane.locator('.editor-notice').count()) > 0,
+  '大文件只读提示',
+);
+assert(
+  await activePane.getByRole('button', { name: '保存 (Ctrl+S)' }).isDisabled(),
+  '大文件保存按钮禁用',
+);
+
+console.log('10. UTF-16LE 带 BOM 可编辑');
+await click(activePane.locator('.file-row').filter({ hasText: 'utf16.txt' }));
+await waitFor(
+  async () =>
+    (await activePane.locator('.cm-content').count()) > 0 &&
+    (await activePane.locator('.cm-content').innerText()).includes('UTF-16 内容'),
+  'UTF-16 内容显示',
+);
+assert(
+  (await activePane.locator('.editor-encoding').innerText()) === 'UTF-16 LE',
+  '识别 UTF-16 LE',
+);
+assert(
+  (await activePane.locator('.editor-notice').count()) === 0,
+  'UTF-16 文件可编辑（非只读）',
+);
+await activePane.locator('.cm-content').click();
+await page.keyboard.press('Control+A');
+await page.keyboard.type('UTF-16 新内容\n');
+await page.keyboard.press('Control+S');
+await page.waitForTimeout(1200);
+const utf16After = readFileSync(join(repo, 'utf16.txt'));
+const utf16Expected = Buffer.concat([
+  Buffer.from([0xff, 0xfe]),
+  iconv.encode('UTF-16 新内容\n', 'utf-16-le'),
+]);
+assert(Buffer.compare(utf16After, utf16Expected) === 0, 'UTF-16 按原编码写回');
 
 await app.close();
 rmSync(dataDir, { recursive: true, force: true });

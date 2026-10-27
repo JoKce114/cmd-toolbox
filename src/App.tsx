@@ -145,6 +145,7 @@ export default function App() {
   const [splitRatioByGroup, setSplitRatioByGroup] = useState<Record<string, number>>({});
 
   const tabsRef = useRef<Record<string, Tab[]>>({});
+  const dirtyTabsRef = useRef<Map<string, boolean>>(new Map());
   const activeTabByGroupRef = useRef(activeTabByGroup);
   const sessionReadyRef = useRef(false);
   const sidebarCollapsedRef = useRef(false);
@@ -758,6 +759,9 @@ export default function App() {
 
   const setTabDescriptor = useCallback(
     (groupKey: string, tabId: string, descriptor: string) => {
+      const existing = (tabsRef.current[groupKey] || []).find((item) => item.id === tabId);
+      // 值未变化时直接返回：即使回调身份每次都变，也不会制造新的 tabs 对象和渲染循环
+      if (!existing || (existing.custom && existing.descriptor === descriptor)) return;
       applyTabs({
         ...tabsRef.current,
         [groupKey]: (tabsRef.current[groupKey] || []).map((item) =>
@@ -767,6 +771,11 @@ export default function App() {
     },
     [applyTabs],
   );
+
+  const handleDirtyChange = useCallback((tabId: string, dirty: boolean) => {
+    if (dirty) dirtyTabsRef.current.set(tabId, true);
+    else dirtyTabsRef.current.delete(tabId);
+  }, []);
 
   const createEditor = useCallback(
     (group: Group, filePath = '') => {
@@ -899,14 +908,26 @@ export default function App() {
   );
 
   const closeTabs = useCallback(
-    (groupKey: string, tabIds: string[]) => {
-      if (!tabIds.length) return;
+    (groupKey: string, tabIds: string[]): boolean => {
+      if (!tabIds.length) return true;
       const ids = new Set(tabIds);
       const currentTabs = tabsRef.current[groupKey] || [];
       const closing = currentTabs.filter((tab) => ids.has(tab.id));
-      if (!closing.length) return;
+      if (!closing.length) return true;
+
+      const dirtyClosing = closing.filter((tab) => dirtyTabsRef.current.get(tab.id));
+      if (dirtyClosing.length > 0) {
+        const names = dirtyClosing
+          .map((tab) => tab.descriptor || tab.filePath || tab.id)
+          .join('\n');
+        const ok = window.confirm(
+          `以下文件有未保存的修改，关闭将丢失：\n${names}\n\n是否继续？`,
+        );
+        if (!ok) return false;
+      }
 
       for (const tab of closing) {
+        dirtyTabsRef.current.delete(tab.id);
         if (!tab.sessionId) continue;
         discardSession(tab.sessionId);
         void window.api.pty.kill(tab.sessionId).catch(() => {});
@@ -946,6 +967,7 @@ export default function App() {
         );
         return { ...previous, [groupKey]: remainingRight[remainingRight.length - 1] ?? null };
       });
+      return true;
     },
     [applyTabs],
   );
@@ -1553,12 +1575,14 @@ export default function App() {
   const confirmDeleteProject = useCallback(async () => {
     if (!deleteTarget) return;
     const groupKey = projectGroupKey(deleteTarget.id);
-    const nextProjects = await window.api.projects.remove(deleteTarget.id);
-    setProjects(nextProjects);
-    closeTabs(
+    // 先关闭页签：若有未保存的编辑，closeTabs 会确认，取消时整个删除中止
+    const closed = closeTabs(
       groupKey,
       (tabsRef.current[groupKey] || []).map((tab) => tab.id),
     );
+    if (!closed) return;
+    const nextProjects = await window.api.projects.remove(deleteTarget.id);
+    setProjects(nextProjects);
     if (activeGroupKey === groupKey) setActiveGroupKey(GLOBAL_GROUP_KEY);
     setDeleteTarget(null);
     setFocusTick((tick) => tick + 1);
@@ -1677,6 +1701,7 @@ export default function App() {
           onClose={(target) => closeTabs(target.groupKey, [target.id])}
           onToast={pushToast}
           onTitleChange={(title) => setTabDescriptor(tab.groupKey, tab.id, title)}
+          onDirtyChange={handleDirtyChange}
         />
       );
     }

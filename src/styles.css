@@ -1425,6 +1425,13 @@ p {
   opacity: 0.45;
 }
 
+.icon-btn.is-saving {
+  width: auto;
+  padding: 0 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .browser-header {
   gap: 4px;
 }

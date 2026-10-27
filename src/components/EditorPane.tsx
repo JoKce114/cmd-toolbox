@@ -21,23 +21,52 @@ export type EditorPaneProps = {
   onClose: (tab: Tab) => void;
   onToast: (message: string, kind?: ToastKind) => void;
   onTitleChange: (title: string) => void;
+  onDirtyChange: (tabId: string, dirty: boolean) => void;
 };
 
-export function EditorPane({ tab, group, active, onClose, onToast, onTitleChange }: EditorPaneProps) {
+export function EditorPane({
+  tab,
+  group,
+  active,
+  onClose,
+  onToast,
+  onTitleChange,
+  onDirtyChange,
+}: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const { file, open, update, save } = useEditorFile(group, onError);
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const fileRef = useRef(file);
   fileRef.current = file;
+  const rootRef = useRef<HTMLElement>(null);
+  // 回调每次渲染都是新函数：放进 ref，避免 effect 因函数身份变化而反复触发
+  const onTitleChangeRef = useRef(onTitleChange);
+  onTitleChangeRef.current = onTitleChange;
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  onDirtyChangeRef.current = onDirtyChange;
 
   useEffect(() => {
-    if (tab.filePath && tab.filePath !== file.relPath) void open(tab.filePath);
-  }, [tab.filePath, file.relPath, open]);
+    if (
+      tab.filePath &&
+      tab.filePath !== file.relPath &&
+      tab.filePath !== file.failedPath
+    ) {
+      void open(tab.filePath);
+    }
+  }, [tab.filePath, file.relPath, file.failedPath, open]);
 
   useEffect(() => {
     const base = file.relPath ? file.relPath.split('/').pop() || '编辑器' : '编辑器';
-    onTitleChange(`${group.name} · ${base}${file.dirty ? ' •' : ''}`);
-  }, [file.relPath, file.dirty, group.name, onTitleChange]);
+    onTitleChangeRef.current(`${group.name} · ${base}${file.dirty ? ' •' : ''}`);
+  }, [file.relPath, file.dirty, group.name]);
+
+  useEffect(() => {
+    onDirtyChangeRef.current(tab.id, file.dirty);
+  }, [tab.id, file.dirty]);
+
+  useEffect(() => {
+    return () => onDirtyChangeRef.current(tab.id, false);
+  }, [tab.id]);
 
   const requestOpen = (relPath: string) => {
     if (fileRef.current.dirty) {
@@ -60,6 +89,8 @@ export function EditorPane({ tab, group, active, onClose, onToast, onTitleChange
     if (!active) return;
     const handler = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        // 分屏时左右两侧的页签都可能“激活”；只处理焦点落在本窗格内的事件，避免双保存
+        if (!rootRef.current?.contains(event.target as Node)) return;
         event.preventDefault();
         void handleSave();
       }
@@ -77,7 +108,10 @@ export function EditorPane({ tab, group, active, onClose, onToast, onTitleChange
   };
 
   return (
-    <section className={`terminal-pane editor-pane${active ? '' : ' is-hidden'}`}>
+    <section
+      ref={rootRef}
+      className={`terminal-pane editor-pane${active ? '' : ' is-hidden'}`}
+    >
       <header className="pane-header">
         <span className="pane-path" title={file.relPath || group.path}>
           {file.relPath || group.name}
@@ -85,12 +119,12 @@ export function EditorPane({ tab, group, active, onClose, onToast, onTitleChange
         <span className="editor-encoding">{ENCODING_LABEL[file.encoding] || file.encoding}</span>
         <button
           type="button"
-          className="icon-btn"
+          className={`icon-btn${file.saving ? ' is-saving' : ''}`}
           title="保存 (Ctrl+S)"
           disabled={file.saving || file.readOnly || !file.dirty}
           onClick={() => void handleSave()}
         >
-          <Save size={14} />
+          {file.saving ? <span className="editor-saving">保存中…</span> : <Save size={14} />}
         </button>
         <button type="button" className="icon-btn" title="关闭" onClick={requestClose}>
           <X size={14} />

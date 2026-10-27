@@ -12,6 +12,7 @@ export type EditorFileState = {
   loading: boolean;
   saving: boolean;
   dirty: boolean;
+  failedPath: string;
 };
 
 const EMPTY: EditorFileState = {
@@ -24,6 +25,7 @@ const EMPTY: EditorFileState = {
   loading: false,
   saving: false,
   dirty: false,
+  failedPath: '',
 };
 
 export function useEditorFile(group: Group, onError: (message: string) => void) {
@@ -33,7 +35,19 @@ export function useEditorFile(group: Group, onError: (message: string) => void) 
 
   const open = useCallback(
     async (relPath: string) => {
-      setFile((previous) => ({ ...previous, relPath, loading: true }));
+      // 开始加载时清空上一份文件的正文与元数据，避免加载期间 Ctrl+S 把旧内容写进新文件
+      setFile((previous) => ({
+        ...previous,
+        relPath,
+        content: '',
+        savedContent: '',
+        encoding: 'utf8',
+        mtime: 0,
+        readOnly: false,
+        loading: true,
+        saving: false,
+        dirty: false,
+      }));
       try {
         const result: OpenedFile = await window.api.files.read(groupRef.current.path, relPath);
         setFile({
@@ -46,10 +60,12 @@ export function useEditorFile(group: Group, onError: (message: string) => void) 
           loading: false,
           saving: false,
           dirty: false,
+          failedPath: '',
         });
       } catch (error) {
         onError(toErrorMessage(error));
-        setFile(EMPTY);
+        // 记录失败的路径，供 EditorPane 跳过重试，避免无限读取 + toast
+        setFile({ ...EMPTY, failedPath: relPath });
       }
     },
     [onError],
@@ -65,25 +81,30 @@ export function useEditorFile(group: Group, onError: (message: string) => void) 
 
   const save = useCallback(async () => {
     const current = file;
-    if (!current.relPath || current.readOnly) return false;
+    if (current.loading || current.readOnly || !current.dirty || !current.relPath) return false;
+    // 记录真正写入的正文；保存期间用户继续输入的内容不能被误标为已保存
+    const written = current.content;
     setFile((previous) => ({ ...previous, saving: true }));
     try {
       await window.api.files.write(
         groupRef.current.path,
         current.relPath,
-        current.content,
+        written,
         current.encoding,
         current.mtime,
       );
       // 保存成功后刷新本地记录的 mtime，供下一次保存比对
       const after = await window.api.files.read(groupRef.current.path, current.relPath);
-      setFile((previous) => ({
-        ...previous,
-        savedContent: previous.content,
-        dirty: false,
-        saving: false,
-        mtime: after.mtime,
-      }));
+      setFile((previous) => {
+        if (previous.relPath !== current.relPath) return previous;
+        return {
+          ...previous,
+          savedContent: written,
+          dirty: previous.content !== written,
+          saving: false,
+          mtime: after.mtime,
+        };
+      });
       return true;
     } catch (error) {
       onError(toErrorMessage(error));
