@@ -85,7 +85,7 @@ declare global {
         diff: (
           projectPath: string,
           filePath: string,
-          changeStatus: GitChange['status'],
+          changeStatus: NonNullable<GitChange['worktreeStatus']>,
         ) => Promise<{ command: string }>;
       };
       files: {

@@ -64,7 +64,8 @@ export type GitChangeStatus =
 export type GitChange = {
   path: string;
   origPath?: string;
-  status: GitChangeStatus;
+  indexStatus: GitChangeStatus | null;
+  worktreeStatus: GitChangeStatus | null;
 };
 
 export type GitStatus =
@@ -81,6 +82,8 @@ export type GitStatus =
       behind: number;
       changes: GitChange[];
       hasChanges: boolean;
+      stagedCount: number;
+      unstagedCount: number;
     };
 
 export function isBrowserTab(tab: { shellId: string }): boolean {

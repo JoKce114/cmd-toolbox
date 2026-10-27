@@ -1,5 +1,6 @@
 const { execFile } = require('child_process');
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const { resolveWithin } = require('./path-guard');
 
@@ -54,12 +55,10 @@ const TYPE_BY_CHAR = {
   T: 'modified',
 };
 
-// XY 两位分别表示暂存区与工作区状态；工作区有变化时以工作区为准。
-function mapStatus(xy) {
-  const worktree = xy[1];
-  const index = xy[0];
-  const picked = worktree !== '.' && worktree !== '?' ? worktree : index;
-  return TYPE_BY_CHAR[picked] || 'modified';
+// XY 两位：X 是暂存区状态，Y 是工作区状态，'.' 表示该侧无变化
+function statusFromChar(char) {
+  if (!char || char === '.' || char === ' ') return null;
+  return TYPE_BY_CHAR[char] || 'modified';
 }
 
 function parseStatus(raw) {
@@ -94,31 +93,39 @@ function parseStatus(raw) {
     if (entry.startsWith('# ')) continue;
 
     if (entry.startsWith('? ')) {
-      changes.push({ path: entry.slice(2), status: 'untracked' });
+      changes.push({ path: entry.slice(2), indexStatus: null, worktreeStatus: 'untracked' });
       continue;
     }
     if (entry.startsWith('! ')) continue;
     if (entry.startsWith('u ')) {
       const fields = entry.split(' ');
-      changes.push({ path: fields.slice(10).join(' '), status: 'conflicted' });
+      changes.push({
+        path: fields.slice(10).join(' '),
+        indexStatus: 'conflicted',
+        worktreeStatus: 'conflicted',
+      });
       continue;
     }
     if (entry.startsWith('1 ')) {
       const fields = entry.split(' ');
+      const xy = fields[1] || '..';
       changes.push({
         path: fields.slice(8).join(' '),
-        status: mapStatus(fields[1] || '..'),
+        indexStatus: statusFromChar(xy[0]),
+        worktreeStatus: statusFromChar(xy[1]),
       });
       continue;
     }
     if (entry.startsWith('2 ')) {
       const fields = entry.split(' ');
+      const xy = fields[1] || '..';
       const origPath = parts[index + 1] || '';
       index += 1;
       changes.push({
         path: fields.slice(9).join(' '),
         origPath,
-        status: 'renamed',
+        indexStatus: statusFromChar(xy[0]),
+        worktreeStatus: statusFromChar(xy[1]),
       });
       continue;
     }
@@ -132,6 +139,8 @@ function parseStatus(raw) {
     behind,
     changes,
     hasChanges: changes.length > 0,
+    stagedCount: changes.filter((change) => change.indexStatus !== null).length,
+    unstagedCount: changes.filter((change) => change.worktreeStatus !== null).length,
   };
 }
 
@@ -168,19 +177,79 @@ async function commit(projectPath, message) {
   if (!text) throw new Error('请填写提交信息');
   if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
 
-  const add = await runGit(projectPath, ['add', '-A']);
-  if (!add.ok) throw new Error(cleanError(add.error, add.stderr));
-
   const result = await runGit(projectPath, ['commit', '-m', text]);
   if (!result.ok) {
     if (/nothing to commit|no changes added/i.test(`${result.stdout}${result.stderr}`)) {
-      throw new Error('没有可提交的变更');
+      throw new Error('没有已暂存的内容可提交');
     }
     throw new Error(cleanError(result.error, result.stderr));
   }
 
   const head = await runGit(projectPath, ['rev-parse', '--short', 'HEAD']);
   return { commit: head.stdout.trim(), summary: text.split('\n')[0] };
+}
+
+async function stage(projectPath, paths) {
+  const list = (Array.isArray(paths) ? paths : []).filter(Boolean);
+  if (!list.length) return { ok: true };
+  list.forEach((item) => resolveWithin(projectPath, item));
+  const result = await runGit(projectPath, ['add', '--', ...list]);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  return { ok: true };
+}
+
+async function unstage(projectPath, paths) {
+  const list = (Array.isArray(paths) ? paths : []).filter(Boolean);
+  if (!list.length) return { ok: true };
+  list.forEach((item) => resolveWithin(projectPath, item));
+  const result = await runGit(projectPath, ['restore', '--staged', '--', ...list]);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  return { ok: true };
+}
+
+async function discard(projectPath, payload) {
+  const input = payload && typeof payload === 'object' ? payload : {};
+  const tracked = (Array.isArray(input.tracked) ? input.tracked : []).filter(Boolean);
+  const untracked = (Array.isArray(input.untracked) ? input.untracked : []).filter(Boolean);
+
+  if (tracked.length) {
+    tracked.forEach((item) => resolveWithin(projectPath, item));
+    const result = await runGit(projectPath, ['restore', '--', ...tracked]);
+    if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  }
+
+  for (const item of untracked) {
+    const target = resolveWithin(projectPath, item);
+    await fsp.rm(target, { force: true });
+  }
+
+  return { ok: true };
+}
+
+async function stageAll(projectPath) {
+  const result = await runGit(projectPath, ['add', '-A']);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  return { ok: true };
+}
+
+async function discardAll(projectPath) {
+  // 先清空暂存区再丢弃工作区改动，否则已暂存的新增文件会残留
+  const unstageResult = await runGit(projectPath, ['restore', '--staged', '.']);
+  if (!unstageResult.ok) throw new Error(cleanError(unstageResult.error, unstageResult.stderr));
+
+  const restoreResult = await runGit(projectPath, ['restore', '.']);
+  if (!restoreResult.ok) throw new Error(cleanError(restoreResult.error, restoreResult.stderr));
+
+  // 未跟踪文件没有被 restore 覆盖，需要逐个删除
+  const current = await status(projectPath);
+  if (current.ok) {
+    for (const change of current.changes) {
+      if (change.worktreeStatus !== 'untracked') continue;
+      await fsp.rm(resolveWithin(projectPath, change.path), { force: true });
+    }
+  }
+
+  return { ok: true };
 }
 
 async function push(projectPath) {
@@ -229,4 +298,15 @@ async function diffCommand(projectPath, filePath, changeStatus) {
   return { command: `git --no-pager diff -- ${quoted}` };
 }
 
-module.exports = { status, commit, push, init, diffCommand };
+module.exports = {
+  status,
+  commit,
+  push,
+  init,
+  diffCommand,
+  stage,
+  unstage,
+  discard,
+  stageAll,
+  discardAll,
+};

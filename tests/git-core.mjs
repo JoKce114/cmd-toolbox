@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -20,6 +20,7 @@ function makeRepo() {
   execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
   execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir });
   execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
+  execFileSync('git', ['config', 'core.autocrlf', 'false'], { cwd: dir });
   return dir;
 }
 
@@ -43,11 +44,20 @@ writeFileSync(join(repo, '中文 文件.txt'), 'hello\n');
 const withFiles = await git.status(repo);
 assert(withFiles.changes.length === 2, '识别到两个变更');
 assert(
-  withFiles.changes.some((c) => c.path === '中文 文件.txt' && c.status === 'untracked'),
+  withFiles.changes.some((c) => c.path === '中文 文件.txt' && c.worktreeStatus === 'untracked'),
   '中文空格路径原样返回，未加引号',
 );
 
-console.log('4. 提交');
+console.log('3b. 双状态字段');
+const dual = await git.status(repo);
+const phpChange = dual.changes.find((c) => c.path === 'index.php');
+assert(phpChange.indexStatus === null && phpChange.worktreeStatus === 'untracked', '未跟踪文件只有工作区状态');
+assert(dual.stagedCount === 0 && dual.unstagedCount === 2, '计数按双状态统计');
+
+console.log('4. 暂存后提交');
+await git.stage(repo, ['index.php', '中文 文件.txt']);
+const staged = await git.status(repo);
+assert(staged.stagedCount === 2 && staged.unstagedCount === 0, '暂存后两个文件进入暂存区');
 const result = await git.commit(repo, '首次提交');
 assert(result.summary === '首次提交', '返回提交摘要');
 const logged = execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: repo, encoding: 'utf8' }).trim();
@@ -55,15 +65,39 @@ assert(logged === '首次提交', 'git log 中的提交信息一致');
 const afterCommit = await git.status(repo);
 assert(afterCommit.hasChanges === false, '提交后工作区干净');
 
-console.log('5. 修改与删除状态');
+console.log('5. 同时有暂存与工作区改动');
 writeFileSync(join(repo, 'index.php'), '<?php echo 2;\n');
-execFileSync('git', ['add', '-A'], { cwd: repo });
+await git.stage(repo, ['index.php']);
 writeFileSync(join(repo, 'index.php'), '<?php echo 3;\n');
 const mixed = await git.status(repo);
-assert(
-  mixed.changes.some((c) => c.path === 'index.php' && c.status === 'modified'),
-  '已暂存后又修改的文件标记为 modified',
-);
+const mixedChange = mixed.changes.find((c) => c.path === 'index.php');
+assert(mixedChange.indexStatus === 'modified' && mixedChange.worktreeStatus === 'modified', '同一文件两处状态都在');
+assert(mixed.stagedCount === 1 && mixed.unstagedCount === 1, '两个计数都计入该文件');
+
+console.log('5b. 取消暂存');
+await git.unstage(repo, ['index.php']);
+const unstaged = await git.status(repo);
+const unstagedChange = unstaged.changes.find((c) => c.path === 'index.php');
+assert(unstagedChange.indexStatus === null, '取消暂存后暂存区状态为空');
+assert(unstagedChange.worktreeStatus === 'modified', '工作区改动保留');
+
+console.log('5c. 放弃已跟踪文件的修改');
+await git.discard(repo, { tracked: ['index.php'], untracked: [] });
+assert(readFileSync(join(repo, 'index.php'), 'utf8') === '<?php echo 1;\n', '内容恢复到已提交版本');
+
+console.log('5d. 放弃未跟踪文件等于删除');
+writeFileSync(join(repo, 'scratch.txt'), 'x\n');
+await git.discard(repo, { tracked: [], untracked: ['scratch.txt'] });
+assert(!existsSync(join(repo, 'scratch.txt')), '未跟踪文件已删除');
+
+console.log('5e. 全部暂存与全部放弃');
+writeFileSync(join(repo, 'index.php'), '<?php echo 4;\n');
+await git.stageAll(repo);
+const allStaged = await git.status(repo);
+assert(allStaged.unstagedCount === 0 && allStaged.stagedCount >= 1, '全部暂存后工作区无改动');
+await git.discardAll(repo);
+const allDiscarded = await git.status(repo);
+assert(allDiscarded.hasChanges === false, '全部放弃后工作区干净');
 
 console.log('6. 提交空信息被拒绝');
 let rejected = false;

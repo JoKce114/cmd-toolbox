@@ -896,7 +896,8 @@ export default function App() {
       const group = gitGroupRef.current;
       if (!group) return;
       try {
-        const { command } = await window.api.git.diff(group.path, change.path, change.status);
+        const changeStatus = change.worktreeStatus ?? change.indexStatus ?? 'modified';
+        const { command } = await window.api.git.diff(group.path, change.path, changeStatus);
         const tab = await createTerminal(group, 'cmd');
         if (!tab || !tab.sessionId) return;
         window.api.pty.write(tab.sessionId, `${command}`);

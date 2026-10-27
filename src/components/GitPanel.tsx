@@ -194,33 +194,36 @@ export function GitPanel({
 
       {status.changes.length > 0 ? (
         <ul className="git-change-list">
-          {status.changes.map((change) => (
-            <li key={`${change.status}:${change.path}`} className="git-change-item">
-              <button
-                type="button"
-                className="git-change-row"
-                title={change.origPath ? `${change.origPath} → ${change.path}` : change.path}
-                onClick={() =>
-                  change.status === 'deleted' ? onOpenDiff(change) : onOpenInEditor(change)
-                }
-              >
-                <span className={cn('git-change-badge', `is-${change.status}`)}>
-                  {STATUS_LABEL[change.status]}
-                </span>
-                <span className="git-change-path">
-                  {change.origPath ? `${change.origPath} → ${change.path}` : change.path}
-                </span>
-              </button>
-              <button
-                type="button"
-                className="git-row-action"
-                title="在终端查看差异"
-                onClick={() => onOpenDiff(change)}
-              >
-                <FileDiff size={13} />
-              </button>
-            </li>
-          ))}
+          {status.changes.map((change) => {
+            const displayStatus = change.indexStatus ?? change.worktreeStatus ?? 'modified';
+            return (
+              <li key={`${displayStatus}:${change.path}`} className="git-change-item">
+                <button
+                  type="button"
+                  className="git-change-row"
+                  title={change.origPath ? `${change.origPath} → ${change.path}` : change.path}
+                  onClick={() =>
+                    change.worktreeStatus === 'deleted' ? onOpenDiff(change) : onOpenInEditor(change)
+                  }
+                >
+                  <span className={cn('git-change-badge', `is-${displayStatus}`)}>
+                    {STATUS_LABEL[displayStatus]}
+                  </span>
+                  <span className="git-change-path">
+                    {change.origPath ? `${change.origPath} → ${change.path}` : change.path}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="git-row-action"
+                  title="在终端查看差异"
+                  onClick={() => onOpenDiff(change)}
+                >
+                  <FileDiff size={13} />
+                </button>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </section>
