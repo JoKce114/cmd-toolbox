@@ -55,6 +55,15 @@ contextBridge.exposeInMainWorld('api', {
     openExternal: (url) => invoke('shell:open-external', url),
   },
 
+  git: {
+    status: (projectPath) => invoke('git:status', projectPath),
+    commit: (projectPath, message) => invoke('git:commit', projectPath, message),
+    push: (projectPath) => invoke('git:push', projectPath),
+    init: (projectPath) => invoke('git:init', projectPath),
+    diff: (projectPath, filePath, changeStatus) =>
+      invoke('git:diff', projectPath, filePath, changeStatus),
+  },
+
   panes: {
     sync: (panes) => ipcRenderer.send('panes:sync', panes),
     attachBrowser: (tabId, webContentsId) =>

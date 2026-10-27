@@ -1,4 +1,4 @@
-import type { AppInfo, Project } from './types';
+import type { AppInfo, GitChange, GitStatus, Project } from './types';
 
 export interface ProjectSaveResult {
   projects: Project[];
@@ -72,6 +72,20 @@ declare global {
       shell: {
         reveal: (target: string) => Promise<boolean>;
         openExternal: (url: string) => Promise<boolean>;
+      };
+      git: {
+        status: (projectPath: string) => Promise<GitStatus>;
+        commit: (
+          projectPath: string,
+          message: string,
+        ) => Promise<{ commit: string; summary: string }>;
+        push: (projectPath: string) => Promise<{ upstream: string }>;
+        init: (projectPath: string) => Promise<{ ok: true }>;
+        diff: (
+          projectPath: string,
+          filePath: string,
+          changeStatus: GitChange['status'],
+        ) => Promise<{ command: string }>;
       };
       panes: {
         sync: (panes: Array<Record<string, unknown>>) => void;

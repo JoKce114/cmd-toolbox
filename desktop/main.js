@@ -8,6 +8,7 @@ const sessionStore = require('./session');
 const ptyHost = require('./pty-host');
 const paneApi = require('./pane-api');
 const mcpConfig = require('./mcp-config');
+const git = require('./git');
 const { listShells, listTools, resolveShell } = require('./shells');
 
 const APP_NAME = 'Cmd Toolbox';
@@ -236,6 +237,36 @@ function registerIpc() {
     store.reorder(ids);
     return projectsWithState();
   });
+
+  // 渲染进程只能对已保存项目执行 git 操作
+  function assertProjectPath(input) {
+    const target = normalizeDir(input);
+    const known = store
+      .list()
+      .find((project) => normalizeDir(project.path).toLowerCase() === target.toLowerCase());
+    if (!known) throw new Error('项目未保存，无法执行 Git 操作');
+    return known.path;
+  }
+
+  ipcMain.handle('git:status', (_event, projectPath) =>
+    git.status(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:commit', (_event, projectPath, message) =>
+    git.commit(assertProjectPath(projectPath), message),
+  );
+
+  ipcMain.handle('git:push', (_event, projectPath) =>
+    git.push(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:init', (_event, projectPath) =>
+    git.init(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:diff', (_event, projectPath, filePath, changeStatus) =>
+    git.diffCommand(assertProjectPath(projectPath), filePath, changeStatus),
+  );
 
   ipcMain.handle('dialog:pick-folder', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {

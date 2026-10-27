@@ -52,6 +52,36 @@ export type Tab = {
   exitCode?: number;
 };
 
+export type GitChangeStatus =
+  | 'modified'
+  | 'added'
+  | 'deleted'
+  | 'renamed'
+  | 'untracked'
+  | 'conflicted';
+
+export type GitChange = {
+  path: string;
+  origPath?: string;
+  status: GitChangeStatus;
+};
+
+export type GitStatus =
+  | {
+      ok: false;
+      reason: 'no-git' | 'not-repo' | 'missing-dir' | 'error';
+      message: string;
+    }
+  | {
+      ok: true;
+      branch: string;
+      upstream: string;
+      ahead: number;
+      behind: number;
+      changes: GitChange[];
+      hasChanges: boolean;
+    };
+
 export function isBrowserTab(tab: { shellId: string }): boolean {
   return tab.shellId === 'browser';
 }
