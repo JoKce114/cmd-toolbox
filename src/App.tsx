@@ -546,6 +546,49 @@ export default function App() {
     }
   }, [pushToast, refreshGit]);
 
+  const withGitGroup = useCallback(
+    async (action: (path: string) => Promise<unknown>, successMessage = '') => {
+      const group = gitGroupRef.current;
+      if (!group) return false;
+      try {
+        await action(group.path);
+        if (successMessage) pushToast(successMessage, 'success');
+        await refreshGit();
+        return true;
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+        return false;
+      }
+    },
+    [pushToast, refreshGit],
+  );
+
+  const gitStage = useCallback(
+    (paths: string[]) => withGitGroup((path) => window.api.git.stage(path, paths)),
+    [withGitGroup],
+  );
+
+  const gitUnstage = useCallback(
+    (paths: string[]) => withGitGroup((path) => window.api.git.unstage(path, paths)),
+    [withGitGroup],
+  );
+
+  const gitDiscard = useCallback(
+    (payload: { tracked: string[]; untracked: string[] }) =>
+      withGitGroup((path) => window.api.git.discard(path, payload), '已放弃修改'),
+    [withGitGroup],
+  );
+
+  const gitStageAll = useCallback(
+    () => withGitGroup((path) => window.api.git.stageAll(path)),
+    [withGitGroup],
+  );
+
+  const gitDiscardAll = useCallback(
+    () => withGitGroup((path) => window.api.git.discardAll(path), '已放弃全部修改'),
+    [withGitGroup],
+  );
+
   const activeTabs = activeGroup ? tabsByGroup[activeGroup.key] || [] : [];
   const rightIds = activeGroup ? rightIdsByGroup[activeGroup.key] || [] : [];
   const split = rightIds.length > 0;
@@ -1793,6 +1836,11 @@ export default function App() {
                 onInit={gitInit}
                 onOpenDiff={(change) => void gitOpenDiff(change)}
                 onOpenInEditor={(change) => openEditorFile(gitGroup, change.path)}
+                onStage={gitStage}
+                onUnstage={gitUnstage}
+                onDiscard={gitDiscard}
+                onStageAll={gitStageAll}
+                onDiscardAll={gitDiscardAll}
               />
             ) : null
           }

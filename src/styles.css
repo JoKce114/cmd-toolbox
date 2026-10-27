@@ -844,8 +844,63 @@ p {
   text-decoration: underline;
 }
 
+.git-group {
+  margin-top: 9px;
+}
+
+.git-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 8px;
+}
+
+.git-group-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+
+.git-group-count {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #ededf1;
+  color: #8b8f98;
+  font-size: 9.5px;
+}
+
+.git-group-action {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+}
+
+.git-group-action:first-of-type {
+  margin-left: auto;
+}
+
+.git-group-action:hover:not(:disabled) {
+  background: #ebebef;
+  color: var(--text);
+}
+
+.git-group-action:disabled {
+  opacity: 0.4;
+}
+
 .git-change-list {
-  margin: 9px 0 0;
+  margin: 2px 0 0;
   padding: 0;
   max-height: 168px;
   overflow-y: auto;
