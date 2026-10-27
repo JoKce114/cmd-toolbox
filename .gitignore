@@ -4,3 +4,5 @@ release/
 test-shots/
 .test-data/
 *.log
+
+.superpowers/
