@@ -658,7 +658,7 @@ import type { AppInfo, GitChange, GitStatus, Project } from './types';
 Run: `npm run typecheck`
 Expected: 无输出（通过）
 
-Run: `npm run build && node tests/git-ipc.mjs`
+Run: `npm run typecheck && npx vite build && node tests/git-ipc.mjs`
 Expected: 全部通过
 
 - [ ] **Step 7: 提交**
@@ -791,7 +791,7 @@ git commit -m "feat(git): add event-driven git status hook"
 创建 `src/components/GitPanel.tsx`：
 
 ```tsx
-import { useState } from 'react';
+import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { ArrowUp, Check, RefreshCw } from 'lucide-react';
 import { cn } from '../lib';
 import type { GitChange, GitChangeStatus, GitStatus } from '../types';
@@ -868,7 +868,7 @@ export function GitPanel({
     else void runCommit();
   };
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && event.ctrlKey) {
       event.preventDefault();
       submit();
@@ -1258,7 +1258,9 @@ import { useGitStatus } from './gitStatus';
 import type { GitChange } from './types';
 ```
 
-在 `pushToast` 定义之后加入：
+在 `src/App.tsx` 中 `const activeGroup = groups.find(...)` 那一行**之后**插入下面的代码块。
+
+> 注意：不要插在 `pushToast` 之后。`activeGroup` 是 `const` 声明在更靠后的位置，提前引用会触发 TDZ 报错。
 
 ```tsx
   const projectGroupForGit = activeGroup && activeGroup.kind === 'project' && activeGroup.exists
@@ -1404,7 +1406,7 @@ import { GitPanel } from './components/GitPanel';
 
 - [ ] **Step 6: 类型检查与构建**
 
-Run: `npm run typecheck && npm run build`
+Run: `npm run typecheck && npx vite build`
 Expected: 均通过
 
 - [ ] **Step 7: 手工冒烟**
@@ -1545,7 +1547,10 @@ assert(
 );
 
 console.log('5. 推送失败保留推送态');
-await page.getByRole('button', { name: '提交', exact: true }).isDisabled();
+assert(
+  await page.getByRole('button', { name: '提交', exact: true }).isDisabled(),
+  '继续编辑后输入框为空，提交按钮禁用',
+);
 await page.locator('.git-message').fill('第二次提交');
 await page.getByRole('button', { name: '提交', exact: true }).click();
 await page.waitForTimeout(1500);
@@ -1584,12 +1589,12 @@ Expected: 首次运行时若面板未接入会 FAIL（前序任务已完成则�
 
 - [ ] **Step 3: 运行测试确认通过**
 
-Run: `npm run build && node tests/git-panel.mjs`
+Run: `npm run typecheck && npx vite build && node tests/git-panel.mjs`
 Expected: 全部通过
 
 - [ ] **Step 4: 手工验证清单**
 
-构建后 `npm start`，逐项确认：
+构建后 `npm start`（会跑完整 `npm run build`，含 native helper），逐项确认：
 
 - 浅色与深色主题下终端右侧只有一条滚动条
 - 侧栏收起后 Git 面板不残留
