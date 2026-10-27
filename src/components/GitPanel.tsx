@@ -1,7 +1,18 @@
 import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { ArrowUp, Check, FileDiff, Plus, RefreshCw, Trash2, Undo2 } from 'lucide-react';
+import {
+  ArrowUp,
+  Check,
+  FileDiff,
+  GitBranch,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Undo2,
+} from 'lucide-react';
 import { cn } from '../lib';
 import type { GitChange, GitChangeStatus, GitStatus } from '../types';
+import { BranchMenu } from './BranchMenu';
+import { NewBranchModal } from './NewBranchModal';
 
 type Phase = 'idle' | 'committing' | 'committed' | 'pushing';
 
@@ -28,6 +39,12 @@ export type GitPanelProps = {
   onDiscard: (payload: { tracked: string[]; untracked: string[] }) => Promise<boolean>;
   onStageAll: () => Promise<boolean>;
   onDiscardAll: () => Promise<boolean>;
+  branches: string[];
+  currentBranch: string;
+  branchBusy: boolean;
+  onCheckout: (branch: string) => void;
+  onCreateBranch: (name: string, startPoint: string) => void;
+  onMerge: (branch: string) => void;
 };
 
 export function GitPanel({
@@ -44,6 +61,12 @@ export function GitPanel({
   onDiscard,
   onStageAll,
   onDiscardAll,
+  branches,
+  currentBranch,
+  branchBusy,
+  onCheckout,
+  onCreateBranch,
+  onMerge,
 }: GitPanelProps) {
   const [message, setMessage] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
@@ -51,6 +74,8 @@ export function GitPanel({
   const [initBusy, setInitBusy] = useState(false);
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
   const [groupBusy, setGroupBusy] = useState(false);
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  const [newBranchOpen, setNewBranchOpen] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState<
     | { kind: 'single'; change: GitChange }
     | { kind: 'all' }
@@ -256,12 +281,43 @@ export function GitPanel({
     <section className="git-panel">
       {header}
       <div className="git-branch-bar">
-        <span className="git-branch-name" title={status.branch}>
-          {status.branch || '未知分支'}
-        </span>
-        {status.ahead > 0 ? <span className="git-ahead">↑{status.ahead}</span> : null}
-        {status.behind > 0 ? <span className="git-behind">↓{status.behind}</span> : null}
+        <button
+          type="button"
+          className="git-branch-button"
+          title="切换或新建分支"
+          onClick={() => setBranchMenuOpen((open) => !open)}
+        >
+          <GitBranch size={12} />
+          <span className="git-branch-name">{status.branch || '未知分支'}</span>
+          {status.ahead > 0 ? <span className="git-ahead">↑{status.ahead}</span> : null}
+          {status.behind > 0 ? <span className="git-behind">↓{status.behind}</span> : null}
+        </button>
+
+        {branchMenuOpen ? (
+          <BranchMenu
+            branches={branches}
+            current={currentBranch || status.branch}
+            busy={branchBusy}
+            onSelect={onCheckout}
+            onMerge={onMerge}
+            onCreate={() => setNewBranchOpen(true)}
+            onClose={() => setBranchMenuOpen(false)}
+          />
+        ) : null}
       </div>
+
+      {newBranchOpen ? (
+        <NewBranchModal
+          branches={branches}
+          current={currentBranch || status.branch}
+          busy={branchBusy}
+          onClose={() => setNewBranchOpen(false)}
+          onConfirm={(name, startPoint) => {
+            setNewBranchOpen(false);
+            onCreateBranch(name, startPoint);
+          }}
+        />
+      ) : null}
 
       {status.hasChanges || phase === 'committed' ? (
         <>

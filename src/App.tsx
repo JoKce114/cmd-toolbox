@@ -501,6 +501,32 @@ export default function App() {
     },
   });
 
+  const [gitBranches, setGitBranches] = useState<{ current: string; list: string[] }>({
+    current: '',
+    list: [],
+  });
+  const [branchBusy, setBranchBusy] = useState(false);
+
+  useEffect(() => {
+    const group = gitGroupRef.current;
+    if (!group) {
+      setGitBranches({ current: '', list: [] });
+      return;
+    }
+    let cancelled = false;
+    void window.api.git
+      .branches(group.path)
+      .then((result) => {
+        if (!cancelled) setGitBranches(result);
+      })
+      .catch(() => {
+        if (!cancelled) setGitBranches({ current: '', list: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gitStatus]);
+
   const gitCommit = useCallback(
     async (message: string) => {
       const group = gitGroupRef.current;
@@ -587,6 +613,71 @@ export default function App() {
   const gitDiscardAll = useCallback(
     () => withGitGroup((path) => window.api.git.discardAll(path), '已放弃全部修改'),
     [withGitGroup],
+  );
+
+  const gitCheckout = useCallback(
+    async (branch: string) => {
+      const group = gitGroupRef.current;
+      if (!group) return;
+      const dirty = Boolean(
+        gitStatus?.ok && (gitStatus.stagedCount > 0 || gitStatus.unstagedCount > 0),
+      );
+      if (dirty) {
+        pushToast('有未提交的改动，请先提交或放弃后再切换分支', 'error');
+        return;
+      }
+      setBranchBusy(true);
+      try {
+        await window.api.git.checkout(group.path, branch);
+        pushToast(`已切换到 ${branch}`, 'success');
+        await refreshGit();
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+      } finally {
+        setBranchBusy(false);
+      }
+    },
+    [gitStatus, pushToast, refreshGit],
+  );
+
+  const gitCreateBranch = useCallback(
+    async (name: string, startPoint: string) => {
+      const group = gitGroupRef.current;
+      if (!group) return;
+      setBranchBusy(true);
+      try {
+        await window.api.git.createBranch(group.path, name, startPoint);
+        pushToast(`已创建并切换到 ${name}`, 'success');
+        await refreshGit();
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+      } finally {
+        setBranchBusy(false);
+      }
+    },
+    [pushToast, refreshGit],
+  );
+
+  const gitMerge = useCallback(
+    async (branch: string) => {
+      const group = gitGroupRef.current;
+      if (!group) return;
+      setBranchBusy(true);
+      try {
+        const result = await window.api.git.merge(group.path, branch);
+        if (result.conflicted.length > 0) {
+          pushToast(`合并 ${branch} 时发生冲突，请到终端处理`, 'error');
+        } else {
+          pushToast(`已合并 ${branch}`, 'success');
+        }
+        await refreshGit();
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+      } finally {
+        setBranchBusy(false);
+      }
+    },
+    [pushToast, refreshGit],
   );
 
   const activeTabs = activeGroup ? tabsByGroup[activeGroup.key] || [] : [];
@@ -1841,6 +1932,12 @@ export default function App() {
                 onDiscard={gitDiscard}
                 onStageAll={gitStageAll}
                 onDiscardAll={gitDiscardAll}
+                branches={gitBranches.list}
+                currentBranch={gitBranches.current}
+                branchBusy={branchBusy}
+                onCheckout={(branch) => void gitCheckout(branch)}
+                onCreateBranch={(name, startPoint) => void gitCreateBranch(name, startPoint)}
+                onMerge={(branch) => void gitMerge(branch)}
               />
             ) : null
           }
