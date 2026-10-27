@@ -138,6 +138,15 @@ async function paneContent(pane) {
       note: '要点击请用 browser_click，传入 index（elements 里的编号），不要下载 HTML 或写 Python。',
     };
   }
+  if (pane.kind === 'editor') {
+    return {
+      paneNo: pane.paneNo,
+      kind: 'editor',
+      filePath: pane.filePath || '',
+      text: '',
+      note: '这是编辑器页签，没有终端输出。',
+    };
+  }
   return {
     paneNo: pane.paneNo,
     kind: 'terminal',

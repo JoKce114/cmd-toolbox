@@ -703,10 +703,11 @@ export default function App() {
       return {
         id: tab.id,
         paneNo: tab.paneNo,
-        kind: isBrowserTab(tab) ? 'browser' : 'terminal',
+        kind: isBrowserTab(tab) ? 'browser' : isEditorTab(tab) ? 'editor' : 'terminal',
         shellId: tab.shellId,
         descriptor: tab.descriptor,
         url: tab.url || '',
+        filePath: tab.filePath || '',
         cwd: tab.cwd,
         groupKey: tab.groupKey,
         groupName: group?.name || '',
