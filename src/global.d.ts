@@ -65,6 +65,7 @@ declare global {
         wheel: (id: string, delta: 120 | -120, col: number, row: number) => void;
         click: (id: string, col: number, row: number) => void;
         altV: (id: string) => void;
+        ctrlV: (id: string) => void;
         resize: (id: string, cols: number, rows: number) => void;
         kill: (id: string) => Promise<boolean>;
         resetAll: () => Promise<boolean>;

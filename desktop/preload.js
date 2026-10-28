@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('api', {
     wheel: (id, delta, col, row) => ipcRenderer.send('pty:wheel', id, delta, col, row),
     click: (id, col, row) => ipcRenderer.send('pty:click', id, col, row),
     altV: (id) => ipcRenderer.send('pty:alt-v', id),
+    ctrlV: (id) => ipcRenderer.send('pty:ctrl-v', id),
     resize: (id, cols, rows) => ipcRenderer.send('pty:resize', id, cols, rows),
     kill: (id) => invoke('pty:kill', id),
     resetAll: () => invoke('pty:reset-all'),

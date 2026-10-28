@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.Runtime.InteropServices;
 
@@ -65,8 +65,10 @@ internal static class ConInputHelper
     private const uint ENABLE_MOUSE_INPUT = 0x0010;
     private const uint FROM_LEFT_1ST_BUTTON_PRESSED = 0x0001;
     private const uint LEFT_ALT_PRESSED = 0x0002;
+    private const uint LEFT_CTRL_PRESSED = 0x0008;
     private const ushort KEY_EVENT = 1;
     private const ushort VK_MENU = 0x12;
+    private const ushort VK_CONTROL = 0x11;
     private const ushort VK_V = 0x56;
 
     private static int Main()
@@ -108,6 +110,16 @@ internal static class ConInputHelper
                     continue;
                 }
                 Console.WriteLine(InjectClick(pid, col, row));
+            }
+            else if (string.Equals(parts[0], "ctrlv", StringComparison.Ordinal))
+            {
+                if (parts.Length != 2 ||
+                    !uint.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out pid) || pid == 0)
+                {
+                    Console.WriteLine("error parse");
+                    continue;
+                }
+                Console.WriteLine(InjectCtrlV(pid));
             }
             else if (string.Equals(parts[0], "altv", StringComparison.Ordinal))
             {
@@ -220,6 +232,39 @@ internal static class ConInputHelper
         record.KeyEvent.UnicodeChar = unicode;
         record.KeyEvent.dwControlKeyState = control;
         return record;
+    }
+
+    private static string InjectCtrlV(uint pid)
+    {
+        if (!AttachConsole(pid))
+        {
+            return "error attach " + Marshal.GetLastWin32Error().ToString(CultureInfo.InvariantCulture);
+        }
+
+        IntPtr input = CreateFileW("CONIN$", 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+        if (input == IntPtr.Zero || input == new IntPtr(-1))
+        {
+            int error = Marshal.GetLastWin32Error();
+            FreeConsole();
+            return "error open " + error.ToString(CultureInfo.InvariantCulture);
+        }
+
+        // 真正的 Ctrl+V 按键事件：OpenCode 只绑定 ctrl+v，不认 alt+v
+        INPUT_RECORD[] records = new[]
+        {
+            KeyRecord(1, VK_CONTROL, 0x1D, '\0', LEFT_CTRL_PRESSED),
+            KeyRecord(1, VK_V, 0x2F, '\u0016', LEFT_CTRL_PRESSED),
+            KeyRecord(0, VK_V, 0x2F, '\u0016', LEFT_CTRL_PRESSED),
+            KeyRecord(0, VK_CONTROL, 0x1D, '\0', 0),
+        };
+
+        uint written;
+        bool ok = WriteConsoleInputW(input, records, (uint)records.Length, out written);
+        int result = Marshal.GetLastWin32Error();
+
+        CloseHandle(input);
+        FreeConsole();
+        return ok ? "ok" : "error write " + result.ToString(CultureInfo.InvariantCulture);
     }
 
     private static string InjectAltV(uint pid)

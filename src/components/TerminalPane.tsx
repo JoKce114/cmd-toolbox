@@ -183,8 +183,10 @@ export function TerminalPane({
       }
     };
 
+    // 各家 CLI 的贴图键不同：OpenCode 只认 ctrl+v，其余用 alt+v
     const pasteImageToPty = () => {
-      window.api.pty.altV(tab.sessionId);
+      if (tab.shellId === 'opencode') window.api.pty.ctrlV(tab.sessionId);
+      else window.api.pty.altV(tab.sessionId);
     };
 
     const pasteCtrlV = async () => {
