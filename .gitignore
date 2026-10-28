@@ -6,3 +6,5 @@ test-shots/
 *.log
 
 .superpowers/
+
+release-build*/
