@@ -87,6 +87,30 @@ async function waitFor(predicate, message, timeout = 20000) {
   }
 }
 
+async function addProject(path, name) {
+  const modal = page.locator('.modal-card');
+  const deadline = Date.now() + 20000;
+  while ((await modal.count()) === 0) {
+    if (Date.now() > deadline) throw new Error('等待超时：添加项目弹窗未出现');
+    await click(page.locator('.add-project-btn'));
+    await page.waitForTimeout(600);
+  }
+  await page.locator('#project-path').fill(path);
+  await page.locator('#project-name').fill(name);
+  await click(page.getByRole('button', { name: '保存项目', exact: true }));
+  await modal.waitFor({ state: 'detached', timeout: 15000 });
+  await page.waitForTimeout(400);
+}
+
+async function selectProject(name) {
+  await click(page.locator('.group-item').filter({ hasText: name }).locator('.group-main'));
+  await waitFor(
+    async () => (await page.locator('.git-panel').count()) > 0,
+    `切换到 ${name} 后面板出现`,
+  );
+  await page.waitForTimeout(600);
+}
+
 console.log('1. 打开编辑器页签');
 await click(page.locator('.add-project-btn'));
 await waitFor(async () => (await page.locator('.modal-card').count()) > 0, '添加项目弹窗');
@@ -264,6 +288,73 @@ const utf16Expected = Buffer.concat([
   iconv.encode('UTF-16 新内容\n', 'utf-16-le'),
 ]);
 assert(Buffer.compare(utf16After, utf16Expected) === 0, 'UTF-16 按原编码写回');
+
+console.log('11. 打开冲突文件显示操作条');
+const conflictRepo = mkdtempSync(join(tmpdir(), 'cmdtb-conflict-'));
+execFileSync('git', ['init', '-b', 'main'], { cwd: conflictRepo, stdio: 'ignore' });
+execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: conflictRepo });
+execFileSync('git', ['config', 'user.name', 'Test'], { cwd: conflictRepo });
+execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: conflictRepo });
+writeFileSync(join(conflictRepo, 'file.txt'), 'base\n');
+execFileSync('git', ['add', '-A'], { cwd: conflictRepo });
+execFileSync('git', ['commit', '-qm', 'init'], { cwd: conflictRepo });
+execFileSync('git', ['checkout', '-q', '-b', 'other'], { cwd: conflictRepo });
+writeFileSync(join(conflictRepo, 'file.txt'), 'theirs\n');
+execFileSync('git', ['commit', '-qam', 'other'], { cwd: conflictRepo });
+execFileSync('git', ['checkout', '-q', 'main'], { cwd: conflictRepo });
+writeFileSync(join(conflictRepo, 'file.txt'), 'ours\n');
+execFileSync('git', ['commit', '-qam', 'main'], { cwd: conflictRepo });
+try {
+  execFileSync('git', ['merge', 'other'], { cwd: conflictRepo, stdio: 'ignore' });
+} catch {
+  // 合并冲突是预期结果
+}
+
+await addProject(conflictRepo, 'conflict-proj');
+await selectProject('conflict-proj');
+await page.locator('.group-item').filter({ hasText: 'conflict-proj' }).click({ button: 'right' });
+await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+await click(page.getByRole('menuitem', { name: '打开编辑器', exact: true }));
+await page.waitForTimeout(1200);
+await click(page.locator('.editor-pane .file-row').filter({ hasText: 'file.txt' }));
+await waitFor(
+  async () => (await page.locator('.conflict-bar').count()) > 0,
+  '冲突操作条出现',
+);
+assert(
+  (await page.locator('.editor-conflict-badge').innerText()).includes('冲突 1 处'),
+  '徽标显示冲突数量',
+);
+
+console.log('12. 采用当前');
+await click(page.getByRole('button', { name: '采用当前', exact: true }));
+await waitFor(
+  async () => (await page.locator('.conflict-bar').count()) === 0,
+  '操作条消失',
+);
+const currentText = await page.locator('.editor-pane:not(.is-hidden) .cm-content').innerText();
+assert(currentText.includes('ours') && !currentText.includes('theirs'), '只剩当前分支内容');
+assert(
+  (await page.locator('.editor-notice-done').count()) > 0,
+  '出现「冲突已全部处理」提示',
+);
+
+console.log('13. Ctrl+Z 撤销恢复冲突');
+await page.locator('.editor-pane:not(.is-hidden) .cm-content').click();
+await page.keyboard.press('Control+Z');
+await waitFor(
+  async () => (await page.locator('.conflict-bar').count()) > 0,
+  '撤销后操作条恢复',
+);
+
+console.log('14. 采用传入');
+await click(page.getByRole('button', { name: '采用传入', exact: true }));
+await waitFor(
+  async () => (await page.locator('.conflict-bar').count()) === 0,
+  '操作条消失',
+);
+const theirsText = await page.locator('.editor-pane:not(.is-hidden) .cm-content').innerText();
+assert(theirsText.includes('theirs') && !theirsText.includes('ours'), '只剩传入分支内容');
 
 await app.close();
 rmSync(dataDir, { recursive: true, force: true });
