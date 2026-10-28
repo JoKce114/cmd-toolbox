@@ -5,10 +5,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
-const appDir = 'D:/deskTop/CmdToolbox/_gf/app';
 const dataDir = mkdtempSync(join(tmpdir(), 'gf-'));
 const repo = mkdtempSync(join(tmpdir(), 'gfr-'));
-const shots = resolve(appDir, 'shots');
+const shots = resolve(root, 'test-shots');
 mkdirSync(shots, { recursive: true });
 
 const run = (args) => execFileSync('git', args, { cwd: repo, stdio: 'ignore' });
@@ -46,7 +45,7 @@ const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 const app = await electron.launch({
   executablePath: resolve(root, 'node_modules/electron/dist/electron.exe'),
-  cwd: appDir,
+  cwd: root,
   args: ['.', `--data-dir=${dataDir}`],
   env,
 });
