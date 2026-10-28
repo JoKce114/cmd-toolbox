@@ -2031,6 +2031,37 @@ p {
   background: linear-gradient(180deg, #17181d, #111216);
 }
 
+/* 编辑器页签跟随深色主题：文件树、编辑区与滚动条一起变暗 */
+.editor-pane.theme-dark .file-tree {
+  background: #141519;
+  border-right-color: #23252b;
+}
+
+.editor-pane.theme-dark .file-row {
+  color: #a8adb8;
+}
+
+.editor-pane.theme-dark .file-row:hover {
+  background: #1e1f25;
+}
+
+.editor-pane.theme-dark .file-row.active {
+  background: #24304a;
+  color: #e4e6ea;
+}
+
+.editor-pane.theme-dark .editor-main {
+  background: #1e1e1e;
+}
+
+.editor-pane.theme-dark .editor-placeholder {
+  color: #8b8f98;
+}
+
+.editor-pane.theme-dark .editor-encoding {
+  color: #7d828c;
+}
+
 .terminal-pane.theme-dark .pane-dot {
   box-shadow: 0 0 0 2.5px rgba(255, 255, 255, 0.07);
 }

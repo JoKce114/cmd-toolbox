@@ -1902,6 +1902,7 @@ export default function App() {
           onToast={pushToast}
           onTitleChange={(title) => setTabDescriptor(tab.groupKey, tab.id, title)}
           onDirtyChange={handleDirtyChange}
+          themeMode={terminalThemeMode}
         />
       );
     }

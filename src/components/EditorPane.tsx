@@ -5,6 +5,7 @@ import { useEditorFile } from '../useEditorFile';
 import { FileTree } from './FileTree';
 import { CodeMirrorHost } from './CodeMirrorHost';
 import type { Group, Tab } from '../types';
+import type { TerminalThemeMode } from '../theme';
 import type { ToastKind } from './Toast';
 
 const ENCODING_LABEL: Record<string, string> = {
@@ -23,6 +24,7 @@ export type EditorPaneProps = {
   onToast: (message: string, kind?: ToastKind) => void;
   onTitleChange: (title: string) => void;
   onDirtyChange: (tabId: string, dirty: boolean) => void;
+  themeMode: TerminalThemeMode;
 };
 
 export function EditorPane({
@@ -33,6 +35,7 @@ export function EditorPane({
   onToast,
   onTitleChange,
   onDirtyChange,
+  themeMode,
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const { file, open, update, save } = useEditorFile(group, onError);
@@ -150,7 +153,7 @@ export function EditorPane({
   return (
     <section
       ref={rootRef}
-      className={`terminal-pane editor-pane${active ? '' : ' is-hidden'}`}
+      className={`terminal-pane editor-pane theme-${themeMode}${active ? '' : ' is-hidden'}`}
     >
       <header className="pane-header">
         <span className="pane-path" title={file.relPath || group.path}>
@@ -217,6 +220,7 @@ export function EditorPane({
               value={file.content}
               filePath={file.relPath}
               readOnly={file.readOnly}
+              themeMode={themeMode}
               onChange={update}
               onConflictCountChange={setConflictCount}
             />

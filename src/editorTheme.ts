@@ -76,4 +76,84 @@ const lightTheme = EditorView.theme(
   { dark: false },
 );
 
+// VS Code Dark+ 的取色
+const vscodeDark = HighlightStyle.define([
+  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: '#6a9955', fontStyle: 'italic' },
+  { tag: [tags.keyword, tags.controlKeyword, tags.moduleKeyword, tags.operatorKeyword], color: '#c586c0' },
+  { tag: [tags.string, tags.special(tags.string), tags.regexp], color: '#ce9178' },
+  { tag: [tags.number, tags.bool, tags.null], color: '#b5cea8' },
+  { tag: [tags.variableName, tags.propertyName], color: '#9cdcfe' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: '#dcdcaa' },
+  { tag: [tags.className, tags.typeName, tags.namespace], color: '#4ec9b0' },
+  { tag: [tags.definition(tags.variableName), tags.definition(tags.propertyName)], color: '#9cdcfe' },
+  { tag: [tags.tagName], color: '#569cd6' },
+  { tag: [tags.attributeName], color: '#9cdcfe' },
+  { tag: [tags.attributeValue], color: '#ce9178' },
+  { tag: [tags.operator, tags.punctuation, tags.separator, tags.bracket], color: '#d4d4d4' },
+  { tag: [tags.meta, tags.processingInstruction], color: '#808080' },
+  { tag: [tags.invalid], color: '#f44747' },
+  { tag: [tags.strong], fontWeight: '600' },
+  { tag: [tags.emphasis], fontStyle: 'italic' },
+  { tag: [tags.heading], color: '#569cd6', fontWeight: '600' },
+  { tag: [tags.link, tags.url], color: '#4fc1ff', textDecoration: 'underline' },
+]);
+
+const darkTheme = EditorView.theme(
+  {
+    '&': {
+      color: '#d4d4d4',
+      backgroundColor: '#1e1e1e',
+    },
+    '.cm-content': {
+      caretColor: '#aeafad',
+      padding: '8px 0',
+    },
+    '.cm-cursor, .cm-dropCursor': {
+      borderLeftColor: '#aeafad',
+    },
+    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
+      backgroundColor: '#264f78',
+    },
+    '.cm-gutters': {
+      backgroundColor: '#1e1e1e',
+      color: '#858585',
+      border: 'none',
+      paddingRight: '8px',
+    },
+    '.cm-activeLineGutter': {
+      backgroundColor: '#2a2d2e',
+      color: '#c6c6c6',
+    },
+    '.cm-activeLine': {
+      backgroundColor: '#2a2d2e',
+    },
+    '.cm-selectionMatch': {
+      backgroundColor: '#3a3d41',
+    },
+    '.cm-matchingBracket, .cm-nonmatchingBracket': {
+      backgroundColor: '#3a3d41',
+      outline: '1px solid #888',
+    },
+    '.cm-searchMatch': {
+      backgroundColor: '#623315',
+      outline: '1px solid #d18616',
+    },
+    '.cm-searchMatch.cm-searchMatch-selected': {
+      backgroundColor: '#9e6a03',
+    },
+    '.cm-foldPlaceholder': {
+      backgroundColor: '#3a3d41',
+      border: 'none',
+      color: '#c6c6c6',
+    },
+  },
+  { dark: true },
+);
+
 export const vscodeLightExtensions = [lightTheme, syntaxHighlighting(vscodeLight)];
+export const vscodeDarkExtensions = [darkTheme, syntaxHighlighting(vscodeDark)];
+
+export function themeExtensions(mode: 'light' | 'dark') {
+  return mode === 'dark' ? vscodeDarkExtensions : vscodeLightExtensions;
+}
+

@@ -14,7 +14,8 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { createRoot } from 'react-dom/client';
 import { languageFor } from '../editorLanguage';
-import { vscodeLightExtensions } from '../editorTheme';
+import { themeExtensions } from '../editorTheme';
+import type { TerminalThemeMode } from '../theme';
 import { parseConflicts, resolveConflict } from '../conflictParser';
 import type { ConflictBlock, ConflictChoice } from '../conflictParser';
 import { ConflictBar } from './ConflictBar';
@@ -23,6 +24,7 @@ export type CodeMirrorHostProps = {
   value: string;
   filePath: string;
   readOnly: boolean;
+  themeMode: TerminalThemeMode;
   onChange: (value: string) => void;
   onConflictCountChange?: (count: number) => void;
 };
@@ -121,12 +123,14 @@ export function CodeMirrorHost({
   value,
   filePath,
   readOnly,
+  themeMode,
   onChange,
   onConflictCountChange,
 }: CodeMirrorHostProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const languageRef = useRef(new Compartment());
+  const themeRef = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   const onCountRef = useRef(onConflictCountChange);
   onChangeRef.current = onChange;
@@ -149,7 +153,7 @@ export function CodeMirrorHost({
           highlightSelectionMatches(),
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
           EditorView.lineWrapping,
-          ...vscodeLightExtensions,
+          themeRef.current.of(themeExtensions(themeMode)),
           conflictField,
           languageRef.current.of([]),
           EditorView.updateListener.of((update) => {
@@ -180,6 +184,15 @@ export function CodeMirrorHost({
     // value 故意不放进依赖：由外部内容变化通过下方 effect 同步
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath, readOnly]);
+
+  // 主题切换只重配主题扩展，不重建编辑器
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: themeRef.current.reconfigure(themeExtensions(themeMode)),
+    });
+  }, [themeMode]);
 
   // 文件内容被外部替换（如重新加载）时，同步到编辑器
   useEffect(() => {
