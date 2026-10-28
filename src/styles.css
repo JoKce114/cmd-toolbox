@@ -781,16 +781,16 @@ p {
 }
 
 .cm-conflict-ours {
-  background: #e8f0fe;
+  background: #dbe7fb;
 }
 
 .cm-conflict-theirs {
-  background: #e6f4ea;
+  background: #d7f0de;
 }
 
 .cm-conflict-marker {
-  background: #f0f0f0;
-  color: #9a9da5;
+  background: #ececef;
+  color: #6b6f76;
 }
 
 .conflict-bar {
@@ -2369,6 +2369,38 @@ p {
 
 .editor-pane.theme-dark .editor-encoding {
   color: #7d828c;
+}
+
+/* 冲突区块在深色主题下改用低饱和的深底，保证文字仍然清晰可读 */
+.editor-pane.theme-dark .cm-conflict-ours {
+  background: #1e3a5f;
+}
+
+.editor-pane.theme-dark .cm-conflict-theirs {
+  background: #1e4620;
+}
+
+.editor-pane.theme-dark .cm-conflict-marker {
+  background: #2a2d2e;
+  color: #9aa0a6;
+}
+
+.editor-pane.theme-dark .conflict-bar {
+  background: #25262b;
+  border-top-color: #34363e;
+  border-bottom-color: #34363e;
+}
+
+.editor-pane.theme-dark .conflict-action {
+  border-color: #3c3f47;
+  background: #2c2e35;
+  color: #d4d6db;
+}
+
+.editor-pane.theme-dark .conflict-action:hover {
+  border-color: #5b6cff;
+  background: #33374a;
+  color: #b9c2ff;
 }
 
 .terminal-pane.theme-dark .pane-dot {
