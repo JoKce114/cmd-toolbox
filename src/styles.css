@@ -625,6 +625,13 @@ p {
   color: #1a7f37;
 }
 
+.editor-resolve-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .editor-notice {
   margin: 0;
   padding: 6px 12px;

@@ -383,7 +383,14 @@ async function push(projectPath) {
   }
 
   const result = await runGit(projectPath, ['push'], { timeout: PUSH_TIMEOUT });
-  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  if (!result.ok) {
+    const text = `${result.stdout}\n${result.stderr}`;
+    // 线上有新提交导致非快进拒绝，这是最常见的情况，给出可操作的引导
+    if (/non-fast-forward|fetch first|rejected/i.test(text)) {
+      throw new Error('线上分支有新的提交，请先拉取再推送');
+    }
+    throw new Error(cleanError(result.error, result.stderr));
+  }
   return { upstream };
 }
 

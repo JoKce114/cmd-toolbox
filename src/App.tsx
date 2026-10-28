@@ -557,6 +557,8 @@ export default function App() {
       return true;
     } catch (error) {
       pushToast(toErrorMessage(error), 'error');
+      // 推送失败后刷新，让「拉取」按钮及时出现（线上有新提交时）
+      await refreshGit();
       return false;
     }
   }, [pushToast, refreshGit]);

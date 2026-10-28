@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Save, X } from 'lucide-react';
+import { toErrorMessage } from '../lib';
 import { useEditorFile } from '../useEditorFile';
 import { FileTree } from './FileTree';
 import { CodeMirrorHost } from './CodeMirrorHost';
@@ -37,6 +38,7 @@ export function EditorPane({
   const { file, open, update, save } = useEditorFile(group, onError);
   const [conflictCount, setConflictCount] = useState(0);
   const [hadConflict, setHadConflict] = useState(false);
+  const [markingResolved, setMarkingResolved] = useState(false);
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const fileRef = useRef(file);
   fileRef.current = file;
@@ -98,6 +100,21 @@ export function EditorPane({
     }
     void open(relPath);
   };
+
+  const markResolved = useCallback(async () => {
+    const current = fileRef.current;
+    if (!current.relPath) return;
+    setMarkingResolved(true);
+    try {
+      await window.api.git.stage(group.path, [current.relPath]);
+      onToast(`已标记「${current.relPath}」为已解决`, 'success');
+      setHadConflict(false);
+    } catch (error) {
+      onToast(toErrorMessage(error), 'error');
+    } finally {
+      setMarkingResolved(false);
+    }
+  }, [group.path, onToast]);
 
   const handleSave = useCallback(async () => {
     if (fileRef.current.readOnly) {
@@ -176,6 +193,20 @@ export function EditorPane({
         <p className="editor-notice editor-notice-done">
           冲突已全部处理。按 Ctrl+S 保存，然后点「暂存」标记为已解决。
         </p>
+      ) : null}
+
+      {hadConflict && conflictCount === 0 && !unrecognizedConflict && !file.dirty && !file.readOnly && file.relPath ? (
+        <div className="editor-notice editor-notice-done editor-resolve-bar">
+          <span>冲突已全部处理并保存，标记为已解决后即可提交。</span>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={markingResolved}
+            onClick={() => void markResolved()}
+          >
+            {markingResolved ? '标记中…' : '标记为已解决'}
+          </button>
+        </div>
       ) : null}
 
       <div className="editor-body">
