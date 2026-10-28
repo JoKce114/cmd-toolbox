@@ -1,6 +1,13 @@
 import { useState } from 'react';
-import { Settings } from 'lucide-react';
+import { Settings, X } from 'lucide-react';
 import { Modal } from './Modal';
+import {
+  DEFAULT_KEYBINDINGS,
+  EDITOR_ACTION_LABEL,
+  RESERVED_BINDINGS,
+  normalizeCombo,
+} from '../editorKeymap';
+import type { EditorActionId, KeyBindingMap } from '../editorKeymap';
 import type { AppPrefs } from '../prefs';
 
 type SettingsModalProps = {
@@ -32,10 +39,59 @@ function Toggle({
   );
 }
 
+// 把事件转成 CodeMirror 的键位写法，例如 Ctrl-Shift-k
+function comboFromEvent(event: React.KeyboardEvent): string | null {
+  const key = event.key;
+  if (key === 'Control' || key === 'Alt' || key === 'Shift' || key === 'Meta') return null;
+  if (!event.ctrlKey && !event.altKey && !event.metaKey) return null;
+
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push('Ctrl');
+  if (event.altKey) parts.push('Alt');
+  if (event.shiftKey) parts.push('Shift');
+  if (event.metaKey) parts.push('Meta');
+  parts.push(key.length === 1 ? key.toLowerCase() : key);
+  return normalizeCombo(parts.join('-'));
+}
+
 export function SettingsModal({ prefs, onClose, onSave }: SettingsModalProps) {
   const [fontSize, setFontSize] = useState(prefs.fontSize);
   const [copyOnSelect, setCopyOnSelect] = useState(prefs.copyOnSelect);
   const [editorWordWrap, setEditorWordWrap] = useState(prefs.editorWordWrap);
+  const [editorTabSize, setEditorTabSize] = useState(prefs.editorTabSize);
+  const [editorIndentWithSpaces, setEditorIndentWithSpaces] = useState(
+    prefs.editorIndentWithSpaces,
+  );
+  const [keybindings, setKeybindings] = useState<KeyBindingMap>({
+    ...prefs.editorKeybindings,
+  });
+  const [recording, setRecording] = useState<EditorActionId | null>(null);
+  const [bindingError, setBindingError] = useState<string>('');
+
+  const updateBinding = (action: EditorActionId, combo: string) => {
+    const normalized = normalizeCombo(combo);
+
+    const reserved = RESERVED_BINDINGS.find(
+      (item) => normalizeCombo(item.combo) === normalized,
+    );
+    if (reserved) {
+      setBindingError(`${normalized} 已被「${reserved.reason}」占用`);
+      return;
+    }
+
+    const conflict = (Object.keys(keybindings) as EditorActionId[]).find(
+      (other) => other !== action && normalizeCombo(keybindings[other]) === normalized,
+    );
+    if (conflict) {
+      setBindingError(
+        `${normalized} 已绑定到「${EDITOR_ACTION_LABEL[conflict]}」，请先改掉它`,
+      );
+      return;
+    }
+
+    setBindingError('');
+    setKeybindings((previous) => ({ ...previous, [action]: normalized }));
+  };
 
   return (
     <Modal
@@ -43,7 +99,7 @@ export function SettingsModal({ prefs, onClose, onSave }: SettingsModalProps) {
       subtitle="终端与编辑器偏好"
       icon={<Settings size={18} />}
       onClose={onClose}
-      width={460}
+      width={520}
     >
       <div className="settings-body">
         <section className="settings-group">
@@ -85,6 +141,89 @@ export function SettingsModal({ prefs, onClose, onSave }: SettingsModalProps) {
             </div>
             <Toggle checked={editorWordWrap} onChange={setEditorWordWrap} />
           </div>
+
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <span className="settings-item-label">缩进方式</span>
+              <span className="settings-item-desc">
+                当前为 {editorIndentWithSpaces ? `${editorTabSize} 个空格` : '制表符'}
+              </span>
+            </div>
+            <Toggle checked={editorIndentWithSpaces} onChange={setEditorIndentWithSpaces} />
+          </div>
+
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <span className="settings-item-label">缩进宽度</span>
+              <span className="settings-item-desc">Tab 键一次缩进的空格数</span>
+            </div>
+            <select
+              className="settings-select"
+              value={editorTabSize}
+              disabled={!editorIndentWithSpaces}
+              onChange={(event) => setEditorTabSize(Number(event.target.value))}
+            >
+              {[1, 2, 3, 4, 5, 6, 7, 8].map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </div>
+        </section>
+
+        <section className="settings-group">
+          <div className="settings-group-head">
+            <h3 className="settings-group-title">编辑器快捷键</h3>
+            <button
+              type="button"
+              className="settings-reset-link"
+              onClick={() => {
+                setKeybindings({ ...DEFAULT_KEYBINDINGS });
+                setBindingError('');
+              }}
+            >
+              恢复默认
+            </button>
+          </div>
+
+          <div className="settings-keys">
+            {(Object.keys(EDITOR_ACTION_LABEL) as EditorActionId[]).map((action) => (
+              <div className="settings-key-row" key={action}>
+                <span className="settings-key-label">{EDITOR_ACTION_LABEL[action]}</span>
+                <button
+                  type="button"
+                  className={`settings-key-input${recording === action ? ' is-recording' : ''}`}
+                  onClick={() => {
+                    setBindingError('');
+                    setRecording(action);
+                  }}
+                  onBlur={() => setRecording((current) => (current === action ? null : current))}
+                  onKeyDown={(event) => {
+                    if (recording !== action) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (event.key === 'Escape') {
+                      setRecording(null);
+                      return;
+                    }
+                    const combo = comboFromEvent(event);
+                    if (!combo) return;
+                    updateBinding(action, combo);
+                    setRecording(null);
+                  }}
+                >
+                  {recording === action ? '按下快捷键…' : keybindings[action]}
+                  {recording === action ? <X size={12} /> : null}
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {bindingError ? <p className="settings-key-error">{bindingError}</p> : null}
+          <p className="settings-hint">
+            点击右侧按键框后按下想要的组合键即可修改。保存、关闭页签等应用级快捷键不可改。
+          </p>
         </section>
 
         <p className="settings-hint">Ctrl + F 在终端或浏览器里查找，Ctrl + Shift + F 在项目里搜索。</p>
@@ -97,7 +236,16 @@ export function SettingsModal({ prefs, onClose, onSave }: SettingsModalProps) {
         <button
           type="button"
           className="btn btn-primary"
-          onClick={() => onSave({ fontSize, copyOnSelect, editorWordWrap })}
+          onClick={() =>
+            onSave({
+              fontSize,
+              copyOnSelect,
+              editorWordWrap,
+              editorTabSize,
+              editorIndentWithSpaces,
+              editorKeybindings: keybindings,
+            })
+          }
         >
           保存
         </button>

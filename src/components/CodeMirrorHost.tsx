@@ -11,6 +11,9 @@ import type { DecorationSet } from '@codemirror/view';
 import { EditorState, Compartment, StateField, RangeSetBuilder, Transaction } from '@codemirror/state';
 import type { EditorState as EditorStateType } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import { indentUnit } from '@codemirror/language';
+import { bindingsExtension } from '../editorKeymap';
+import type { KeyBindingMap } from '../editorKeymap';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { createRoot } from 'react-dom/client';
 import { languageFor } from '../editorLanguage';
@@ -27,6 +30,9 @@ export type CodeMirrorHostProps = {
   readOnly: boolean;
   themeMode: TerminalThemeMode;
   wordWrap: boolean;
+  tabSize: number;
+  indentWithSpaces: boolean;
+  keybindings: KeyBindingMap;
   onChange: (value: string) => void;
   onConflictCountChange?: (count: number) => void;
 };
@@ -127,6 +133,9 @@ export function CodeMirrorHost({
   readOnly,
   themeMode,
   wordWrap,
+  tabSize,
+  indentWithSpaces,
+  keybindings,
   onChange,
   onConflictCountChange,
 }: CodeMirrorHostProps) {
@@ -135,6 +144,8 @@ export function CodeMirrorHost({
   const languageRef = useRef(new Compartment());
   const themeRef = useRef(new Compartment());
   const wrapRef = useRef(new Compartment());
+  const indentRef = useRef(new Compartment());
+  const keysRef = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   const onCountRef = useRef(onConflictCountChange);
   onChangeRef.current = onChange;
@@ -155,7 +166,14 @@ export function CodeMirrorHost({
           highlightActiveLine(),
           history(),
           highlightSelectionMatches(),
+          // 自定义键位放在 searchKeymap 之前：CodeMirror 按顺序匹配，
+          // 先命中的生效。否则 Ctrl+G 会被 searchKeymap 的「查找下一个」抢走。
+          keysRef.current.of(bindingsExtension(keybindings)),
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+          indentRef.current.of([
+            EditorState.tabSize.of(tabSize),
+            indentUnit.of(indentWithSpaces ? ' '.repeat(tabSize) : '\t'),
+          ]),
           searchPhrases,
           wrapRef.current.of(wordWrap ? EditorView.lineWrapping : []),
           themeRef.current.of(themeExtensions(themeMode)),
@@ -208,6 +226,27 @@ export function CodeMirrorHost({
     });
     requestAnimationFrame(() => view.requestMeasure());
   }, [wordWrap]);
+
+  // 缩进设置变化时重配，不需要重建编辑器
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: indentRef.current.reconfigure([
+        EditorState.tabSize.of(tabSize),
+        indentUnit.of(indentWithSpaces ? ' '.repeat(tabSize) : '\t'),
+      ]),
+    });
+  }, [tabSize, indentWithSpaces]);
+
+  // 快捷键变化时整体重配 keymap
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: keysRef.current.reconfigure(bindingsExtension(keybindings)),
+    });
+  }, [keybindings]);
 
   // 文件内容被外部替换（如重新加载）时，同步到编辑器
   useEffect(() => {

@@ -7,6 +7,7 @@ import { SearchPanel } from './SearchPanel';
 import { CodeMirrorHost } from './CodeMirrorHost';
 import type { Group, Tab } from '../types';
 import type { TerminalThemeMode } from '../theme';
+import type { KeyBindingMap } from '../editorKeymap';
 import type { ToastKind } from './Toast';
 
 const ENCODING_LABEL: Record<string, string> = {
@@ -27,6 +28,9 @@ export type EditorPaneProps = {
   onDirtyChange: (tabId: string, dirty: boolean) => void;
   themeMode: TerminalThemeMode;
   wordWrap: boolean;
+  tabSize: number;
+  indentWithSpaces: boolean;
+  keybindings: KeyBindingMap;
 };
 
 export function EditorPane({
@@ -39,6 +43,9 @@ export function EditorPane({
   onDirtyChange,
   themeMode,
   wordWrap,
+  tabSize,
+  indentWithSpaces,
+  keybindings,
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const {
@@ -310,6 +317,9 @@ export function EditorPane({
               readOnly={file.readOnly}
               themeMode={themeMode}
               wordWrap={wordWrap}
+              tabSize={tabSize}
+              indentWithSpaces={indentWithSpaces}
+              keybindings={keybindings}
               onChange={(value) => update(activePath, value)}
               onConflictCountChange={setConflictCount}
             />

@@ -269,7 +269,14 @@ export function TerminalPane({
 
     const unsubscribe = subscribeData(tab.sessionId, (data) => term.write(data));
     const dataDisposable = term.onData((data) => window.api.pty.write(tab.sessionId, data));
+    // 列数/行数没变就不要打扰 PTY：反复 resize 会让全屏 TUI 重绘，
+    // 看起来像消息被重复输出了一遍。
+    let lastCols = term.cols;
+    let lastRows = term.rows;
     const resizeDisposable = term.onResize(({ cols, rows }) => {
+      if (cols === lastCols && rows === lastRows) return;
+      lastCols = cols;
+      lastRows = rows;
       window.api.pty.resize(tab.sessionId, cols, rows);
     });
 
@@ -375,13 +382,31 @@ export function TerminalPane({
     mount.addEventListener('drop', handleDrop, { capture: true });
 
     let frame = 0;
+    // 收缩过的列数上限，用于避免 fit → 溢出 → 收缩 的反复震荡。
+    // 容器宽度变化时清空，让终端能重新长回去。
+    let shrinkLimit = 0;
+    let lastMountWidth = 0;
+
     const fitNow = () => {
       if (!activeRef.current) return;
       if (!mount.isConnected || mount.clientWidth === 0 || mount.clientHeight === 0) return;
+      if (mount.clientWidth !== lastMountWidth) {
+        lastMountWidth = mount.clientWidth;
+        shrinkLimit = 0;
+      }
       try {
         fitAddon.fit();
       } catch {
         // the pane may be mid-transition
+      }
+      // fit() 按容器像素算列数，可能重新超出；这里压回上次收缩到的值，
+      // 让终端稳定下来而不是来回跳。
+      if (shrinkLimit > 0 && term.cols > shrinkLimit) {
+        try {
+          term.resize(shrinkLimit, term.rows);
+        } catch {
+          // ignore transient resize failures
+        }
       }
       clampHorizontalScroll();
     };
@@ -398,6 +423,7 @@ export function TerminalPane({
         const overflow = scrollable.scrollWidth - scrollable.clientWidth;
         const nextCols = Math.max(20, term.cols - Math.ceil(overflow / cellWidth));
         if (nextCols < term.cols) {
+          shrinkLimit = shrinkLimit ? Math.min(shrinkLimit, nextCols) : nextCols;
           try {
             term.resize(nextCols, term.rows);
           } catch {

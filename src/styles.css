@@ -2706,6 +2706,104 @@ p {
   transform: translateX(16px);
 }
 
+.settings-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.settings-group-head .settings-group-title {
+  margin: 0;
+}
+
+.settings-reset-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.settings-reset-link:hover {
+  text-decoration: underline;
+}
+
+.settings-select {
+  flex: 0 0 auto;
+  height: 30px;
+  min-width: 64px;
+  padding: 0 8px;
+  border: 1px solid #e2e2e7;
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.settings-select:disabled {
+  opacity: 0.5;
+}
+
+.settings-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border: 1px solid #ececef;
+  border-radius: 9px;
+  background: #fbfbfd;
+}
+
+.settings-key-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+}
+
+.settings-key-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.settings-key-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 150px;
+  justify-content: center;
+  padding: 3px 10px;
+  border: 1px solid #e2e2e7;
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+}
+
+.settings-key-input:hover {
+  border-color: #d0d2da;
+  background: #f7f8ff;
+}
+
+.settings-key-input.is-recording {
+  border-color: #5b6cff;
+  background: #eef1ff;
+  color: #3a45b8;
+}
+
+.settings-key-error {
+  margin: 6px 0 0;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: #fdecec;
+  color: #b42318;
+  font-size: 11px;
+}
+
 .settings-hint {
   margin: 0 0 16px;
   padding-top: 2px;

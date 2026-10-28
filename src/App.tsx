@@ -2011,6 +2011,9 @@ export default function App() {
           onDirtyChange={handleDirtyChange}
           themeMode={terminalThemeMode}
           wordWrap={prefs.editorWordWrap}
+          tabSize={prefs.editorTabSize}
+          indentWithSpaces={prefs.editorIndentWithSpaces}
+          keybindings={prefs.editorKeybindings}
         />
       );
     }
