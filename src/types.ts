@@ -49,6 +49,7 @@ export type Tab = {
   url?: string;
   conversationId?: string;
   filePath?: string;
+  diffChange?: GitChange;
   exited: boolean;
   exitCode?: number;
 };
@@ -92,6 +93,10 @@ export function isBrowserTab(tab: { shellId: string }): boolean {
 
 export function isEditorTab(tab: { shellId: string }): boolean {
   return tab.shellId === 'editor';
+}
+
+export function isDiffTab(tab: { shellId: string }): boolean {
+  return tab.shellId === 'diff';
 }
 
 export type MenuEntry =

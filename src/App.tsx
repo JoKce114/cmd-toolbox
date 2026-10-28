@@ -15,6 +15,7 @@ import {
   Cpu,
   Eraser,
   FileCode,
+  FileDiff,
   Gem,
   FolderOpen,
   GitBranch,
@@ -31,7 +32,7 @@ import { moveById, nextPaneNo, toErrorMessage } from './lib';
 import { accentFor, defaultTabTitle, GLOBAL_COLOR } from './theme';
 import type { TerminalThemeMode } from './theme';
 import { useGitStatus } from './gitStatus';
-import { GLOBAL_GROUP_KEY, isBrowserTab, isEditorTab, projectGroupKey } from './types';
+import { GLOBAL_GROUP_KEY, isBrowserTab, isDiffTab, isEditorTab, projectGroupKey } from './types';
 import type { AppInfo, GitChange, Group, MenuEntry, MenuState, Project, Tab } from './types';
 import { discardSession, startPtyBus, subscribeAllData, subscribeExit } from './ptyBus';
 import {
@@ -57,6 +58,7 @@ import { ToastViewport } from './components/Toast';
 import type { ToastItem, ToastKind } from './components/Toast';
 import { LogoMark } from './components/LogoMark';
 import { GitPanel } from './components/GitPanel';
+import { DiffPane } from './components/DiffPane';
 
 const ACTIVE_GROUP_STORAGE = 'cmd-toolbox.active-group';
 const TERMINAL_THEME_STORAGE = 'cmd-toolbox.terminal-theme';
@@ -74,6 +76,7 @@ function shellIcon(shellId: string) {
   if (shellId === 'gemini') return <Gem size={14} />;
   if (shellId === 'opencode') return <Code2 size={14} />;
   if (shellId === 'editor') return <FileCode size={14} />;
+  if (shellId === 'diff') return <FileDiff size={14} />;
   if (shellId === 'browser') return <Globe size={14} />;
   return <SquareTerminal size={14} />;
 }
@@ -967,6 +970,41 @@ export default function App() {
     [applyTabs, pushToast],
   );
 
+  const openDiffTab = useCallback(
+    (group: Group, change: GitChange) => {
+      if (!group.exists) {
+        pushToast('项目目录不存在，请先编辑项目路径', 'error');
+        return;
+      }
+      const groupTabs = tabsRef.current[group.key] || [];
+      const existing = groupTabs.find(
+        (item) => item.shellId === 'diff' && item.diffChange?.path === change.path,
+      );
+      if (existing) {
+        setActiveGroupKey(group.key);
+        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: existing.id }));
+        return;
+      }
+      const tab: Tab = {
+        id: crypto.randomUUID(),
+        groupKey: group.key,
+        sessionId: '',
+        shellId: 'diff',
+        seq: 1,
+        paneNo: nextPaneNo(groupTabs.map((item) => item.paneNo)),
+        descriptor: change.path.split('/').pop() || '差异',
+        custom: true,
+        cwd: group.path,
+        diffChange: change,
+        exited: false,
+      };
+      applyTabs({ ...tabsRef.current, [group.key]: [...groupTabs, tab] });
+      setActiveGroupKey(group.key);
+      setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+    },
+    [applyTabs, pushToast],
+  );
+
   const openEditorFile = useCallback(
     (group: Group, relPath: string) => {
       const existing = (tabsRef.current[group.key] || []).find(
@@ -1052,23 +1090,6 @@ export default function App() {
       }
     },
     [applyTabs, createBrowser, info, pushToast, refreshProjects],
-  );
-
-  const gitOpenDiff = useCallback(
-    async (change: GitChange) => {
-      const group = gitGroupRef.current;
-      if (!group) return;
-      try {
-        const changeStatus = change.worktreeStatus ?? change.indexStatus ?? 'modified';
-        const { command } = await window.api.git.diff(group.path, change.path, changeStatus);
-        const tab = await createTerminal(group, 'cmd');
-        if (!tab || !tab.sessionId) return;
-        window.api.pty.write(tab.sessionId, `${command}`);
-      } catch (error) {
-        pushToast(toErrorMessage(error), 'error');
-      }
-    },
-    [createTerminal, pushToast],
   );
 
   const closeTabs = useCallback(
@@ -1855,6 +1876,19 @@ export default function App() {
         />
       );
     }
+    if (isDiffTab(tab) && tab.diffChange) {
+      return (
+        <DiffPane
+          key={tab.id}
+          projectPath={group.path}
+          change={tab.diffChange}
+          active={active}
+          onClose={() => closeTabs(tab.groupKey, [tab.id])}
+          onOpenFile={(relPath) => openEditorFile(group, relPath)}
+          onToast={pushToast}
+        />
+      );
+    }
     if (isEditorTab(tab)) {
       return (
         <EditorPane
@@ -1956,7 +1990,9 @@ export default function App() {
                 onPull={() => void gitPull()}
                 pullBusy={pullBusy}
                 onInit={gitInit}
-                onOpenDiff={(change) => void gitOpenDiff(change)}
+                onOpenDiff={(change) => {
+                  if (gitGroup) openDiffTab(gitGroup, change);
+                }}
                 onOpenInEditor={(change) => openEditorFile(gitGroup, change.path)}
                 onStage={gitStage}
                 onUnstage={gitUnstage}

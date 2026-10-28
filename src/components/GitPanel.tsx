@@ -3,7 +3,7 @@ import {
   ArrowDownToLine,
   ArrowUp,
   Check,
-  FileDiff,
+  FileCode,
   GitBranch,
   Plus,
   RefreshCw,
@@ -230,12 +230,7 @@ export function GitPanel({
           type="button"
           className="git-change-row"
           title={change.origPath ? `${change.origPath} → ${change.path}` : change.path}
-          onClick={() =>
-            change.worktreeStatus === 'deleted' ||
-            (change.worktreeStatus === null && change.indexStatus === 'deleted')
-              ? onOpenDiff(change)
-              : onOpenInEditor(change)
-          }
+          onClick={() => onOpenDiff(change)}
         >
           <span className={cn('git-change-badge', `is-${badge}`)}>{STATUS_LABEL[badge]}</span>
           <span className="git-change-path">
@@ -246,10 +241,10 @@ export function GitPanel({
         <button
           type="button"
           className="git-row-action"
-          title="在终端查看差异"
-          onClick={() => onOpenDiff(change)}
+          title="打开文件编辑"
+          onClick={() => onOpenInEditor(change)}
         >
-          <FileDiff size={13} />
+          <FileCode size={13} />
         </button>
 
         {conflicted ? (

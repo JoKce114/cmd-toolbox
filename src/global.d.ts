@@ -81,6 +81,11 @@ declare global {
           message: string,
         ) => Promise<{ commit: string; summary: string }>;
         push: (projectPath: string) => Promise<{ upstream: string }>;
+        fileDiff: (
+          projectPath: string,
+          filePath: string,
+          changeStatus: string,
+        ) => Promise<{ patch: string; untracked: boolean }>;
         fetch: (projectPath: string) => Promise<{ ok: true }>;
         pull: (projectPath: string) => Promise<{ ok: true }>;
         init: (projectPath: string) => Promise<{ ok: true }>;

@@ -453,6 +453,31 @@ async function diffCommand(projectPath, filePath, changeStatus) {
   return { command: `git --no-pager diff -- ${quoted}` };
 }
 
+// 返回统一格式的 patch 文本，由渲染侧解析成彩色视图
+async function fileDiff(projectPath, filePath, changeStatus) {
+  const root = path.resolve(projectPath);
+  const target = resolveWithin(root, String(filePath || ''));
+  const relative = path.relative(root, target);
+  if (!relative) throw new Error('文件路径不在项目目录内');
+
+  const isUntracked = changeStatus === 'untracked';
+  const args = ['--no-pager', 'diff', '--no-color', '--no-ext-diff', '-U3'];
+  if (isUntracked) {
+    // 未跟踪文件没有 HEAD 版本，用空文件做对比
+    const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    args.push('--no-index', '--', nullDevice, relative);
+  } else {
+    args.push('--', relative);
+  }
+
+  const result = await runGit(projectPath, args);
+  // --no-index 在有差异时返回 1，属于正常结果
+  if (!result.ok && result.error && result.error.code !== 1) {
+    throw new Error(cleanError(result.error, result.stderr));
+  }
+  return { patch: result.stdout, untracked: isUntracked };
+}
+
 module.exports = {
   status,
   commit,
@@ -461,6 +486,7 @@ module.exports = {
   pull,
   init,
   diffCommand,
+  fileDiff,
   stage,
   unstage,
   discard,

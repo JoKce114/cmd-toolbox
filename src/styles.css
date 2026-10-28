@@ -767,6 +767,103 @@ p {
   max-width: 420px;
 }
 
+/* ---------- Diff view ---------- */
+
+.diff-stats {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.diff-added {
+  color: #1a7f37;
+}
+
+.diff-removed {
+  color: #cf222e;
+}
+
+.diff-open-file {
+  margin-right: 4px;
+}
+
+.diff-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #ffffff;
+  font-family: "Cascadia Mono", "Cascadia Code", Consolas, "Microsoft YaHei", monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.diff-placeholder {
+  margin: 0;
+  padding: 18px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.diff-hunk {
+  border-bottom: 1px solid #f0f0f3;
+}
+
+.diff-hunk-header {
+  padding: 3px 12px;
+  background: #f6f8fa;
+  color: #656d76;
+  font-size: 11.5px;
+}
+
+.diff-row {
+  display: flex;
+  align-items: stretch;
+  white-space: pre;
+}
+
+.diff-row.is-added {
+  background: #e6ffec;
+}
+
+.diff-row.is-removed {
+  background: #ffebe9;
+}
+
+.diff-gutter {
+  flex: 0 0 44px;
+  padding: 0 8px;
+  text-align: right;
+  color: #9a9da5;
+  user-select: none;
+}
+
+.diff-sign {
+  flex: 0 0 16px;
+  text-align: center;
+  user-select: none;
+  color: #9a9da5;
+}
+
+.diff-row.is-added .diff-sign {
+  color: #1a7f37;
+}
+
+.diff-row.is-removed .diff-sign {
+  color: #cf222e;
+}
+
+.diff-text {
+  flex: 1;
+  min-width: 0;
+  padding-right: 12px;
+  color: #1f1f1f;
+  user-select: text;
+}
+
 /* ---------- Git panel ---------- */
 
 .git-panel {
