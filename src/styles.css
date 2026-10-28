@@ -774,6 +774,158 @@ p {
   max-width: 420px;
 }
 
+/* ---------- Project search ---------- */
+
+.search-panel {
+  flex: 0 0 260px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: #fbfbfd;
+}
+
+.search-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--faint);
+}
+
+.search-bar input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #e6e6ea;
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 11.5px;
+  outline: none;
+}
+
+.search-bar input:focus {
+  border-color: #c9ced8;
+}
+
+.search-case {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+.search-case.active {
+  border-color: #c9ced8;
+  background: #ffffff;
+  color: var(--text);
+}
+
+.search-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 10px;
+}
+
+.search-hint {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.search-file {
+  margin-bottom: 4px;
+}
+
+.search-file-name {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.search-file-name:hover {
+  background: #f1f1f5;
+}
+
+.search-file-count {
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #ededf1;
+  color: #8b8f98;
+  font-size: 9.5px;
+  font-weight: 400;
+}
+
+.search-hit {
+  width: 100%;
+  display: flex;
+  gap: 7px;
+  padding: 2px 10px 2px 18px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: left;
+}
+
+.search-hit:hover {
+  background: #f1f1f5;
+  color: var(--text);
+}
+
+.search-hit-line {
+  flex: 0 0 30px;
+  color: var(--faint);
+  text-align: right;
+}
+
+.search-hit-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "Cascadia Mono", Consolas, "Microsoft YaHei", monospace;
+}
+
+.editor-pane.theme-dark .search-panel {
+  background: #141519;
+  border-right-color: #23252b;
+}
+
+.editor-pane.theme-dark .search-bar {
+  border-bottom-color: #23252b;
+}
+
+.editor-pane.theme-dark .search-bar input {
+  background: #1e1f25;
+  border-color: #2a2d35;
+  color: #e4e6ea;
+}
+
+.editor-pane.theme-dark .search-file-name:hover,
+.editor-pane.theme-dark .search-hit:hover {
+  background: #1e1f25;
+}
+
 /* ---------- Diff view ---------- */
 
 .diff-stats {

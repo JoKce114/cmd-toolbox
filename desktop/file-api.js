@@ -150,4 +150,83 @@ async function write(projectPath, relPath, content, encoding, mtime) {
   return { ok: true };
 }
 
-module.exports = { list, read, write, detectEncoding };
+const SEARCH_MAX_FILES = 4000;
+const SEARCH_MAX_MATCHES = 500;
+const SEARCH_MAX_FILE_BYTES = 1024 * 1024;
+
+// 逐文件读取并匹配，返回带行号的结果。跳过二进制、超大文件与忽略目录。
+async function search(projectPath, query, options = {}) {
+  const needle = String(query || '');
+  if (!needle) return { matches: [], truncated: false, scanned: 0 };
+
+  const caseSensitive = Boolean(options.caseSensitive);
+  const target = caseSensitive ? needle : needle.toLowerCase();
+  const root = path.resolve(projectPath);
+  const matches = [];
+  let scanned = 0;
+  let truncated = false;
+
+  async function walk(relDir) {
+    if (truncated) return;
+    let entries;
+    try {
+      entries = await fsp.readdir(resolveWithin(projectPath, relDir), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (truncated) return;
+      if (isIgnored(entry.name) || entry.isSymbolicLink()) continue;
+      const relPath = path.join(relDir, entry.name).split(path.sep).join('/');
+      if (entry.isDirectory()) {
+        await walk(relPath);
+        continue;
+      }
+      if (scanned >= SEARCH_MAX_FILES) {
+        truncated = true;
+        return;
+      }
+      scanned += 1;
+
+      let stat;
+      try {
+        stat = await fsp.stat(path.join(root, relPath));
+      } catch {
+        continue;
+      }
+      if (stat.size > SEARCH_MAX_FILE_BYTES) continue;
+
+      let buffer;
+      try {
+        buffer = await fsp.readFile(path.join(root, relPath));
+      } catch {
+        continue;
+      }
+      if (buffer.includes(0)) continue;
+
+      const { encoding, offset } = detectEncoding(buffer);
+      const text = decodeContent(buffer, encoding, offset);
+      const lines = text.split(/\r?\n/);
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        const haystack = caseSensitive ? line : line.toLowerCase();
+        if (!haystack.includes(target)) continue;
+        matches.push({
+          relPath,
+          line: index + 1,
+          text: line.trim().slice(0, 200),
+          column: haystack.indexOf(target) + 1,
+        });
+        if (matches.length >= SEARCH_MAX_MATCHES) {
+          truncated = true;
+          return;
+        }
+      }
+    }
+  }
+
+  await walk('');
+  return { matches, truncated, scanned };
+}
+
+module.exports = { list, read, write, detectEncoding, search };

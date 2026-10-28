@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Save, X } from 'lucide-react';
+import { Save, Search, X } from 'lucide-react';
 import { toErrorMessage } from '../lib';
 import { useEditorFile } from '../useEditorFile';
 import { FileTree } from './FileTree';
+import { SearchPanel } from './SearchPanel';
 import { CodeMirrorHost } from './CodeMirrorHost';
 import type { Group, Tab } from '../types';
 import type { TerminalThemeMode } from '../theme';
@@ -42,6 +43,7 @@ export function EditorPane({
   const [conflictCount, setConflictCount] = useState(0);
   const [hadConflict, setHadConflict] = useState(false);
   const [markingResolved, setMarkingResolved] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const fileRef = useRef(file);
   fileRef.current = file;
@@ -131,9 +133,15 @@ export function EditorPane({
   useEffect(() => {
     if (!active) return;
     const handler = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      if (!rootRef.current?.contains(event.target as Node)) return;
+      const key = event.key.toLowerCase();
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && key === 'f') {
+        event.preventDefault();
+        setSearchOpen(true);
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && key === 's') {
         // 分屏时左右两侧的页签都可能“激活”；只处理焦点落在本窗格内的事件，避免双保存
-        if (!rootRef.current?.contains(event.target as Node)) return;
         event.preventDefault();
         void handleSave();
       }
@@ -181,6 +189,14 @@ export function EditorPane({
         >
           {file.saving ? <span className="editor-saving">保存中…</span> : <Save size={14} />}
         </button>
+        <button
+          type="button"
+          className="icon-btn"
+          title="在项目中搜索 (Ctrl+Shift+F)"
+          onClick={() => setSearchOpen(true)}
+        >
+          <Search size={14} />
+        </button>
         <button type="button" className="icon-btn" title="关闭" onClick={requestClose}>
           <X size={14} />
         </button>
@@ -213,7 +229,19 @@ export function EditorPane({
       ) : null}
 
       <div className="editor-body">
-        <FileTree group={group} activePath={file.relPath} onOpen={requestOpen} onError={onError} />
+        {searchOpen ? (
+          <SearchPanel
+            group={group}
+            onOpen={(relPath) => {
+              requestOpen(relPath);
+              setSearchOpen(false);
+            }}
+            onClose={() => setSearchOpen(false)}
+            onError={onError}
+          />
+        ) : (
+          <FileTree group={group} activePath={file.relPath} onOpen={requestOpen} onError={onError} />
+        )}
         <div className="editor-main">
           {file.relPath ? (
             <CodeMirrorHost

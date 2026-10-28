@@ -329,6 +329,10 @@ function registerIpc() {
     fileApi.write(assertProjectPath(projectPath), relPath, content, encoding, mtime),
   );
 
+  ipcMain.handle('fs:search', (_event, projectPath, query, options) =>
+    fileApi.search(assertProjectPath(projectPath), query, options),
+  );
+
   ipcMain.handle('dialog:pick-folder', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择本地项目目录',

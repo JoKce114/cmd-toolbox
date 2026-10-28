@@ -124,6 +124,15 @@ declare global {
           encoding: string,
           mtime: number,
         ) => Promise<{ ok: true }>;
+        search: (
+          projectPath: string,
+          query: string,
+          options: { caseSensitive: boolean },
+        ) => Promise<{
+          matches: Array<{ relPath: string; line: number; text: string; column: number }>;
+          truncated: boolean;
+          scanned: number;
+        }>;
       };
       panes: {
         sync: (panes: Array<Record<string, unknown>>) => void;

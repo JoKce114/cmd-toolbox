@@ -83,6 +83,8 @@ contextBridge.exposeInMainWorld('api', {
     read: (projectPath, relPath) => invoke('fs:read', projectPath, relPath),
     write: (projectPath, relPath, content, encoding, mtime) =>
       invoke('fs:write', projectPath, relPath, content, encoding, mtime),
+    search: (projectPath, query, options) =>
+      invoke('fs:search', projectPath, query, options),
   },
 
   panes: {
