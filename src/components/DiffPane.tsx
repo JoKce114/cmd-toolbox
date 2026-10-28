@@ -6,6 +6,7 @@ import type { GitChange } from '../types';
 
 export type DiffPaneProps = {
   projectPath: string;
+  wordWrap: boolean;
   change: GitChange;
   active: boolean;
   onClose: () => void;
@@ -15,6 +16,7 @@ export type DiffPaneProps = {
 
 export function DiffPane({
   projectPath,
+  wordWrap,
   change,
   active,
   onClose,
@@ -70,7 +72,7 @@ export function DiffPane({
         </button>
       </header>
 
-      <div className="diff-body">
+      <div className={`diff-body${wordWrap ? ' is-wrapped' : ''}`}>
         {loading ? (
           <p className="diff-placeholder">正在读取差异…</p>
         ) : parsed.isEmpty ? (

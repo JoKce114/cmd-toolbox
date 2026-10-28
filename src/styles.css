@@ -1300,6 +1300,19 @@ p {
   white-space: pre;
 }
 
+/* 自动换行开启时：长行折行，行号与符号顶端对齐 */
+.diff-body.is-wrapped .diff-row {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-body.is-wrapped .diff-gutter,
+.diff-body.is-wrapped .diff-sign {
+  align-self: flex-start;
+  position: sticky;
+  left: 0;
+}
+
 .diff-row.is-added {
   background: #e6ffec;
 }

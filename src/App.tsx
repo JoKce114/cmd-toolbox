@@ -1989,6 +1989,7 @@ export default function App() {
         <DiffPane
           key={tab.id}
           projectPath={group.path}
+          wordWrap={prefs.editorWordWrap}
           change={tab.diffChange}
           active={active}
           onClose={() => closeTabs(tab.groupKey, [tab.id])}
