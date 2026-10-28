@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib';
 import type { GitChange, GitChangeStatus, GitStatus } from '../types';
-import { BranchMenu } from './BranchMenu';
+import { BranchPickerModal } from './BranchPickerModal';
 import { ConfirmDialog } from './ConfirmDialog';
 import { NewBranchModal } from './NewBranchModal';
 
@@ -327,18 +327,19 @@ export function GitPanel({
           </button>
         ) : null}
 
-        {branchMenuOpen ? (
-          <BranchMenu
-            branches={branches}
-            current={currentBranch || status.branch}
-            busy={branchBusy}
-            onSelect={onCheckout}
-            onMerge={onMerge}
-            onCreate={() => setNewBranchOpen(true)}
-            onClose={() => setBranchMenuOpen(false)}
-          />
-        ) : null}
       </div>
+
+      {branchMenuOpen ? (
+        <BranchPickerModal
+          branches={branches}
+          current={currentBranch || status.branch}
+          busy={branchBusy}
+          onSelect={onCheckout}
+          onMerge={onMerge}
+          onCreate={() => setNewBranchOpen(true)}
+          onClose={() => setBranchMenuOpen(false)}
+        />
+      ) : null}
 
       {newBranchOpen ? (
         <NewBranchModal

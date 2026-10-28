@@ -322,9 +322,9 @@ await waitFor(
   '刷新后工作区干净',
 );
 await page.locator('.git-branch-button').click();
-await page.locator('.branch-menu').waitFor({ timeout: 8000 });
+await page.locator('.branch-picker').waitFor({ timeout: 8000 });
 assert(
-  (await page.locator('.branch-menu-name').first().innerText()).includes('main'),
+  (await page.locator('.branch-picker-name').first().innerText()).includes('main'),
   '当前分支在列表首位',
 );
 await click(page.getByRole('menuitem', { name: '新建分支…' }));
@@ -348,8 +348,8 @@ await page.waitForTimeout(1500);
 await click(page.locator('.git-icon-btn'));
 await page.waitForTimeout(800);
 await page.locator('.git-branch-button').click();
-await page.locator('.branch-menu').waitFor({ timeout: 8000 });
-await click(page.locator('.branch-menu-name').filter({ hasText: 'main' }));
+await page.locator('.branch-picker').waitFor({ timeout: 8000 });
+await click(page.locator('.branch-picker-name').filter({ hasText: 'main' }));
 await waitFor(
   async () => (await page.locator('.toast').allInnerTexts()).some((t) => t.includes('未提交')),
   '提示需要先提交或放弃',
