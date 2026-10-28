@@ -13,6 +13,7 @@ import {
 import { cn } from '../lib';
 import type { GitChange, GitChangeStatus, GitStatus } from '../types';
 import { BranchPickerModal } from './BranchPickerModal';
+import { MergeModal } from './MergeModal';
 import { ConfirmDialog } from './ConfirmDialog';
 import { NewBranchModal } from './NewBranchModal';
 
@@ -49,6 +50,7 @@ export type GitPanelProps = {
   onCheckout: (branch: string) => void;
   onCreateBranch: (name: string, startPoint: string) => void;
   onMerge: (branch: string) => void;
+  onMergeInto: (source: string, target: string) => void;
   commits: Array<{ hash: string; short: string; author: string; when: string; subject: string }>;
 };
 
@@ -74,6 +76,7 @@ export function GitPanel({
   onCheckout,
   onCreateBranch,
   onMerge,
+  onMergeInto,
   commits,
 }: GitPanelProps) {
   const [message, setMessage] = useState('');
@@ -84,6 +87,7 @@ export function GitPanel({
   const [groupBusy, setGroupBusy] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [newBranchOpen, setNewBranchOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState<
     | { kind: 'single'; change: GitChange }
     | { kind: 'all' }
@@ -336,8 +340,22 @@ export function GitPanel({
           busy={branchBusy}
           onSelect={onCheckout}
           onMerge={onMerge}
+          onMergeInto={() => setMergeOpen(true)}
           onCreate={() => setNewBranchOpen(true)}
           onClose={() => setBranchMenuOpen(false)}
+        />
+      ) : null}
+
+      {mergeOpen ? (
+        <MergeModal
+          branches={branches}
+          current={currentBranch || status.branch}
+          busy={branchBusy}
+          onClose={() => setMergeOpen(false)}
+          onConfirm={(source, target) => {
+            setMergeOpen(false);
+            onMergeInto(source, target);
+          }}
         />
       ) : null}
 

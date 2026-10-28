@@ -120,6 +120,18 @@ declare global {
           projectPath: string,
           branch: string,
         ) => Promise<{ ok: true; conflicted: string[] }>;
+        mergeInto: (
+          projectPath: string,
+          source: string,
+          target: string,
+        ) => Promise<{
+          ok: true;
+          conflicted: string[];
+          source: string;
+          target: string;
+          switchedFrom: string;
+          returnedTo: string;
+        }>;
       };
       files: {
         list: (projectPath: string, relDir: string) => Promise<{ entries: FileEntry[] }>;

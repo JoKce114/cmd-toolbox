@@ -792,6 +792,33 @@ export default function App() {
     [pushToast, refreshGit],
   );
 
+  const gitMergeInto = useCallback(
+    async (source: string, target: string) => {
+      const group = gitGroupRef.current;
+      if (!group) return;
+      setBranchBusy(true);
+      try {
+        const result = await window.api.git.mergeInto(group.path, source, target);
+        if (result.conflicted.length > 0) {
+          pushToast(
+            `合并 ${source} 到 ${target} 时发生冲突，请到终端处理`,
+            'error',
+          );
+        } else if (result.returnedTo) {
+          pushToast(`已把 ${source} 合并到 ${target}，已切回 ${result.returnedTo}`, 'success');
+        } else {
+          pushToast(`已把 ${source} 合并到 ${target}`, 'success');
+        }
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+      } finally {
+        await refreshGit();
+        setBranchBusy(false);
+      }
+    },
+    [pushToast, refreshGit],
+  );
+
   const activeTabs = activeGroup ? tabsByGroup[activeGroup.key] || [] : [];
   const rightIds = activeGroup ? rightIdsByGroup[activeGroup.key] || [] : [];
   const split = rightIds.length > 0;
@@ -2087,6 +2114,7 @@ export default function App() {
                 onCheckout={(branch) => void gitCheckout(branch)}
                 onCreateBranch={(name, startPoint) => void gitCreateBranch(name, startPoint)}
                 onMerge={(branch) => void gitMerge(branch)}
+                onMergeInto={(source, target) => void gitMergeInto(source, target)}
                 commits={gitCommits}
               />
             ) : null

@@ -9,6 +9,7 @@ export type BranchPickerModalProps = {
   busy: boolean;
   onSelect: (branch: string) => void;
   onMerge: (branch: string) => void;
+  onMergeInto: () => void;
   onCreate: () => void;
   onClose: () => void;
 };
@@ -19,6 +20,7 @@ export function BranchPickerModal({
   busy,
   onSelect,
   onMerge,
+  onMergeInto,
   onCreate,
   onClose,
 }: BranchPickerModalProps) {
@@ -152,6 +154,19 @@ export function BranchPickerModal({
           >
             <Plus size={13} />
             <span>新建分支…</span>
+          </button>
+          <button
+            type="button"
+            className="branch-picker-create branch-picker-merge-into"
+            disabled={busy || branches.length < 2}
+            title={branches.length < 2 ? '至少需要两个分支' : '把任意分支合并到另一个分支'}
+            onClick={() => {
+              onMergeInto();
+              onClose();
+            }}
+          >
+            <GitMerge size={13} />
+            <span>合并分支…</span>
           </button>
           <span className="branch-picker-count">
             {query.trim() ? `${filtered.length} / ${branches.length}` : `${branches.length} 个分支`}

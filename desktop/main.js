@@ -321,6 +321,10 @@ function registerIpc() {
     git.merge(assertProjectPath(projectPath), branch),
   );
 
+  ipcMain.handle('git:merge-into', (_event, projectPath, source, target) =>
+    git.mergeInto(assertProjectPath(projectPath), source, target),
+  );
+
   ipcMain.handle('fs:list', (_event, projectPath, relDir) =>
     fileApi.list(assertProjectPath(projectPath), relDir),
   );

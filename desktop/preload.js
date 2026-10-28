@@ -77,6 +77,8 @@ contextBridge.exposeInMainWorld('api', {
     createBranch: (projectPath, name, startPoint) =>
       invoke('git:create-branch', projectPath, name, startPoint),
     merge: (projectPath, branch) => invoke('git:merge', projectPath, branch),
+    mergeInto: (projectPath, source, target) =>
+      invoke('git:merge-into', projectPath, source, target),
   },
 
   files: {

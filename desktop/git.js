@@ -530,6 +530,75 @@ async function log(projectPath, limit = 30) {
   return { commits };
 }
 
+
+// 找出合并留下的冲突文件：优先看索引状态（不受输出语言影响），失败再退回解析英文输出。
+async function collectConflicts(projectPath, result) {
+  const current = await status(projectPath);
+  const fromIndex = current.ok
+    ? current.changes
+        .filter((change) => change.indexStatus === 'conflicted')
+        .map((change) => change.path)
+    : [];
+  if (fromIndex.length) return fromIndex;
+
+  return [
+    ...new Set(
+      `${result.stdout}\n${result.stderr}`
+        .split('\n')
+        .map((line) => line.match(/(?:Merge conflict in|CONFLICT \([^)]*\):) (.+)$/))
+        .filter(Boolean)
+        .map((match) => match[1].trim()),
+    ),
+  ];
+}
+
+// 把 source 合并到 target。target 不是当前分支时先切过去，成功后切回来。
+// 冲突时停在 target 上：工作区处于待解决状态，此时切走会被 git 拒绝。
+async function mergeInto(projectPath, source, target) {
+  const src = assertBranchName(source);
+  const dst = assertBranchName(target);
+  if (src === dst) throw new Error('源分支和目标分支不能相同');
+
+  const head = await runGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const original = head.ok ? head.stdout.trim() : '';
+  const switched = Boolean(original) && original !== dst;
+
+  if (switched) {
+    const current = await status(projectPath);
+    if (current.ok && (current.stagedCount > 0 || current.unstagedCount > 0)) {
+      throw new Error('有未提交的改动，请先提交或放弃后再合并分支');
+    }
+    const co = await runGit(projectPath, ['checkout', dst]);
+    if (!co.ok) throw new Error(cleanError(co.error, co.stderr));
+  }
+
+  const result = await runGit(projectPath, ['merge', src]);
+  let conflicted = [];
+  if (!result.ok) {
+    conflicted = await collectConflicts(projectPath, result);
+    if (!conflicted.length) {
+      // 真正的失败（不是冲突）：尽量退回原分支再报错
+      if (switched) await runGit(projectPath, ['checkout', original]);
+      throw new Error(cleanError(result.error, result.stderr));
+    }
+  }
+
+  let returnedTo = '';
+  if (!conflicted.length && switched) {
+    const back = await runGit(projectPath, ['checkout', original]);
+    if (back.ok) returnedTo = original;
+  }
+
+  return {
+    ok: true,
+    conflicted,
+    source: src,
+    target: dst,
+    switchedFrom: switched ? original : '',
+    returnedTo,
+  };
+}
+
 module.exports = {
   log,
   status,
@@ -549,4 +618,5 @@ module.exports = {
   checkout,
   createBranch,
   merge,
+  mergeInto,
 };
