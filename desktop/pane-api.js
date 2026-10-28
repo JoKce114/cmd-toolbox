@@ -57,15 +57,45 @@ function authorized(req, url) {
   return Boolean(got && got === token);
 }
 
+// 页签编号只在项目内递增，多个项目都会有 #1。
+// 支持三种写法：
+//   <tabId>            精确匹配
+//   <项目名>#<编号>     按项目限定，如「B2C 6.0#1」
+//   #<编号>            沿用旧行为；若多个项目重号则报错，避免打错目标
 function findPane(ref) {
   const raw = String(ref || '').trim();
   if (!raw) return null;
-  if (panes.some((pane) => pane.id === raw)) {
-    return panes.find((pane) => pane.id === raw) || null;
+
+  const byId = panes.find((pane) => pane.id === raw);
+  if (byId) return byId;
+
+  const scoped = raw.match(/^(.*)#(\d+)$/);
+  if (scoped) {
+    const projectName = scoped[1].trim();
+    const number = Number(scoped[2]);
+    if (projectName) {
+      return (
+        panes.find(
+          (pane) =>
+            pane.paneNo === number &&
+            String(pane.groupName || '').toLowerCase() === projectName.toLowerCase(),
+        ) || null
+      );
+    }
   }
-  const number = Number(String(raw).replace(/^#/, ''));
+
+  const number = Number(raw.replace(/^#/, ''));
   if (!Number.isFinite(number) || number < 1) return null;
-  return panes.find((pane) => pane.paneNo === number) || null;
+  const hits = panes.filter((pane) => pane.paneNo === number);
+  if (hits.length > 1) {
+    const names = hits.map((pane) => pane.groupName || '未命名项目').join('、');
+    const error = new Error(
+      `编号 #${number} 在多个项目里都有（${names}）。请改用「项目名#编号」，例如 ${hits[0].groupName}#${number}`,
+    );
+    error.status = 409;
+    throw error;
+  }
+  return hits[0] || null;
 }
 
 function guestOf(pane) {
@@ -316,6 +346,7 @@ async function dispatch(method, pathname, body) {
       panes: panes.map((pane) => ({
         paneNo: pane.paneNo,
         ref: `#${pane.paneNo}`,
+        scopedRef: pane.groupName ? `${pane.groupName}#${pane.paneNo}` : `#${pane.paneNo}`,
         kind: pane.kind,
         title: pane.descriptor,
         project: pane.groupName,
@@ -323,7 +354,7 @@ async function dispatch(method, pathname, body) {
         shellId: pane.shellId,
         exited: Boolean(pane.exited),
       })),
-      note: '这些是 Cmd Toolbox 页签。#1 #2 以页签最前面的号码为准，不是 CC-Panes。',
+      note: '这些是 Cmd Toolbox 页签。编号只在项目内唯一，跨项目重号时请用 scopedRef（如「B2C 6.0#1」）指定。',
     };
   }
   if (parts[0] !== 'panes' || !parts[1]) {
