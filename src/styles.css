@@ -931,6 +931,142 @@ p {
   color: #e4e6ea;
 }
 
+/* ---------- CodeMirror find panel (Ctrl+F) ---------- */
+
+.cm-panel.cm-search {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 9px 34px 9px 8px;
+  border-top: 1px solid var(--border);
+  background: #fafafb;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.cm-panel.cm-search > br {
+  display: none;
+}
+
+.cm-panel.cm-search .cm-textfield {
+  flex: 1 1 110px;
+  min-width: 80px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid #e2e2e7;
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 11.5px;
+  font-family: inherit;
+  outline: none;
+}
+
+.cm-panel.cm-search .cm-textfield:focus {
+  border-color: #b9c2ff;
+  box-shadow: 0 0 0 3px rgba(91, 108, 255, 0.12);
+}
+
+.cm-panel.cm-search .cm-button {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #e2e2e7;
+  border-radius: 6px;
+  background: #ffffff;
+  background-image: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cm-panel.cm-search .cm-button:hover {
+  border-color: #d0d2da;
+  background: #f5f6ff;
+  color: var(--text);
+}
+
+.cm-panel.cm-search .cm-button:active {
+  background: #eef0ff;
+}
+
+.cm-panel.cm-search label {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 4px;
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cm-panel.cm-search label:hover {
+  background: #f0f0f4;
+  color: var(--text);
+}
+
+.cm-panel.cm-search input[type="checkbox"] {
+  margin: 0;
+  accent-color: #5b6cff;
+}
+
+/* 关闭按钮固定在面板右侧，不参与换行 */
+.cm-panel.cm-search button[name="close"] {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.cm-panel.cm-search button[name="close"]:hover {
+  background: #ebebef;
+  color: var(--text);
+}
+
+.editor-pane.theme-dark .cm-panel.cm-search {
+  background: #17181d;
+  border-top-color: #23252b;
+  color: #a8adb8;
+}
+
+.editor-pane.theme-dark .cm-panel.cm-search .cm-textfield {
+  border-color: #2a2d35;
+  background: #1e1f25;
+  color: #e4e6ea;
+}
+
+.editor-pane.theme-dark .cm-panel.cm-search .cm-button {
+  border-color: #2a2d35;
+  background: #1e1f25;
+  color: #c8ccd4;
+}
+
+.editor-pane.theme-dark .cm-panel.cm-search .cm-button:hover {
+  background: #262a3a;
+  color: #ffffff;
+}
+
+.editor-pane.theme-dark .cm-panel.cm-search label:hover {
+  background: #22242b;
+}
+
 /* ---------- Project search ---------- */
 
 .search-panel {
@@ -1061,6 +1197,29 @@ p {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: "Cascadia Mono", Consolas, "Microsoft YaHei", monospace;
+  color: #4a4d55;
+}
+
+/* 命中词：黄色底 + 深色字，长行里也能一眼定位 */
+.search-mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: #ffe58f;
+  color: #613400;
+  font-weight: 600;
+}
+
+.search-hit:hover .search-mark {
+  background: #ffd54f;
+}
+
+.editor-pane.theme-dark .search-mark {
+  background: #6b4b00;
+  color: #ffe58f;
+}
+
+.editor-pane.theme-dark .search-hit:hover .search-mark {
+  background: #8a6100;
 }
 
 .editor-pane.theme-dark .search-panel {

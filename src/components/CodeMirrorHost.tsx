@@ -14,6 +14,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { createRoot } from 'react-dom/client';
 import { languageFor } from '../editorLanguage';
+import { searchPhrases } from '../editorSearchPhrases';
 import { themeExtensions } from '../editorTheme';
 import type { TerminalThemeMode } from '../theme';
 import { parseConflicts, resolveConflict } from '../conflictParser';
@@ -155,6 +156,7 @@ export function CodeMirrorHost({
           history(),
           highlightSelectionMatches(),
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+          searchPhrases,
           wrapRef.current.of(wordWrap ? EditorView.lineWrapping : []),
           themeRef.current.of(themeExtensions(themeMode)),
           conflictField,

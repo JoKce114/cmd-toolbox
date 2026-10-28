@@ -17,6 +17,31 @@ export type SearchPanelProps = {
   onError: (message: string) => void;
 };
 
+// 把命中的词包成 <mark>，长行里能一眼看到匹配位置
+function highlight(text: string, query: string, caseSensitive: boolean) {
+  const needle = query.trim();
+  if (!needle) return text;
+  const haystack = caseSensitive ? text : text.toLowerCase();
+  const target = caseSensitive ? needle : needle.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  let index = haystack.indexOf(target, cursor);
+  let key = 0;
+  while (index >= 0) {
+    if (index > cursor) parts.push(text.slice(cursor, index));
+    parts.push(
+      <mark className="search-mark" key={key}>
+        {text.slice(index, index + needle.length)}
+      </mark>,
+    );
+    key += 1;
+    cursor = index + needle.length;
+    index = haystack.indexOf(target, cursor);
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts.length ? parts : text;
+}
+
 export function SearchPanel({ group, onOpen, onClose, onError }: SearchPanelProps) {
   const [query, setQuery] = useState('');
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -131,7 +156,9 @@ export function SearchPanel({ group, onOpen, onClose, onError }: SearchPanelProp
                     onClick={() => onOpen(item.relPath)}
                   >
                     <span className="search-hit-line">{item.line}</span>
-                    <span className="search-hit-text">{item.text}</span>
+                    <span className="search-hit-text">
+                      {highlight(item.text, query, caseSensitive)}
+                    </span>
                   </button>
                 ))}
               </div>
