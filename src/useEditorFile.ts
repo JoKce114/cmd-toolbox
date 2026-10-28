@@ -2,11 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toErrorMessage } from './lib';
 import type { Group, OpenedFile } from './types';
 
+export function normalizeNewlines(text: string): string {
+  return text.replace(/\r\n/g, '\n');
+}
+
 export type EditorFileState = {
   relPath: string;
   content: string;
   savedContent: string;
   encoding: string;
+  crlf: boolean;
   mtime: number;
   readOnly: boolean;
   loading: boolean;
@@ -20,6 +25,7 @@ const EMPTY: EditorFileState = {
   content: '',
   savedContent: '',
   encoding: 'utf8',
+  crlf: false,
   mtime: 0,
   readOnly: false,
   loading: false,
@@ -42,6 +48,7 @@ export function useEditorFile(group: Group, onError: (message: string) => void) 
         content: '',
         savedContent: '',
         encoding: 'utf8',
+        crlf: false,
         mtime: 0,
         readOnly: false,
         loading: true,
@@ -55,6 +62,7 @@ export function useEditorFile(group: Group, onError: (message: string) => void) 
           content: result.content,
           savedContent: result.content,
           encoding: result.encoding,
+          crlf: result.content.includes('\r\n'),
           mtime: result.mtime,
           readOnly: result.readOnly,
           loading: false,
@@ -75,7 +83,9 @@ export function useEditorFile(group: Group, onError: (message: string) => void) 
     setFile((previous) => ({
       ...previous,
       content,
-      dirty: content !== previous.savedContent,
+      // CodeMirror 会把 \r\n 规范化成 \n，磁盘内容仍是 \r\n；
+      // 直接比较会让 CRLF 文件一打开就是「已修改」状态。
+      dirty: normalizeNewlines(content) !== normalizeNewlines(previous.savedContent),
     }));
   }, []);
 
@@ -84,12 +94,14 @@ export function useEditorFile(group: Group, onError: (message: string) => void) 
     if (current.loading || current.readOnly || !current.dirty || !current.relPath) return false;
     // 记录真正写入的正文；保存期间用户继续输入的内容不能被误标为已保存
     const written = current.content;
+    // CodeMirror 输出 LF；原文件是 CRLF 时写回要保持原样，否则整个文件的行尾会被改写
+    const payload = current.crlf ? written.replace(/\n/g, '\r\n') : written;
     setFile((previous) => ({ ...previous, saving: true }));
     try {
       await window.api.files.write(
         groupRef.current.path,
         current.relPath,
-        written,
+        payload,
         current.encoding,
         current.mtime,
       );
@@ -100,7 +112,7 @@ export function useEditorFile(group: Group, onError: (message: string) => void) 
         return {
           ...previous,
           savedContent: written,
-          dirty: previous.content !== written,
+          dirty: normalizeNewlines(previous.content) !== normalizeNewlines(written),
           saving: false,
           mtime: after.mtime,
         };
