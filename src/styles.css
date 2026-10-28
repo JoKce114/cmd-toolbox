@@ -710,6 +710,44 @@ p {
   line-height: 1.5;
 }
 
+.cm-conflict-ours {
+  background: #e8f0fe;
+}
+
+.cm-conflict-theirs {
+  background: #e6f4ea;
+}
+
+.cm-conflict-marker {
+  background: #f0f0f0;
+  color: #9a9da5;
+}
+
+.conflict-bar {
+  display: flex;
+  gap: 6px;
+  padding: 3px 0 3px 26px;
+  background: #fafafa;
+  border-top: 1px solid #ececef;
+  border-bottom: 1px solid #ececef;
+}
+
+.conflict-action {
+  padding: 2px 8px;
+  border: 1px solid #d7d9de;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #3f4249;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.conflict-action:hover {
+  background: #f2f4ff;
+  border-color: #b9c2ff;
+  color: #2f3ee0;
+}
+
 .editor-confirm {
   max-width: 420px;
 }
