@@ -86,6 +86,12 @@ declare global {
           filePath: string,
           changeStatus: string,
         ) => Promise<{ patch: string; untracked: boolean }>;
+        log: (
+          projectPath: string,
+          limit?: number,
+        ) => Promise<{
+          commits: Array<{ hash: string; short: string; author: string; when: string; subject: string }>;
+        }>;
         fetch: (projectPath: string) => Promise<{ ok: true }>;
         pull: (projectPath: string) => Promise<{ ok: true }>;
         init: (projectPath: string) => Promise<{ ok: true }>;

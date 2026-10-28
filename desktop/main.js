@@ -265,6 +265,10 @@ function registerIpc() {
     git.fileDiff(assertProjectPath(projectPath), filePath, changeStatus),
   );
 
+  ipcMain.handle('git:log', (_event, projectPath, limit) =>
+    git.log(assertProjectPath(projectPath), limit),
+  );
+
   ipcMain.handle('git:fetch', (_event, projectPath) =>
     git.fetchRemote(assertProjectPath(projectPath)),
   );

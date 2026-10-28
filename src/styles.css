@@ -595,6 +595,47 @@ p {
   color: #6b6f76;
 }
 
+/* ---------- Git history ---------- */
+
+.git-history {
+  margin-top: 12px;
+  padding-top: 6px;
+  border-top: 1px solid #e9e9ed;
+}
+
+.git-history-list {
+  margin: 4px 0 0;
+  padding: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.git-history-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+
+.git-history-item:hover {
+  background: #f2f2f6;
+}
+
+.git-history-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 11.5px;
+}
+
+.git-history-meta {
+  color: var(--faint);
+  font-size: 10px;
+}
+
 /* ---------- Editor ---------- */
 
 .editor-pane {

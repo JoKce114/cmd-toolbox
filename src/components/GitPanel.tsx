@@ -49,6 +49,7 @@ export type GitPanelProps = {
   onCheckout: (branch: string) => void;
   onCreateBranch: (name: string, startPoint: string) => void;
   onMerge: (branch: string) => void;
+  commits: Array<{ hash: string; short: string; author: string; when: string; subject: string }>;
 };
 
 export function GitPanel({
@@ -73,6 +74,7 @@ export function GitPanel({
   onCheckout,
   onCreateBranch,
   onMerge,
+  commits,
 }: GitPanelProps) {
   const [message, setMessage] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
@@ -472,6 +474,29 @@ export function GitPanel({
           }}
         />
       ) : null}
+
+      <div className="git-history">
+        <div className="git-group-head">
+          <span className="git-group-title">最近提交</span>
+          <span className="git-group-count">{commits.length}</span>
+        </div>
+        {commits.length === 0 ? (
+          <p className="git-panel-hint">还没有提交记录</p>
+        ) : (
+          <ul className="git-history-list">
+            {commits.map((commit) => (
+              <li key={commit.hash} className="git-history-item">
+                <span className="git-history-subject" title={commit.subject}>
+                  {commit.subject}
+                </span>
+                <span className="git-history-meta">
+                  {commit.short} · {commit.author} · {commit.when}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }

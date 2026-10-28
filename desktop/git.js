@@ -485,7 +485,41 @@ async function fileDiff(projectPath, filePath, changeStatus) {
   return { patch: result.stdout, untracked: isUntracked };
 }
 
+// 最近的提交列表，供面板展示
+async function log(projectPath, limit = 30) {
+  const count = Math.max(1, Math.min(200, Number(limit) || 30));
+  // 用不可见分隔符串起字段，避免提交信息里的空格干扰解析
+  const SEP = String.fromCharCode(31);
+  const result = await runGit(projectPath, [
+    'log',
+    '-' + count,
+    '--pretty=format:%H' + SEP + '%h' + SEP + '%an' + SEP + '%ar' + SEP + '%s',
+  ]);
+  if (!result.ok) {
+    // 空仓库没有 HEAD，返回空列表而不是报错
+    if (/does not have any commits|unknown revision/i.test(result.stderr)) {
+      return { commits: [] };
+    }
+    throw new Error(cleanError(result.error, result.stderr));
+  }
+  const commits = result.stdout
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split(SEP);
+      return {
+        hash: parts[0] || '',
+        short: parts[1] || '',
+        author: parts[2] || '',
+        when: parts[3] || '',
+        subject: parts[4] || '(无提交信息)',
+      };
+    });
+  return { commits };
+}
+
 module.exports = {
+  log,
   status,
   commit,
   push,

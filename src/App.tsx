@@ -509,6 +509,29 @@ export default function App() {
     list: [],
   });
   const [branchBusy, setBranchBusy] = useState(false);
+  const [gitCommits, setGitCommits] = useState<
+    Array<{ hash: string; short: string; author: string; when: string; subject: string }>
+  >([]);
+
+  useEffect(() => {
+    const group = gitGroupRef.current;
+    if (!group) {
+      setGitCommits([]);
+      return;
+    }
+    let cancelled = false;
+    void window.api.git
+      .log(group.path, 20)
+      .then((result) => {
+        if (!cancelled) setGitCommits(result.commits);
+      })
+      .catch(() => {
+        if (!cancelled) setGitCommits([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gitStatus]);
 
   useEffect(() => {
     const group = gitGroupRef.current;
@@ -2008,6 +2031,7 @@ export default function App() {
                 onCheckout={(branch) => void gitCheckout(branch)}
                 onCreateBranch={(name, startPoint) => void gitCreateBranch(name, startPoint)}
                 onMerge={(branch) => void gitMerge(branch)}
+                commits={gitCommits}
               />
             ) : null
           }
