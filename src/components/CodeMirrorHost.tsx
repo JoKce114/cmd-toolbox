@@ -4,6 +4,7 @@ import { EditorState, Compartment } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { languageFor } from '../editorLanguage';
+import { vscodeLightExtensions } from '../editorTheme';
 
 export type CodeMirrorHostProps = {
   value: string;
@@ -36,6 +37,7 @@ export function CodeMirrorHost({ value, filePath, readOnly, onChange }: CodeMirr
           highlightSelectionMatches(),
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
           EditorView.lineWrapping,
+          ...vscodeLightExtensions,
           languageRef.current.of([]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
