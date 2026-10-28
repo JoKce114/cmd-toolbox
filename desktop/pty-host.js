@@ -318,17 +318,6 @@ function clickSession(id, col, row) {
   helper.stdin.write(`click ${session.pid} ${x} ${y}\n`);
 }
 
-// OpenCode 的粘贴键绑定是 ctrl+v，必须发送真正的 Ctrl+V 组合键
-function ctrlVSession(id) {
-  const session = sessions.get(id);
-  if (!session || session.kind !== 'pty' || !session.pid) return false;
-  const helper = getInjector();
-  if (!helper || !helper.stdin.writable) return false;
-  helper.stdin.write(`ctrlv ${session.pid}
-`);
-  return true;
-}
-
 function altVSession(id) {
   const session = sessions.get(id);
   if (!session || session.kind !== 'pty' || !session.pid) return false;
@@ -402,7 +391,6 @@ module.exports = {
   wheelSession,
   clickSession,
   altVSession,
-  ctrlVSession,
   resizeSession,
   killSession,
   closeByGroup,

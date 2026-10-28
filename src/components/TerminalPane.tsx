@@ -183,9 +183,10 @@ export function TerminalPane({
       }
     };
 
-    // 各家 CLI 的贴图键不同：OpenCode 只认 ctrl+v，其余用 alt+v
+    // 各家 CLI 的贴图键不同：OpenCode 自己用 PowerShell 读剪贴板，只认 ctrl+v；
+    // 直接写 0x16 即可让 ConPTY 生成真正的 Ctrl+V 按键，不必走注入器。
     const pasteImageToPty = () => {
-      if (tab.shellId === 'opencode') window.api.pty.ctrlV(tab.sessionId);
+      if (tab.shellId === 'opencode') window.api.pty.write(tab.sessionId, String.fromCharCode(22));
       else window.api.pty.altV(tab.sessionId);
     };
 

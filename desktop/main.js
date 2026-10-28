@@ -394,11 +394,6 @@ function registerIpc() {
     ptyHost.clickSession(id, Number(col), Number(row));
   });
 
-  ipcMain.on('pty:ctrl-v', (_event, id) => {
-    if (typeof id !== 'string') return;
-    ptyHost.ctrlVSession(id);
-  });
-
   ipcMain.on('pty:alt-v', (_event, id) => {
     if (typeof id !== 'string') return;
     ptyHost.altVSession(id);
