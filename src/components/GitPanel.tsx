@@ -477,7 +477,7 @@ export function GitPanel({
 
       <div className="git-history">
         <div className="git-group-head">
-          <span className="git-group-title">最近提交</span>
+          <span className="git-history-title">最近提交</span>
           <span className="git-group-count">{commits.length}</span>
         </div>
         {commits.length === 0 ? (

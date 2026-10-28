@@ -40,6 +40,8 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   const [activePath, setActivePath] = useState('');
   const groupRef = useRef(group);
   const filesRef = useRef(files);
+  // 本应用内写过哪些文件：仅用于区分「多页签互相覆盖」和「外部程序改过」
+  const savedByAppRef = useRef<Set<string>>(new Set());
   groupRef.current = group;
   filesRef.current = files;
 
@@ -129,13 +131,30 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
       const payload = current.crlf ? written.replace(/\n/g, '\r\n') : written;
       patch(relPath, { saving: true });
       try {
-        await window.api.files.write(
-          groupRef.current.path,
-          relPath,
-          payload,
-          current.encoding,
-          current.mtime,
-        );
+        try {
+          await window.api.files.write(
+            groupRef.current.path,
+            relPath,
+            payload,
+            current.encoding,
+            current.mtime,
+          );
+        } catch (error) {
+          // 同一个文件在多个编辑器页签里打开时，另一处保存过会让这里的 mtime 过期。
+          // 只有「本应用刚刚写过这个文件」才用新 mtime 重试；
+          // 真正的外部修改仍然报错，避免悄悄覆盖掉别人的改动。
+          if (!/外部修改/.test(toErrorMessage(error))) throw error;
+          if (!savedByAppRef.current.has(relPath)) throw error;
+          const fresh = await window.api.files.read(groupRef.current.path, relPath);
+          await window.api.files.write(
+            groupRef.current.path,
+            relPath,
+            payload,
+            current.encoding,
+            fresh.mtime,
+          );
+        }
+        savedByAppRef.current.add(relPath);
         const after = await window.api.files.read(groupRef.current.path, relPath);
         setFiles((previous) => {
           const target = previous[relPath];

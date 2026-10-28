@@ -76,8 +76,8 @@ export function EditorPane({
 
   useEffect(() => {
     const base = activePath ? activePath.split('/').pop() || '编辑器' : '编辑器';
-    onTitleChangeRef.current(`${group.name} · ${base}${file.dirty ? ' •' : ''}`);
-  }, [activePath, file.dirty, group.name]);
+    onTitleChangeRef.current(`${group.name} · ${base}${hasDirty ? ' •' : ''}`);
+  }, [activePath, hasDirty, group.name]);
 
   useEffect(() => {
     onDirtyChangeRef.current(tab.id, hasDirty);
@@ -191,6 +191,19 @@ export function EditorPane({
         <span className="pane-path" title={activePath || group.path}>
           {activePath || group.name}
         </span>
+        {conflictCount > 0 ? (
+          <span
+            className="editor-conflict-badge"
+            title={`还有 ${conflictCount} 处冲突未处理`}
+          >
+            冲突 {conflictCount} 处
+          </span>
+        ) : null}
+        {unrecognizedConflict ? (
+          <span className="editor-conflict-badge" title="文件里还有无法识别的冲突标记">
+            存在未识别冲突标记
+          </span>
+        ) : null}
         <span className="editor-encoding">{activePath ? encodingLabel : ''}</span>
         <button
           type="button"

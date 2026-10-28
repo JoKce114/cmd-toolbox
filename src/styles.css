@@ -597,6 +597,13 @@ p {
 
 /* ---------- Git history ---------- */
 
+.git-history-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+
 .git-history {
   margin-top: 12px;
   padding-top: 6px;

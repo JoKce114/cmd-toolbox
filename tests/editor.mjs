@@ -162,12 +162,12 @@ await page.locator('.cm-content').click();
 await page.keyboard.press('Control+A');
 await page.keyboard.type('<?php echo 99;\n');
 await waitFor(
-  async () => (await page.locator('.tab.active .tab-func').innerText()).includes('•'),
+  async () => (await page.locator('.editor-pane:not(.is-hidden) .editor-tab-dot').count()) > 0,
   '标题出现未保存标记',
 );
 await page.keyboard.press('Control+S');
 await waitFor(
-  async () => !(await page.locator('.tab.active .tab-func').innerText()).includes('•'),
+  async () => (await page.locator('.editor-pane:not(.is-hidden) .editor-tab-dot').count()) === 0,
   '保存后未保存标记消失',
 );
 assert(readFileSync(join(repo, 'index.php'), 'utf8') === '<?php echo 99;\n', '磁盘内容已更新');
@@ -225,7 +225,7 @@ await activePane.locator('.cm-content').click();
 await page.keyboard.press('Control+A');
 await page.keyboard.type('未保存内容\n');
 await waitFor(
-  async () => (await page.locator('.tab.active .tab-func').innerText()).includes('•'),
+  async () => (await page.locator('.editor-pane:not(.is-hidden) .editor-tab-dot').count()) > 0,
   '脏标记出现',
 );
 const tabsBeforeClose = await page.locator('.tab').count();
@@ -245,7 +245,7 @@ assert(
 await activePane.locator('.cm-content').click();
 await page.keyboard.press('Control+S');
 await waitFor(
-  async () => !(await page.locator('.tab.active .tab-func').innerText()).includes('•'),
+  async () => (await page.locator('.editor-pane:not(.is-hidden) .editor-tab-dot').count()) === 0,
   '保存后脏标记消失',
 );
 assert(readFileSync(join(repo, 'index.php'), 'utf8') === '未保存内容\n', '确认框取消后仍可正常保存');

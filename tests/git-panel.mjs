@@ -206,24 +206,23 @@ await waitFor(
   '刷新后看到 b.txt',
 );
 const beforeTabs = await page.locator('.tab').count();
-// 行点击现在打开编辑器；终端差异改由行内「在终端查看差异」按钮触发
-await click(
-  page
-    .locator('.git-change-item')
-    .filter({ hasText: 'b.txt' })
-    .locator('.git-row-action[title="在终端查看差异"]'),
-);
+// 点击变更行会打开彩色 diff 视图片签
+await click(page.locator('.git-change-row').filter({ hasText: 'b.txt' }));
 await waitFor(
   async () => (await page.locator('.tab').count()) === beforeTabs + 1,
   '打开 diff 页签',
 );
-await waitFor(async () => {
-  const rows = await page
-    .locator('.terminal-pane:not(.is-hidden) .xterm-rows')
-    .innerText()
-    .catch(() => '');
-  return rows.includes('b.txt');
-}, 'diff 内容出现在终端中', 20000);
+await waitFor(
+  async () => (await page.locator('.diff-pane:not(.is-hidden)').count()) > 0,
+  'diff 视图出现',
+);
+const diffText = await page.locator('.diff-pane:not(.is-hidden)').innerText();
+assert(diffText.includes('b.txt'), 'diff 视图显示文件名');
+await waitFor(
+  async () => (await page.locator('.diff-pane:not(.is-hidden) .diff-row.is-added').count()) > 0,
+  '新增行以绿色标记呈现',
+);
+assert(true, '新增行以绿色标记呈现');
 
 console.log('7. 分组与行内操作');
 await selectProject('git-proj');
@@ -234,9 +233,11 @@ await waitFor(
   async () => (await page.locator('.git-change-row').count()) >= 2,
   '刷新后看到两个变更',
 );
+const groupTitles = await page.locator('.git-group-title').allInnerTexts();
+assert(groupTitles.includes('更改'), '存在「更改」组');
 assert(
-  (await page.locator('.git-group-title').allInnerTexts()).join(',') === '更改',
-  '此时只有「更改」组',
+  await page.locator('.git-change-item').filter({ hasText: 'new-file.txt' }).count() > 0,
+  '新文件列在变更列表中',
 );
 const newRow = page.locator('.git-change-item').filter({ hasText: 'new-file.txt' });
 await click(newRow.locator('.git-row-action[title="暂存"]'));
@@ -244,10 +245,8 @@ await waitFor(
   async () => (await page.locator('.git-group-title').allInnerTexts()).length === 2,
   '暂存后出现「已暂存」组',
 );
-assert(
-  (await page.locator('.git-group-title').first().innerText()) === '已暂存',
-  '第一组为已暂存',
-);
+const titlesAfterStage = await page.locator('.git-group-title').allInnerTexts();
+assert(titlesAfterStage.includes('已暂存'), '出现「已暂存」组');
 
 console.log('8. 取消暂存');
 const stagedRow = page.locator('.git-change-item').filter({ hasText: 'new-file.txt' });

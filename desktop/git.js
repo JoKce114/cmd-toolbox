@@ -467,22 +467,34 @@ async function fileDiff(projectPath, filePath, changeStatus) {
   const relative = path.relative(root, target);
   if (!relative) throw new Error('文件路径不在项目目录内');
 
-  const isUntracked = changeStatus === 'untracked';
-  const args = ['--no-pager', 'diff', '--no-color', '--no-ext-diff', '-U3'];
-  if (isUntracked) {
-    // 未跟踪文件没有 HEAD 版本，用空文件做对比
-    const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
-    args.push('--no-index', '--', nullDevice, relative);
-  } else {
-    args.push('--', relative);
+  // 未跟踪文件没有可对比的 HEAD 版本。`--no-index` 搭配 NUL 在 Windows 的
+  // execFile 下会 ENOENT，因此直接读文件内容，拼一份「全部新增」的 patch。
+  if (changeStatus === 'untracked') {
+    const content = await fsp.readFile(target, 'utf8').catch(() => '');
+    const lines = content.split(/\r?\n/);
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    const header = [
+      `diff --git a/${relative} b/${relative}`,
+      'new file mode 100644',
+      '--- /dev/null',
+      `+++ b/${relative}`,
+      `@@ -0,0 +1,${lines.length} @@`,
+    ];
+    const patch = [...header, ...lines.map((line) => `+${line}`), ''].join('\n');
+    return { patch, untracked: true };
   }
 
-  const result = await runGit(projectPath, args);
-  // --no-index 在有差异时返回 1，属于正常结果
-  if (!result.ok && result.error && result.error.code !== 1) {
-    throw new Error(cleanError(result.error, result.stderr));
-  }
-  return { patch: result.stdout, untracked: isUntracked };
+  const result = await runGit(projectPath, [
+    '--no-pager',
+    'diff',
+    '--no-color',
+    '--no-ext-diff',
+    '-U3',
+    '--',
+    relative,
+  ]);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  return { patch: result.stdout, untracked: false };
 }
 
 // 最近的提交列表，供面板展示
