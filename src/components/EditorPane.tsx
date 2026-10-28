@@ -35,6 +35,8 @@ export function EditorPane({
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const { file, open, update, save } = useEditorFile(group, onError);
+  const [conflictCount, setConflictCount] = useState(0);
+  const [hadConflict, setHadConflict] = useState(false);
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const fileRef = useRef(file);
   fileRef.current = file;
@@ -63,6 +65,18 @@ export function EditorPane({
   useEffect(() => {
     onDirtyChangeRef.current(tab.id, file.dirty);
   }, [tab.id, file.dirty]);
+
+  useEffect(() => {
+    setConflictCount(0);
+  }, [file.relPath]);
+
+  useEffect(() => {
+    setHadConflict(false);
+  }, [file.relPath]);
+
+  useEffect(() => {
+    if (conflictCount > 0) setHadConflict(true);
+  }, [conflictCount]);
 
   useEffect(() => {
     return () => onDirtyChangeRef.current(tab.id, false);
@@ -116,6 +130,11 @@ export function EditorPane({
         <span className="pane-path" title={file.relPath || group.path}>
           {file.relPath || group.name}
         </span>
+        {conflictCount > 0 ? (
+          <span className="editor-conflict-badge" title={`还有 ${conflictCount} 处冲突未处理`}>
+            冲突 {conflictCount} 处
+          </span>
+        ) : null}
         <span className="editor-encoding">{ENCODING_LABEL[file.encoding] || file.encoding}</span>
         <button
           type="button"
@@ -137,6 +156,12 @@ export function EditorPane({
         </p>
       ) : null}
 
+      {hadConflict && conflictCount === 0 && file.dirty ? (
+        <p className="editor-notice editor-notice-done">
+          冲突已全部处理。按 Ctrl+S 保存，然后点「暂存」标记为已解决。
+        </p>
+      ) : null}
+
       <div className="editor-body">
         <FileTree group={group} activePath={file.relPath} onOpen={requestOpen} onError={onError} />
         <div className="editor-main">
@@ -146,6 +171,7 @@ export function EditorPane({
               filePath={file.relPath}
               readOnly={file.readOnly}
               onChange={update}
+              onConflictCountChange={setConflictCount}
             />
           ) : (
             <p className="editor-placeholder">从左侧选择文件</p>
