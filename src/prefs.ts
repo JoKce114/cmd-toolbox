@@ -1,12 +1,13 @@
 export type AppPrefs = {
   fontSize: number;
   copyOnSelect: boolean;
+  editorWordWrap: boolean;
 };
 
 const STORAGE_KEY = 'cmd-toolbox.prefs';
 
 export function defaultPrefs(): AppPrefs {
-  return { fontSize: 13, copyOnSelect: true };
+  return { fontSize: 13, copyOnSelect: true, editorWordWrap: true };
 }
 
 export function readPrefs(): AppPrefs {
@@ -18,6 +19,7 @@ export function readPrefs(): AppPrefs {
     return {
       fontSize,
       copyOnSelect: parsed.copyOnSelect !== false,
+      editorWordWrap: parsed.editorWordWrap !== false,
     };
   } catch {
     return defaultPrefs();

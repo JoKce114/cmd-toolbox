@@ -26,6 +26,7 @@ export type EditorPaneProps = {
   onTitleChange: (title: string) => void;
   onDirtyChange: (tabId: string, dirty: boolean) => void;
   themeMode: TerminalThemeMode;
+  wordWrap: boolean;
 };
 
 export function EditorPane({
@@ -37,6 +38,7 @@ export function EditorPane({
   onTitleChange,
   onDirtyChange,
   themeMode,
+  wordWrap,
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const {
@@ -301,6 +303,7 @@ export function EditorPane({
               filePath={activePath}
               readOnly={file.readOnly}
               themeMode={themeMode}
+              wordWrap={wordWrap}
               onChange={(value) => update(activePath, value)}
               onConflictCountChange={setConflictCount}
             />

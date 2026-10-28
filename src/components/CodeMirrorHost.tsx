@@ -25,6 +25,7 @@ export type CodeMirrorHostProps = {
   filePath: string;
   readOnly: boolean;
   themeMode: TerminalThemeMode;
+  wordWrap: boolean;
   onChange: (value: string) => void;
   onConflictCountChange?: (count: number) => void;
 };
@@ -124,6 +125,7 @@ export function CodeMirrorHost({
   filePath,
   readOnly,
   themeMode,
+  wordWrap,
   onChange,
   onConflictCountChange,
 }: CodeMirrorHostProps) {
@@ -131,6 +133,7 @@ export function CodeMirrorHost({
   const viewRef = useRef<EditorView | null>(null);
   const languageRef = useRef(new Compartment());
   const themeRef = useRef(new Compartment());
+  const wrapRef = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   const onCountRef = useRef(onConflictCountChange);
   onChangeRef.current = onChange;
@@ -152,7 +155,7 @@ export function CodeMirrorHost({
           history(),
           highlightSelectionMatches(),
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
-          EditorView.lineWrapping,
+          wrapRef.current.of(wordWrap ? EditorView.lineWrapping : []),
           themeRef.current.of(themeExtensions(themeMode)),
           conflictField,
           languageRef.current.of([]),
@@ -193,6 +196,16 @@ export function CodeMirrorHost({
       effects: themeRef.current.reconfigure(themeExtensions(themeMode)),
     });
   }, [themeMode]);
+
+  // 自动换行同理：只重配这一个扩展
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: wrapRef.current.reconfigure(wordWrap ? EditorView.lineWrapping : []),
+    });
+    requestAnimationFrame(() => view.requestMeasure());
+  }, [wordWrap]);
 
   // 文件内容被外部替换（如重新加载）时，同步到编辑器
   useEffect(() => {
