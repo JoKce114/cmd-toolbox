@@ -35,7 +35,9 @@ class ConflictWidget extends WidgetType {
   eq(other: ConflictWidget) {
     return (
       other.block.startLine === this.block.startLine &&
+      other.block.separatorLine === this.block.separatorLine &&
       other.block.endLine === this.block.endLine &&
+      other.block.baseLine === this.block.baseLine &&
       other.block.oursLabel === this.block.oursLabel &&
       other.block.theirsLabel === this.block.theirsLabel
     );

@@ -79,6 +79,15 @@ export function EditorPane({
   }, [conflictCount]);
 
   useEffect(() => {
+    // 保存或重新加载后（dirty 变回 false）结束本次冲突处理，避免之后的普通编辑
+    // 又让「冲突已全部处理」提示重新出现。
+    if (!file.dirty) setHadConflict(false);
+  }, [file.dirty]);
+
+  // 解析器对畸形标记会整体返回空；此时用原始内容兜底，避免把残留标记当成「已全部处理」。
+  const unrecognizedConflict = conflictCount === 0 && /^<{7}/m.test(file.content);
+
+  useEffect(() => {
     return () => onDirtyChangeRef.current(tab.id, false);
   }, [tab.id]);
 
@@ -134,6 +143,13 @@ export function EditorPane({
           <span className="editor-conflict-badge" title={`还有 ${conflictCount} 处冲突未处理`}>
             冲突 {conflictCount} 处
           </span>
+        ) : unrecognizedConflict ? (
+          <span
+            className="editor-conflict-badge"
+            title="文件里仍有无法识别的冲突标记，请手动检查"
+          >
+            存在未识别冲突标记
+          </span>
         ) : null}
         <span className="editor-encoding">{ENCODING_LABEL[file.encoding] || file.encoding}</span>
         <button
@@ -156,7 +172,7 @@ export function EditorPane({
         </p>
       ) : null}
 
-      {hadConflict && conflictCount === 0 && file.dirty ? (
+      {hadConflict && conflictCount === 0 && !unrecognizedConflict && file.dirty ? (
         <p className="editor-notice editor-notice-done">
           冲突已全部处理。按 Ctrl+S 保存，然后点「暂存」标记为已解决。
         </p>

@@ -22,6 +22,16 @@ const MARKER = {
   end: '>>>>>>>',
 };
 
+// git 会在开始/结束/基线标记后追加标签，所以匹配“恰好七个标记字符 + 空白或行尾”；
+// 分隔线不带标签，必须是整行（允许行尾空白与 CR）。
+const START_MARKER = /^<{7}(?=\s|$)/;
+const BASE_MARKER = /^\|{7}(?=\s|$)/;
+const END_MARKER = /^>{7}(?=\s|$)/;
+
+function isSeparatorLine(line: string): boolean {
+  return line.trimEnd() === MARKER.separator;
+}
+
 function labelOf(line: string, marker: string): string {
   return line.slice(marker.length).trim();
 }
@@ -33,7 +43,7 @@ export function parseConflicts(text: string): ConflictBlock[] {
   let index = 0;
 
   while (index < lines.length) {
-    if (!lines[index].startsWith(MARKER.start)) {
+    if (!START_MARKER.test(lines[index])) {
       index += 1;
       continue;
     }
@@ -46,12 +56,12 @@ export function parseConflicts(text: string): ConflictBlock[] {
 
     while (cursor < lines.length) {
       const line = lines[cursor];
-      if (line.startsWith(MARKER.end)) break;
-      if (line.startsWith(MARKER.base) && separatorLine < 0 && baseLine === null) {
+      if (END_MARKER.test(line)) break;
+      if (BASE_MARKER.test(line) && separatorLine < 0 && baseLine === null) {
         baseLine = cursor;
-      } else if (line.startsWith(MARKER.separator) && separatorLine < 0) {
+      } else if (isSeparatorLine(line) && separatorLine < 0) {
         separatorLine = cursor;
-      } else if (line.startsWith(MARKER.start)) {
+      } else if (START_MARKER.test(line)) {
         // 嵌套开始标记说明结构已乱，整体放弃
         return [];
       }
@@ -97,10 +107,11 @@ export function resolveConflict(
 
   const from = offsetOfLine(lines, block.startLine);
   // 替换范围覆盖整块以及其后的换行；换行已被一起替换，插入内容需补回。
+  // 选中的区段为空时 insert 为空串，此时不能再补换行，否则会多出空行。
   const to = block.endLine + 1 >= lines.length
     ? text.length
     : offsetOfLine(lines, block.endLine + 1);
-  if (to > from && block.endLine + 1 < lines.length) insert += '\n';
+  if (insert && to > from && block.endLine + 1 < lines.length) insert += '\n';
 
   return { from, to, insert };
 }

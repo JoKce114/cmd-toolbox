@@ -82,5 +82,50 @@ console.log('9. diff3 采用当前丢弃基线段');
 const d3Result = resolveConflict(DIFF3, d3[0], 'ours');
 assert(DIFF3.slice(0, d3Result.from) + d3Result.insert + DIFF3.slice(d3Result.to) === 'ours', 'diff3 采用当前后只剩当前内容');
 
+console.log('10. 空的实际内容不会留下多余空行');
+const EMPTY_OURS = ['a', '<<<<<<< HEAD', '=======', 'theirs', '>>>>>>> x', 'b'].join('\n');
+const emptyOurs = parseConflicts(EMPTY_OURS);
+assert(emptyOurs.length === 1, '空当前段仍识别为一个冲突块');
+const emptyOursResult = resolveConflict(EMPTY_OURS, emptyOurs[0], 'ours');
+assert(
+  EMPTY_OURS.slice(0, emptyOursResult.from) + emptyOursResult.insert + EMPTY_OURS.slice(emptyOursResult.to) === 'a\nb',
+  '采用当前（空段）后没有多余空行',
+);
+const emptyOursTheirs = resolveConflict(EMPTY_OURS, emptyOurs[0], 'theirs');
+assert(
+  EMPTY_OURS.slice(0, emptyOursTheirs.from) + emptyOursTheirs.insert + EMPTY_OURS.slice(emptyOursTheirs.to) ===
+    'a\ntheirs\nb',
+  '采用传入（空当前段）后内容正确',
+);
+const EMPTY_OURS_EOF = ['a', '<<<<<<< HEAD', '=======', 'theirs', '>>>>>>> x', ''].join('\n');
+const emptyOursEof = parseConflicts(EMPTY_OURS_EOF);
+const emptyOursEofResult = resolveConflict(EMPTY_OURS_EOF, emptyOursEof[0], 'ours');
+assert(
+  EMPTY_OURS_EOF.slice(0, emptyOursEofResult.from) + emptyOursEofResult.insert + EMPTY_OURS_EOF.slice(emptyOursEofResult.to) ===
+    'a\n',
+  '文件末尾的空段不产生多余空行',
+);
+
+console.log('11. 八个等号是内容而非分隔线');
+const EIGHT_EQUALS = [
+  'a',
+  '<<<<<<< HEAD',
+  'ours',
+  '========',
+  'more',
+  '=======',
+  'theirs',
+  '>>>>>>> x',
+  'b',
+].join('\n');
+const eightBlocks = parseConflicts(EIGHT_EQUALS);
+assert(eightBlocks.length === 1, '仍识别为一个冲突块');
+assert(eightBlocks[0].separatorLine === 5, '真正的分隔线被识别（行号 5）');
+const eightTheirs = resolveConflict(EIGHT_EQUALS, eightBlocks[0], 'theirs');
+assert(
+  EIGHT_EQUALS.slice(0, eightTheirs.from) + eightTheirs.insert + EIGHT_EQUALS.slice(eightTheirs.to) === 'a\ntheirs\nb',
+  '采用传入后不残留真实标记',
+);
+
 rmSync(outDir, { recursive: true, force: true });
 console.log(`\n全部通过：${passed} 项`);
