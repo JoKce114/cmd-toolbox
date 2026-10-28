@@ -17,6 +17,7 @@ export interface SessionTab {
   url?: string;
   conversationId?: string;
   filePath?: string;
+  diffChange?: import('./types').GitChange | null;
 }
 
 export interface SessionSnapshot {

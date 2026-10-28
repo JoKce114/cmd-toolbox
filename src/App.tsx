@@ -165,6 +165,41 @@ export default function App() {
   splitRatioByGroupRef.current = splitRatioByGroup;
   const splitDragRef = useRef({ x: 0, ratio: 0.5, width: 1 });
   const [splitDragging, setSplitDragging] = useState(false);
+
+  // 分屏比例变化后延迟落盘：只靠关闭窗口时保存，异常退出会丢掉刚拖过的宽度
+  useEffect(() => {
+    if (!sessionReadyRef.current) return;
+    const timer = window.setTimeout(() => {
+      window.api.session?.save?.({
+        activeGroupKey: activeGroupKeyRef.current,
+        tabs: Object.values(tabsRef.current)
+          .flat()
+          .slice(0, 40)
+          .map((tab) => ({
+            id: tab.id,
+            groupKey: tab.groupKey,
+            shellId: tab.shellId,
+            seq: tab.seq,
+            paneNo: tab.paneNo,
+            descriptor: tab.descriptor,
+            custom: tab.custom,
+            cwd: tab.cwd,
+            url: tab.url || '',
+            conversationId: tab.conversationId || '',
+            filePath: tab.filePath || '',
+            diffChange: tab.diffChange || null,
+          })),
+        activeTabByGroup: activeTabByGroupRef.current,
+        sidebarCollapsed: sidebarCollapsedRef.current,
+        rightIdsByGroup: rightIdsByGroupRef.current,
+        rightActiveByGroup: rightActiveByGroupRef.current,
+        focusSideByGroup: focusSideByGroupRef.current,
+        splitRatioByGroup: splitRatioByGroupRef.current,
+      }).catch(() => {});
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [splitRatioByGroup, rightIdsByGroup]);
+
   const [prefs, setPrefs] = useState(readPrefs);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const outputBySessionRef = useRef<Record<string, string>>({});
@@ -339,6 +374,26 @@ export default function App() {
                 cwd: group.path,
                 url: saved.url || 'about:blank',
                 conversationId: '',
+                exited: false,
+              },
+            ];
+            continue;
+          }
+
+          if (saved.shellId === 'diff' && saved.diffChange && saved.diffChange.path) {
+            restoredTabs[saved.groupKey] = [
+              ...existing,
+              {
+                id: saved.id,
+                groupKey: saved.groupKey,
+                sessionId: '',
+                shellId: 'diff',
+                seq: saved.seq || 1,
+                paneNo,
+                descriptor: saved.descriptor || '差异',
+                custom: saved.custom,
+                cwd: group.path,
+                diffChange: saved.diffChange,
                 exited: false,
               },
             ];
@@ -807,6 +862,7 @@ export default function App() {
           cwd: tab.cwd,
           conversationId: tab.conversationId || '',
           filePath: tab.filePath || '',
+          diffChange: tab.diffChange || null,
           paneNo: tab.paneNo,
           url: tab.url || '',
         }));
