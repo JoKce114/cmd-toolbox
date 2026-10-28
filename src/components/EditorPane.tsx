@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Save, Search, X } from 'lucide-react';
-import { toErrorMessage } from '../lib';
-import { useEditorFile } from '../useEditorFile';
+import { cn, toErrorMessage } from '../lib';
+import { useEditorFiles } from '../useEditorFiles';
 import { FileTree } from './FileTree';
 import { SearchPanel } from './SearchPanel';
 import { CodeMirrorHost } from './CodeMirrorHost';
@@ -39,15 +39,31 @@ export function EditorPane({
   themeMode,
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
-  const { file, open, update, save } = useEditorFile(group, onError);
+  const {
+    files,
+    openPaths,
+    activePath,
+    active: file,
+    hasDirty,
+    open,
+    update,
+    save,
+    close,
+    setActivePath,
+  } = useEditorFiles(group, onError);
+
   const [conflictCount, setConflictCount] = useState(0);
   const [hadConflict, setHadConflict] = useState(false);
   const [markingResolved, setMarkingResolved] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const [pendingClose, setPendingClose] = useState<string | null>(null);
+
+  const rootRef = useRef<HTMLElement>(null);
   const fileRef = useRef(file);
   fileRef.current = file;
-  const rootRef = useRef<HTMLElement>(null);
+  const activePathRef = useRef(activePath);
+  activePathRef.current = activePath;
+
   // 回调每次渲染都是新函数：放进 ref，避免 effect 因函数身份变化而反复触发
   const onTitleChangeRef = useRef(onTitleChange);
   onTitleChangeRef.current = onTitleChange;
@@ -55,64 +71,59 @@ export function EditorPane({
   onDirtyChangeRef.current = onDirtyChange;
 
   useEffect(() => {
-    if (
-      tab.filePath &&
-      tab.filePath !== file.relPath &&
-      tab.filePath !== file.failedPath
-    ) {
-      void open(tab.filePath);
-    }
-  }, [tab.filePath, file.relPath, file.failedPath, open]);
+    if (tab.filePath && tab.filePath !== activePath) void open(tab.filePath);
+  }, [tab.filePath, activePath, open]);
 
   useEffect(() => {
-    const base = file.relPath ? file.relPath.split('/').pop() || '编辑器' : '编辑器';
+    const base = activePath ? activePath.split('/').pop() || '编辑器' : '编辑器';
     onTitleChangeRef.current(`${group.name} · ${base}${file.dirty ? ' •' : ''}`);
-  }, [file.relPath, file.dirty, group.name]);
+  }, [activePath, file.dirty, group.name]);
 
   useEffect(() => {
-    onDirtyChangeRef.current(tab.id, file.dirty);
-  }, [tab.id, file.dirty]);
+    onDirtyChangeRef.current(tab.id, hasDirty);
+  }, [tab.id, hasDirty]);
 
   useEffect(() => {
     setConflictCount(0);
-  }, [file.relPath]);
-
-  useEffect(() => {
     setHadConflict(false);
-  }, [file.relPath]);
+  }, [activePath]);
 
   useEffect(() => {
     if (conflictCount > 0) setHadConflict(true);
   }, [conflictCount]);
 
   useEffect(() => {
-    // 保存或重新加载后（dirty 变回 false）结束本次冲突处理，避免之后的普通编辑
-    // 又让「冲突已全部处理」提示重新出现。
+    // 保存后（dirty 变回 false）结束本次冲突处理，避免之后的普通编辑
+    // 又让「冲突已全部处理」提示重新出现
     if (!file.dirty) setHadConflict(false);
   }, [file.dirty]);
 
-  // 解析器对畸形标记会整体返回空；此时用原始内容兜底，避免把残留标记当成「已全部处理」。
+  // 解析器对畸形标记会整体返回空；此时用原始内容兜底，避免把残留标记当成「已全部处理」
   const unrecognizedConflict = conflictCount === 0 && /^<{7}/m.test(file.content);
 
   useEffect(() => {
     return () => onDirtyChangeRef.current(tab.id, false);
   }, [tab.id]);
 
-  const requestOpen = (relPath: string) => {
-    if (fileRef.current.dirty) {
-      setPendingPath(relPath);
+  const handleSave = useCallback(async () => {
+    const current = fileRef.current;
+    const target = activePathRef.current;
+    if (!target) return;
+    if (current.readOnly) {
+      onToast('该文件为只读，无法保存', 'error');
       return;
     }
-    void open(relPath);
-  };
+    const ok = await save(target);
+    if (ok) onToast('已保存', 'success');
+  }, [onToast, save]);
 
   const markResolved = useCallback(async () => {
-    const current = fileRef.current;
-    if (!current.relPath) return;
+    const target = activePathRef.current;
+    if (!target) return;
     setMarkingResolved(true);
     try {
-      await window.api.git.stage(group.path, [current.relPath]);
-      onToast(`已标记「${current.relPath}」为已解决`, 'success');
+      await window.api.git.stage(group.path, [target]);
+      onToast(`已标记「${target}」为已解决`, 'success');
       setHadConflict(false);
     } catch (error) {
       onToast(toErrorMessage(error), 'error');
@@ -120,15 +131,6 @@ export function EditorPane({
       setMarkingResolved(false);
     }
   }, [group.path, onToast]);
-
-  const handleSave = useCallback(async () => {
-    if (fileRef.current.readOnly) {
-      onToast('该文件为只读，无法保存', 'error');
-      return;
-    }
-    const ok = await save();
-    if (ok) onToast('已保存', 'success');
-  }, [onToast, save]);
 
   useEffect(() => {
     if (!active) return;
@@ -140,23 +142,45 @@ export function EditorPane({
         setSearchOpen(true);
         return;
       }
+      if ((event.ctrlKey || event.metaKey) && key === 'w') {
+        event.preventDefault();
+        requestCloseTab(activePathRef.current);
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && key === 's') {
-        // 分屏时左右两侧的页签都可能“激活”；只处理焦点落在本窗格内的事件，避免双保存
         event.preventDefault();
         void handleSave();
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, handleSave]);
 
+  const requestCloseTab = (relPath: string) => {
+    if (!relPath) return;
+    const target = files[relPath];
+    if (target?.dirty) {
+      setPendingClose(relPath);
+      return;
+    }
+    close(relPath);
+  };
+
+  const requestOpen = (relPath: string) => {
+    void open(relPath);
+  };
+
   const requestClose = () => {
-    if (file.dirty) {
-      const ok = window.confirm(`「${file.relPath}」有未保存的修改，关闭将丢失。是否继续？`);
+    if (hasDirty) {
+      const names = openPaths.filter((item) => files[item].dirty).join('、');
+      const ok = window.confirm(`「${names}」有未保存的修改，关闭将丢失。是否继续？`);
       if (!ok) return;
     }
     onClose(tab);
   };
+
+  const encodingLabel = ENCODING_LABEL[file.encoding] || file.encoding;
 
   return (
     <section
@@ -164,22 +188,10 @@ export function EditorPane({
       className={`terminal-pane editor-pane theme-${themeMode}${active ? '' : ' is-hidden'}`}
     >
       <header className="pane-header">
-        <span className="pane-path" title={file.relPath || group.path}>
-          {file.relPath || group.name}
+        <span className="pane-path" title={activePath || group.path}>
+          {activePath || group.name}
         </span>
-        {conflictCount > 0 ? (
-          <span className="editor-conflict-badge" title={`还有 ${conflictCount} 处冲突未处理`}>
-            冲突 {conflictCount} 处
-          </span>
-        ) : unrecognizedConflict ? (
-          <span
-            className="editor-conflict-badge"
-            title="文件里仍有无法识别的冲突标记，请手动检查"
-          >
-            存在未识别冲突标记
-          </span>
-        ) : null}
-        <span className="editor-encoding">{ENCODING_LABEL[file.encoding] || file.encoding}</span>
+        <span className="editor-encoding">{activePath ? encodingLabel : ''}</span>
         <button
           type="button"
           className={`icon-btn${file.saving ? ' is-saving' : ''}`}
@@ -202,10 +214,37 @@ export function EditorPane({
         </button>
       </header>
 
-      {file.readOnly ? (
-        <p className="editor-notice">
-          {file.relPath ? '该文件为只读（二进制、过大或无法解码）' : ''}
-        </p>
+      {openPaths.length > 0 ? (
+        <div className="editor-tabs">
+          {openPaths.map((relPath) => (
+            <div
+              key={relPath}
+              className={cn('editor-tab', relPath === activePath && 'active')}
+            >
+              <button
+                type="button"
+                className="editor-tab-name"
+                title={relPath}
+                onClick={() => setActivePath(relPath)}
+              >
+                {relPath.split('/').pop()}
+                {files[relPath].dirty ? <span className="editor-tab-dot">•</span> : null}
+              </button>
+              <button
+                type="button"
+                className="editor-tab-close"
+                title="关闭该文件"
+                onClick={() => requestCloseTab(relPath)}
+              >
+                <X size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {file.readOnly && activePath ? (
+        <p className="editor-notice">该文件为只读（二进制、过大或无法解码）</p>
       ) : null}
 
       {hadConflict && conflictCount === 0 && !unrecognizedConflict && file.dirty ? (
@@ -214,7 +253,7 @@ export function EditorPane({
         </p>
       ) : null}
 
-      {hadConflict && conflictCount === 0 && !unrecognizedConflict && !file.dirty && !file.readOnly && file.relPath ? (
+      {hadConflict && conflictCount === 0 && !unrecognizedConflict && !file.dirty && !file.readOnly && activePath ? (
         <div className="editor-notice editor-notice-done editor-resolve-bar">
           <span>冲突已全部处理并保存，标记为已解决后即可提交。</span>
           <button
@@ -240,16 +279,16 @@ export function EditorPane({
             onError={onError}
           />
         ) : (
-          <FileTree group={group} activePath={file.relPath} onOpen={requestOpen} onError={onError} />
+          <FileTree group={group} activePath={activePath} onOpen={requestOpen} onError={onError} />
         )}
         <div className="editor-main">
-          {file.relPath ? (
+          {activePath ? (
             <CodeMirrorHost
               value={file.content}
-              filePath={file.relPath}
+              filePath={activePath}
               readOnly={file.readOnly}
               themeMode={themeMode}
-              onChange={update}
+              onChange={(value) => update(activePath, value)}
               onConflictCountChange={setConflictCount}
             />
           ) : (
@@ -258,23 +297,27 @@ export function EditorPane({
         </div>
       </div>
 
-      {pendingPath ? (
+      {pendingClose ? (
         <div className="modal-overlay" role="dialog" aria-modal="true">
           <div className="modal-card editor-confirm">
             <p className="confirm-message">
-              「{file.relPath}」有未保存的修改，切换将丢失。是否继续？
+              「{pendingClose}」有未保存的修改，关闭将丢失。是否继续？
             </p>
             <div className="modal-footer">
-              <button type="button" className="btn btn-secondary" onClick={() => setPendingPath(null)}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setPendingClose(null)}
+              >
                 取消
               </button>
               <button
                 type="button"
                 className="btn btn-primary"
                 onClick={() => {
-                  const next = pendingPath;
-                  setPendingPath(null);
-                  if (next) void open(next);
+                  const target = pendingClose;
+                  setPendingClose(null);
+                  if (target) close(target);
                 }}
               >
                 继续
