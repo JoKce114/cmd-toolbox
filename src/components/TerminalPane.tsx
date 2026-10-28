@@ -284,8 +284,20 @@ export function TerminalPane({
         onFontSizeDeltaRef.current(event.deltaY < 0 ? 1 : -1);
         return;
       }
-      if (event.shiftKey) return;
-      if (event.deltaY === 0) return;
+      if (event.shiftKey) {
+        // Shift+滚轮在 xterm 里是横向滚动，终端不支持，直接吞掉
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.deltaY === 0) {
+        // 只有横向分量的手势（触控板横扫）同样不该让视图横移
+        if (event.deltaX !== 0) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
       const buffer = term.buffer.active;
       if (buffer.type !== 'normal' || term.modes.mouseTrackingMode !== 'none') return;
       event.preventDefault();
@@ -368,7 +380,31 @@ export function TerminalPane({
       } catch {
         // the pane may be mid-transition
       }
+      clampHorizontalScroll();
     };
+
+    // xterm 6 的滚动容器允许横向滚动，且会自动横向滚动以跟随光标。
+    // 中文字符实际渲染宽度可能超出理论单元格宽度，导致整行溢出、
+    // 视图被推着往左跑（看起来像「飞出去」）。这里先按溢出的像素反算列数收一收，
+    // 再把任何残留的横向偏移归零。
+    const clampHorizontalScroll = () => {
+      const scrollable = mount.querySelector('.xterm-scrollable-element');
+      if (!scrollable) return;
+      if (scrollable.scrollWidth > scrollable.clientWidth + 1) {
+        const cellWidth = scrollable.clientWidth / Math.max(1, term.cols);
+        const overflow = scrollable.scrollWidth - scrollable.clientWidth;
+        const nextCols = Math.max(20, term.cols - Math.ceil(overflow / cellWidth));
+        if (nextCols < term.cols) {
+          try {
+            term.resize(nextCols, term.rows);
+          } catch {
+            // ignore transient resize failures
+          }
+        }
+      }
+      if (scrollable.scrollLeft !== 0) scrollable.scrollLeft = 0;
+    };
+
     frame = requestAnimationFrame(() => {
       fitNow();
       if (activeRef.current) term.focus();
@@ -378,6 +414,14 @@ export function TerminalPane({
       frame = requestAnimationFrame(fitNow);
     });
     observer.observe(mount);
+
+    // xterm 自己也可能把 scrollLeft 挪走，任何滚动都拉回 0
+    const scrollableHost = mount.querySelector('.xterm');
+    const resetScrollLeft = () => {
+      const scrollable = mount.querySelector('.xterm-scrollable-element');
+      if (scrollable) scrollable.scrollLeft = 0;
+    };
+    scrollableHost?.addEventListener('scroll', resetScrollLeft, { capture: true, passive: true });
 
     void document.fonts?.ready.then(() => {
       if (termRef.current === term) fitNow();
@@ -390,6 +434,7 @@ export function TerminalPane({
       mount.removeEventListener('mousedown', handleMouseDown, { capture: true });
       mount.removeEventListener('dragover', handleDragOver, { capture: true });
       mount.removeEventListener('drop', handleDrop, { capture: true });
+      scrollableHost?.removeEventListener('scroll', resetScrollLeft, { capture: true });
       unsubscribe();
       dataDisposable.dispose();
       resizeDisposable.dispose();

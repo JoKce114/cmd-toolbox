@@ -1852,6 +1852,12 @@ p {
   height: 0;
 }
 
+/* 终端不做横向滚动：内容按列数换行，宽度超出只会被裁掉，
+   不会把视图推着往左跑。 */
+.terminal-mount .xterm-scrollable-element {
+  overflow-x: hidden !important;
+}
+
 .terminal-mount .xterm-helper-textarea {
   user-select: text;
 }
