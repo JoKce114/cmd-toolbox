@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld('api', {
     status: (projectPath) => invoke('git:status', projectPath),
     commit: (projectPath, message) => invoke('git:commit', projectPath, message),
     push: (projectPath) => invoke('git:push', projectPath),
+    fetch: (projectPath) => invoke('git:fetch', projectPath),
+    pull: (projectPath) => invoke('git:pull', projectPath),
     init: (projectPath) => invoke('git:init', projectPath),
     diff: (projectPath, filePath, changeStatus) =>
       invoke('git:diff', projectPath, filePath, changeStatus),

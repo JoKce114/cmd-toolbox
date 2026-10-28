@@ -32,6 +32,8 @@ export function useGitStatus(activeGroup: Group | null, options: GitStatusOption
 
     setRefreshing(true);
     try {
+      // 先静默 fetch，让 ahead/behind 反映远端真实状态；无网络或没有上游时忽略即可
+      await window.api.git.fetch(group.path).catch(() => {});
       const next = await window.api.git.status(group.path);
       if (requestId === requestIdRef.current) setStatus(next);
     } catch (error) {

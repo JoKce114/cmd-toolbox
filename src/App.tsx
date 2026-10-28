@@ -558,6 +558,23 @@ export default function App() {
     }
   }, [pushToast, refreshGit]);
 
+  const [pullBusy, setPullBusy] = useState(false);
+
+  const gitPull = useCallback(async () => {
+    const group = gitGroupRef.current;
+    if (!group) return;
+    setPullBusy(true);
+    try {
+      await window.api.git.pull(group.path);
+      pushToast('已拉取到最新代码', 'success');
+      await refreshGit();
+    } catch (error) {
+      pushToast(toErrorMessage(error), 'error');
+    } finally {
+      setPullBusy(false);
+    }
+  }, [pushToast, refreshGit]);
+
   const gitInit = useCallback(async () => {
     const group = gitGroupRef.current;
     if (!group) return false;
@@ -1936,6 +1953,8 @@ export default function App() {
                 onRefresh={() => void refreshGit()}
                 onCommit={gitCommit}
                 onPush={gitPush}
+                onPull={() => void gitPull()}
+                pullBusy={pullBusy}
                 onInit={gitInit}
                 onOpenDiff={(change) => void gitOpenDiff(change)}
                 onOpenInEditor={(change) => openEditorFile(gitGroup, change.path)}

@@ -1,5 +1,6 @@
 import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
+  ArrowDownToLine,
   ArrowUp,
   Check,
   FileDiff,
@@ -32,6 +33,8 @@ export type GitPanelProps = {
   onRefresh: () => void;
   onCommit: (message: string) => Promise<boolean>;
   onPush: () => Promise<boolean>;
+  onPull: () => void;
+  pullBusy: boolean;
   onInit: () => Promise<boolean>;
   onOpenDiff: (change: GitChange) => void;
   onOpenInEditor: (change: GitChange) => void;
@@ -54,6 +57,8 @@ export function GitPanel({
   onRefresh,
   onCommit,
   onPush,
+  onPull,
+  pullBusy,
   onInit,
   onOpenDiff,
   onOpenInEditor,
@@ -311,6 +316,19 @@ export function GitPanel({
           {status.ahead > 0 ? <span className="git-ahead">↑{status.ahead}</span> : null}
           {status.behind > 0 ? <span className="git-behind">↓{status.behind}</span> : null}
         </button>
+
+        {status.behind > 0 ? (
+          <button
+            type="button"
+            className="git-pull-button"
+            title={`线上有 ${status.behind} 个新提交，点击拉取`}
+            disabled={pullBusy}
+            onClick={onPull}
+          >
+            <ArrowDownToLine size={12} className={pullBusy ? 'is-spinning' : undefined} />
+            <span>{pullBusy ? '拉取中…' : '拉取'}</span>
+          </button>
+        ) : null}
 
         {branchMenuOpen ? (
           <BranchMenu

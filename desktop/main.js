@@ -261,6 +261,14 @@ function registerIpc() {
     git.push(assertProjectPath(projectPath)),
   );
 
+  ipcMain.handle('git:fetch', (_event, projectPath) =>
+    git.fetchRemote(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:pull', (_event, projectPath) =>
+    git.pull(assertProjectPath(projectPath)),
+  );
+
   ipcMain.handle('git:init', (_event, projectPath) =>
     git.init(assertProjectPath(projectPath)),
   );

@@ -6,6 +6,8 @@ const { resolveWithin } = require('./path-guard');
 
 const FAST_TIMEOUT = 15000;
 const PUSH_TIMEOUT = 120000;
+const NETWORK_TIMEOUT = 60000;
+const FETCH_TIMEOUT = 15000;
 const MAX_BUFFER = 8 * 1024 * 1024;
 
 function isDirectory(target) {
@@ -392,6 +394,45 @@ async function init(projectPath) {
   return { ok: true };
 }
 
+// 只更新远程跟踪分支，不改工作区；失败由调用方决定是否提示
+async function fetchRemote(projectPath) {
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+  const result = await runGit(projectPath, ['fetch', '--prune'], {
+    timeout: FETCH_TIMEOUT,
+  });
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  return { ok: true };
+}
+
+// 只做快进；需要合并或变基时让用户去终端，避免在面板里产生意料外的合并
+async function pull(projectPath) {
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+
+  const upstream = await runGit(projectPath, [
+    'rev-parse',
+    '--abbrev-ref',
+    '--symbolic-full-name',
+    '@{u}',
+  ]);
+  if (!upstream.ok || !upstream.stdout.trim()) {
+    const branchResult = await runGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    const branch = branchResult.stdout.trim() || '当前分支';
+    throw new Error(`当前分支没有上游，无法拉取。请先在终端执行 git push -u origin ${branch}`);
+  }
+
+  const result = await runGit(projectPath, ['pull', '--ff-only'], {
+    timeout: NETWORK_TIMEOUT,
+  });
+  if (!result.ok) {
+    const text = `${result.stdout}\n${result.stderr}`;
+    if (/not possible to fast-forward|divergent|have diverged/i.test(text)) {
+      throw new Error('本地和线上分支已分叉，无法快进。请到终端执行 git pull 后处理');
+    }
+    throw new Error(cleanError(result.error, result.stderr));
+  }
+  return { ok: true };
+}
+
 async function diffCommand(projectPath, filePath, changeStatus) {
   const root = path.resolve(projectPath);
   const target = resolveWithin(root, String(filePath || ''));
@@ -416,6 +457,8 @@ module.exports = {
   status,
   commit,
   push,
+  fetchRemote,
+  pull,
   init,
   diffCommand,
   stage,

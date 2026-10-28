@@ -957,6 +957,29 @@ p {
   color: #d97706;
 }
 
+.git-pull-button {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 7px;
+  border: 1px solid #f0d9a8;
+  border-radius: 6px;
+  background: #fff8e6;
+  color: #9a6700;
+  font-size: 11px;
+}
+
+.git-pull-button:hover:not(:disabled) {
+  background: #fdf0cf;
+  border-color: #e6c477;
+}
+
+.git-pull-button:disabled {
+  opacity: 0.6;
+}
+
 .git-message {
   width: 100%;
   min-height: 56px;
