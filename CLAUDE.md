@@ -214,3 +214,5 @@ node tests/smoke.mjs
 - 不要在 `dist` 脚本里去掉 `--publish never`（防止环境里有 `GH_TOKEN` 时误上传）
 - 不要为了绕过 360 的文件锁去改打包配置或加 `--no-verify` 之类的开关
 - 不要把构建调试产物（`builder-debug.yml`）当成 Release 附件
+- **不要在提交信息里加任何 AI 署名**（`Co-Authored-By: Claude ...`、`Generated with ...`
+  之类一律不加）。提交信息只写改动本身和原因。
