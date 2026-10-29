@@ -597,10 +597,15 @@ console.log('16. 修改提交');
 // 先重新提交，让 HEAD 恢复存在
 await click(page.getByRole('button', { name: '提交', exact: true }));
 await waitFor(
-  async () => (await page.locator('.git-ops-button[data-action="amend"]').count()) > 0,
-  '提交完成',
+  async () =>
+    execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: repo, encoding: 'utf8' }).trim() ===
+    '历史多文件',
+  '重新提交完成',
 );
-await page.waitForTimeout(800);
+await waitFor(
+  async () => page.locator('.git-ops-button[data-action="amend"]').isEnabled(),
+  '提交结束后操作按钮恢复可用',
+);
 await click(page.locator('.git-ops-button[data-action="amend"]'));
 await page.locator('#amend-message').waitFor({ timeout: 8000 });
 await page.locator('#amend-message').fill('改写后的信息');

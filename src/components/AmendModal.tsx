@@ -49,7 +49,7 @@ export function AmendModal({
         <p className="modal-warning">这个提交已经推送过，修改后需要强推才能同步远端。</p>
       ) : null}
       <div className="modal-footer">
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
+        <button type="button" className="btn btn-secondary" onClick={onClose} disabled={submitting}>
           取消
         </button>
         <button

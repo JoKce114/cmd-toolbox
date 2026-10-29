@@ -470,8 +470,8 @@ export function GitPanel({
             type="button"
             className="btn btn-secondary btn-sm git-ops-button"
             data-action="stash"
-            title="把全部未提交改动收进 stash"
-            disabled={!status.hasChanges || stashSaving}
+            title={head ? '把全部未提交改动收进 stash' : '还没有提交，无法收起改动'}
+            disabled={!status.hasChanges || !head || stashSaving}
             onClick={async () => {
               setStashSaving(true);
               try {
@@ -489,7 +489,7 @@ export function GitPanel({
             className="btn btn-secondary btn-sm git-ops-button"
             data-action="undo"
             title="撤销最后一次提交，改动回到暂存区"
-            disabled={!head || undoBusy}
+            disabled={!head || undoBusy || busy}
             onClick={() => setConfirmUndo(true)}
           >
             <RotateCcw size={13} />
@@ -500,7 +500,7 @@ export function GitPanel({
             className="btn btn-secondary btn-sm git-ops-button"
             data-action="amend"
             title="修改最后一次提交的信息"
-            disabled={!head || amendBusy}
+            disabled={!head || amendBusy || busy}
             onClick={() => setAmendOpen(true)}
           >
             <Pencil size={13} />
@@ -627,7 +627,7 @@ export function GitPanel({
             setUndoBusy(true);
             try {
               const restored = await onUndoCommit();
-              if (restored) {
+              if (restored !== null) {
                 setMessage(restored);
                 setPhase('idle');
               }
@@ -648,7 +648,12 @@ export function GitPanel({
           onConfirm={async (next) => {
             setAmendBusy(true);
             try {
-              if (await onAmend(next)) setAmendOpen(false);
+              if (await onAmend(next)) {
+                setAmendOpen(false);
+                setPhase('idle');
+                setMessage(next);
+                setCommittedMessage('');
+              }
             } finally {
               setAmendBusy(false);
             }
