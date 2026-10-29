@@ -1,4 +1,8 @@
-import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import {
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import {
   Archive,
   ArrowDownToLine,
@@ -7,6 +11,7 @@ import {
   ChevronRight,
   FileCode,
   GitBranch,
+  MoreHorizontal,
   Pencil,
   Plus,
   RefreshCw,
@@ -16,7 +21,16 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib';
 import { useCollapsedSection } from '../useCollapsedSection';
-import type { GitChange, GitChangeStatus, GitStatus, HeadCommit, StashEntry, SyncPrompt } from '../types';
+import type {
+  GitChange,
+  GitChangeStatus,
+  GitStatus,
+  HeadCommit,
+  MenuEntry,
+  StashEntry,
+  SyncPrompt,
+} from '../types';
+import { PopupMenu } from './PopupMenu';
 import { AmendModal } from './AmendModal';
 import { BranchPickerModal } from './BranchPickerModal';
 import { MergeModal } from './MergeModal';
@@ -149,6 +163,7 @@ export function GitPanel({
   const [amendBusy, setAmendBusy] = useState(false);
   const [headBusy, setHeadBusy] = useState(false);
   const [stashSaving, setStashSaving] = useState(false);
+  const [opsMenu, setOpsMenu] = useState<{ x: number; y: number } | null>(null);
 
   const runPathAction = async (key: string, action: () => Promise<boolean>) => {
     setBusyPaths((previous) => new Set(previous).add(key));
@@ -489,7 +504,7 @@ export function GitPanel({
         <div className="git-ops-row">
           <button
             type="button"
-            className="btn btn-secondary btn-sm git-ops-button"
+            className="btn btn-secondary btn-sm git-ops-button git-ops-stash"
             data-action="stash"
             title={head ? '把全部未提交改动收进 stash' : '还没有提交，无法收起改动'}
             disabled={!status.hasChanges || !head || stashSaving || stashBusy !== null}
@@ -507,41 +522,18 @@ export function GitPanel({
           </button>
           <button
             type="button"
-            className="btn btn-secondary btn-sm git-ops-button"
-            data-action="undo"
-            title="撤销最后一次提交，改动回到暂存区"
-            disabled={!head || undoBusy || headBusy || busy}
-            onClick={async () => {
-              setHeadBusy(true);
-              try {
-                const fresh = await onRefreshHead();
-                if (fresh) setConfirmUndo(fresh);
-              } finally {
-                setHeadBusy(false);
-              }
+            className="git-ops-more"
+            aria-label="更多提交操作"
+            aria-haspopup="menu"
+            aria-expanded={opsMenu !== null}
+            title={head ? '更多提交操作' : '还没有提交可以操作'}
+            disabled={!head}
+            onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setOpsMenu({ x: rect.right - 176, y: rect.bottom + 6 });
             }}
           >
-            <RotateCcw size={13} />
-            {undoBusy ? '撤销中…' : '撤销提交'}
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm git-ops-button"
-            data-action="amend"
-            title="修改最后一次提交的信息"
-            disabled={!head || amendBusy || headBusy || busy}
-            onClick={async () => {
-              setHeadBusy(true);
-              try {
-                const fresh = await onRefreshHead();
-                if (fresh) setAmendHead(fresh);
-              } finally {
-                setHeadBusy(false);
-              }
-            }}
-          >
-            <Pencil size={13} />
-            修改提交
+            <MoreHorizontal size={15} />
           </button>
         </div>
       {status.hasChanges || phase === 'committed' ? (
@@ -694,6 +686,52 @@ export function GitPanel({
           </ul>
         )}
       </div>
+
+      {opsMenu ? (
+        <PopupMenu
+          state={{
+            x: opsMenu.x,
+            y: opsMenu.y,
+            items: [
+              {
+                type: 'item',
+                id: 'git-undo-commit',
+                label: undoBusy ? '撤销中…' : '撤销提交',
+                icon: <RotateCcw size={14} />,
+                title: '撤销最后一次提交，改动回到暂存区',
+                disabled: !head || undoBusy || headBusy || busy,
+                onSelect: async () => {
+                  setHeadBusy(true);
+                  try {
+                    const fresh = await onRefreshHead();
+                    if (fresh) setConfirmUndo(fresh);
+                  } finally {
+                    setHeadBusy(false);
+                  }
+                },
+              },
+              {
+                type: 'item',
+                id: 'git-amend-commit',
+                label: '修改提交',
+                icon: <Pencil size={14} />,
+                title: '修改最后一次提交的信息',
+                disabled: !head || amendBusy || headBusy || busy,
+                onSelect: async () => {
+                  setHeadBusy(true);
+                  try {
+                    const fresh = await onRefreshHead();
+                    if (fresh) setAmendHead(fresh);
+                  } finally {
+                    setHeadBusy(false);
+                  }
+                },
+              },
+            ] as MenuEntry[],
+          }}
+          onClose={() => setOpsMenu(null)}
+        />
+      ) : null}
 
       {confirmDropStash ? (
         <ConfirmDialog

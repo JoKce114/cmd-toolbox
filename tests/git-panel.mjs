@@ -79,6 +79,13 @@ async function waitFor(predicate, message, timeout = 15000) {
   }
 }
 
+// 撤销/修改提交收在「⋯」菜单里，必须先点开再选
+async function chooseOpsMenu(label) {
+  await click(page.locator('.git-ops-more'));
+  await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+  await click(page.getByRole('menuitem', { name: label, exact: true }));
+}
+
 async function addProject(path, name) {
   const modal = page.locator('.modal-card');
   const deadline = Date.now() + 20000;
@@ -574,7 +581,7 @@ const secondBody = await commitPane.locator('.diff-body').innerText();
 assert(firstBody !== secondBody, '切换文件后正文变化');
 
 console.log('15. 撤销提交');
-await click(page.locator('.git-ops-button[data-action="undo"]'));
+await chooseOpsMenu('撤销提交');
 await page.locator('.modal-card').filter({ hasText: '撤销提交' }).waitFor({ timeout: 8000 });
 await click(page.getByRole('button', { name: '确定撤销', exact: true }));
 await waitFor(
@@ -595,7 +602,7 @@ assert(
 
 console.log('15b. 撤销后修改提交读取真实 HEAD');
 // 撤销后 head 缓存可能仍是刚被撤销的提交，弹窗必须重新拉取真实 HEAD 做预填
-await click(page.locator('.git-ops-button[data-action="amend"]'));
+await chooseOpsMenu('修改提交');
 await page.locator('#amend-message').waitFor({ timeout: 8000 });
 const freshAmendValue = await page.locator('#amend-message').inputValue();
 const realHeadMessage = execFileSync('git', ['log', '-1', '--pretty=%B'], {
@@ -617,10 +624,10 @@ await waitFor(
   '重新提交完成',
 );
 await waitFor(
-  async () => page.locator('.git-ops-button[data-action="amend"]').isEnabled(),
+  async () => page.locator('.git-ops-more').isEnabled(),
   '提交结束后操作按钮恢复可用',
 );
-await click(page.locator('.git-ops-button[data-action="amend"]'));
+await chooseOpsMenu('修改提交');
 await page.locator('#amend-message').waitFor({ timeout: 8000 });
 await page.locator('#amend-message').fill('改写后的信息');
 await click(page.getByRole('button', { name: '保存修改', exact: true }));
