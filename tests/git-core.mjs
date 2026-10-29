@@ -391,9 +391,31 @@ try {
 } catch (error) {
   detachedError = error.message;
 }
-assert(detachedError.includes('游离 HEAD'), '游离 HEAD 时拒绝撤销提交');
+assert(detachedError === '当前处于游离 HEAD 状态，无法撤销提交', '游离 HEAD 时拒绝撤销提交');
 const detachedStatus = await git.status(detachedRepo);
 assert(detachedStatus.ok === true, '拒绝后仓库仍然可用');
 assert((await git.headCommit(detachedRepo)) !== null, '拒绝后 HEAD 未被删除');
+
+console.log('22. 提交历史');
+const logRepo = makeRepo();
+writeFileSync(join(logRepo, 'a.txt'), 'a\n');
+await git.stageAll(logRepo);
+await git.commit(logRepo, '第一条');
+writeFileSync(join(logRepo, 'b.txt'), 'b\n');
+await git.stageAll(logRepo);
+await git.commit(logRepo, '修复  登录   超时');
+writeFileSync(join(logRepo, 'c.txt'), 'c\n');
+await git.stageAll(logRepo);
+await git.commit(logRepo, '第三条');
+const history = await git.log(logRepo);
+assert(history.commits.length === 3, '返回全部三条提交');
+const [latestLog, spacedLog, oldestLog] = history.commits;
+assert(/^[0-9a-f]{40}$/.test(latestLog.hash), 'hash 为 40 位十六进制');
+assert(latestLog.hash.startsWith(latestLog.short) && latestLog.short.length >= 4, 'short 是 hash 前缀');
+assert(latestLog.author === 'Test', 'author 解析正确');
+assert(latestLog.when.length > 0, 'when 非空');
+assert(latestLog.subject === '第三条', 'subject 解析正确');
+assert(spacedLog.subject === '修复  登录   超时', 'subject 保留多个空格');
+assert(oldestLog.subject === '第一条', '按时间倒序返回');
 
 console.log(`\n全部通过：${passed} 项`);

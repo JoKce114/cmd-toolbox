@@ -623,7 +623,7 @@ async function log(projectPath, limit = 30) {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => {
-      const parts = line.split(SEP);
+      const parts = line.split(UNIT);
       return {
         hash: parts[0] || '',
         short: parts[1] || '',
