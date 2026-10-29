@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Download,
   FileCode2,
@@ -174,6 +174,15 @@ export function SettingsModal({
 
   const startupDisabled = !loginItem || !loginItem.supported;
 
+  // 保存期间用户仍可以取消；异步写入返回时组件已经卸载、状态也读不到最新值，
+  // 所以用 ref 记录「面板已关闭」，回来后不再落盘偏好。取消按钮保持可用。
+  const cancelledRef = useRef(false);
+
+  const handleClose = () => {
+    cancelledRef.current = true;
+    onClose();
+  };
+
   const updateBinding = (action: EditorActionId, combo: string) => {
     const normalized = normalizeCombo(combo);
 
@@ -205,15 +214,25 @@ export function SettingsModal({
       setSaving(true);
       try {
         const result = await onSetLoginItem(launchOnStartup);
+        // 写入途中点了取消：注册表已经改过，但偏好不能再落盘
+        if (cancelledRef.current) return;
         if (!result.ok) {
           // 写入失败时面板保持打开，把原因留在页面上
           setLoginError(result.message);
           return;
         }
+      } catch (error) {
+        if (cancelledRef.current) return;
+        // 通道本身抛错时也要把原因留在面板里，不能静默跳过保存
+        setLoginError(
+          `写入开机启动失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+        return;
       } finally {
         setSaving(false);
       }
     }
+    if (cancelledRef.current) return;
     onSave({
       ...prefs,
       terminalFontSize,
@@ -237,7 +256,7 @@ export function SettingsModal({
       title="设置"
       subtitle="终端与编辑器偏好"
       icon={<Settings size={18} />}
-      onClose={onClose}
+      onClose={handleClose}
       width={560}
     >
       <div className="settings-tabs" role="tablist" aria-label="设置分类">
@@ -627,7 +646,7 @@ export function SettingsModal({
       </div>
 
       <div className="modal-footer">
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
+        <button type="button" className="btn btn-secondary" onClick={handleClose}>
           取消
         </button>
         <button

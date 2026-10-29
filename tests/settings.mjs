@@ -229,8 +229,8 @@ console.log('9. 常规页签与开机自启动');
 await click(page.locator('.titlebar-settings'));
 await waitFor(async () => (await page.locator('.settings-body').count()) > 0, '设置面板');
 const tabsNow = await page.locator('.settings-tab').allInnerTexts();
-ok(tabsNow.some((text) => text.includes('常规')), '存在常规页签');
 ok(tabsNow[0].includes('关于'), '关于仍是第一个页签');
+ok(tabsNow[1].includes('常规'), '常规是第二个页签');
 await click(page.getByRole('tab', { name: '常规' }));
 await page.waitForTimeout(300);
 const startupRow = page.locator('.settings-item').filter({ hasText: '开机自动启动' });
@@ -240,7 +240,7 @@ await waitFor(
   '开发模式下显示不可用原因',
 );
 const startupSwitch = startupRow.locator('.settings-switch');
-ok((await startupSwitch.getAttribute('aria-checked')) === 'false', '默认关闭');
+ok(await startupSwitch.isDisabled(), '开发模式下开机自启动开关不可用');
 
 console.log(`\n全部通过：${passed} 项`);
 await app.close();

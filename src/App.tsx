@@ -651,7 +651,13 @@ export default function App() {
   const setLoginItemEnabled = useCallback(
     async (enabled: boolean): Promise<LoginItemResult> => {
       const result = await window.api.loginItem.set(enabled);
-      if (result.ok) setLoginItem(await window.api.loginItem.get());
+      if (result.ok) {
+        try {
+          setLoginItem(await window.api.loginItem.get());
+        } catch {
+          // 写入本身已成功，刷新失败不能把结果变成失败；下次打开设置会重读
+        }
+      }
       return result;
     },
     [],
