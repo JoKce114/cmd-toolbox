@@ -123,7 +123,7 @@ export function SettingsModal({
   onSave,
 }: SettingsModalProps) {
   const [tab, setTab] = useState<TabId>('about');
-  const [fontSize, setFontSize] = useState(prefs.fontSize);
+  const [terminalFontSize, setTerminalFontSize] = useState(prefs.terminalFontSize);
   const [copyOnSelect, setCopyOnSelect] = useState(prefs.copyOnSelect);
   const [editorWordWrap, setEditorWordWrap] = useState(prefs.editorWordWrap);
   const [editorTabSize, setEditorTabSize] = useState(prefs.editorTabSize);
@@ -301,10 +301,10 @@ export function SettingsModal({
                   type="range"
                   min={11}
                   max={20}
-                  value={fontSize}
-                  onChange={(event) => setFontSize(Number(event.target.value))}
+                  value={terminalFontSize}
+                  onChange={(event) => setTerminalFontSize(Number(event.target.value))}
                 />
-                <em>{fontSize}px</em>
+                <em>{terminalFontSize}px</em>
               </div>
             </div>
 
@@ -431,7 +431,8 @@ export function SettingsModal({
           className="btn btn-primary"
           onClick={() =>
             onSave({
-              fontSize,
+              ...prefs,
+              terminalFontSize,
               copyOnSelect,
               editorWordWrap,
               editorTabSize,

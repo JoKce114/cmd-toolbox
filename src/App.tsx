@@ -58,7 +58,14 @@ import {
 } from './sessionStatus';
 import { TitleBar } from './components/TitleBar';
 import { SettingsModal } from './components/SettingsModal';
-import { readPrefs, readSeenVersion, writePrefs, writeSeenVersion } from './prefs';
+import {
+  TERMINAL_FONT_SIZE_MAX,
+  TERMINAL_FONT_SIZE_MIN,
+  readPrefs,
+  readSeenVersion,
+  writePrefs,
+  writeSeenVersion,
+} from './prefs';
 import { Sidebar } from './components/Sidebar';
 import { TAB_DRAG_TYPE, TabStrip } from './components/TabStrip';
 import { EmptyState } from './components/EmptyState';
@@ -2462,12 +2469,15 @@ export default function App() {
         shellLabel={shellLabel}
         active={active}
         focusTick={focusTick}
-        fontSize={prefs.fontSize}
+        fontSize={prefs.terminalFontSize}
         copyOnSelect={prefs.copyOnSelect}
         onFontSizeDelta={(delta) => {
           setPrefs((previous) => {
-            const fontSize = Math.min(20, Math.max(11, previous.fontSize + delta));
-            const next = { ...previous, fontSize };
+            const fontSize = Math.min(
+              TERMINAL_FONT_SIZE_MAX,
+              Math.max(TERMINAL_FONT_SIZE_MIN, previous.terminalFontSize + delta),
+            );
+            const next = { ...previous, terminalFontSize: fontSize };
             writePrefs(next);
             return next;
           });
