@@ -18,6 +18,19 @@ function cmdtoolboxToml(mcpUrl) {
   ].join('\n');
 }
 
+// 内容和磁盘上一致就不写：这些是用户的全局配置文件，每次启动无谓重写
+// 会刷新修改时间，也可能和用户正在做的编辑撞车。
+function writeIfChanged(file, content) {
+  try {
+    if (fs.readFileSync(file, 'utf8') === content) return false;
+  } catch {
+    // 文件不存在，正常写入
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content, 'utf8');
+  return true;
+}
+
 function upsertTomlSection(file, mcpUrl, disableCcpanes) {
   let text = '';
   try {
@@ -35,8 +48,7 @@ function upsertTomlSection(file, mcpUrl, disableCcpanes) {
     next = `${next}${next ? '\n\n' : ''}[mcp_servers.ccpanes]\nenabled = false\n`;
   }
   next = `${next}${next ? '\n\n' : ''}${cmdtoolboxToml(mcpUrl).trim()}\n`;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, next, 'utf8');
+  writeIfChanged(file, next);
 }
 
 function parseJsonFile(file) {
@@ -50,8 +62,7 @@ function parseJsonFile(file) {
 }
 
 function writeJson(file, data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  writeIfChanged(file, `${JSON.stringify(data, null, 2)}\n`);
 }
 
 function upsertMcpJson(file, mcpUrl) {
@@ -114,7 +125,7 @@ function writePaneSkill() {
     '4. 禁止为了看页面去下载 HTML 或编写 `.py` 解析。',
     '',
   ].join('\n');
-  fs.writeFileSync(file, body, 'utf8');
+  writeIfChanged(file, body);
 }
 
 function installGlobal(info) {
