@@ -60,6 +60,13 @@ export type GitPanelProps = {
   onSyncChoice: (choice: SyncChoice) => void;
   onSyncClose: () => void;
   commits: Array<{ hash: string; short: string; author: string; when: string; subject: string }>;
+  onOpenCommit: (commit: {
+    hash: string;
+    short: string;
+    author: string;
+    when: string;
+    subject: string;
+  }) => void;
 };
 
 export function GitPanel({
@@ -90,6 +97,7 @@ export function GitPanel({
   onSyncChoice,
   onSyncClose,
   commits,
+  onOpenCommit,
 }: GitPanelProps) {
   const [message, setMessage] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
@@ -583,12 +591,17 @@ export function GitPanel({
           <ul className="git-history-list">
             {commits.map((commit) => (
               <li key={commit.hash} className="git-history-item">
-                <span className="git-history-subject" title={commit.subject}>
-                  {commit.subject}
-                </span>
-                <span className="git-history-meta" title={`${commit.author} · ${commit.when}`}>
-                  {commit.short} · {commit.when}
-                </span>
+                <button
+                  type="button"
+                  className="git-history-button"
+                  title={`${commit.short} · ${commit.subject}`}
+                  onClick={() => onOpenCommit(commit)}
+                >
+                  <span className="git-history-subject">{commit.subject}</span>
+                  <span className="git-history-meta">
+                    {commit.short} · {commit.when}
+                  </span>
+                </button>
               </li>
             ))}
           </ul>

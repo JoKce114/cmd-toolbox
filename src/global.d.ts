@@ -33,6 +33,7 @@ export interface SessionTab {
   conversationId?: string;
   filePath?: string;
   diffChange?: import('./types').GitChange | null;
+  diffCommit?: import('./types').CommitRef | null;
 }
 
 export interface SessionSnapshot {

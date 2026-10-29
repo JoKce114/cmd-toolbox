@@ -532,6 +532,47 @@ assert(
   '分支未变',
 );
 
+console.log('14. 提交历史打开 diff 页签');
+execFileSync('git', ['checkout', 'main'], { cwd: repo, stdio: 'ignore' });
+execFileSync('git', ['reset', '--hard', 'HEAD'], { cwd: repo, stdio: 'ignore' });
+rmSync(join(repo, 'dirty.txt'), { force: true });
+writeFileSync(join(repo, 'history-a.txt'), 'a\n');
+writeFileSync(join(repo, 'history-b.txt'), 'b\n');
+execFileSync('git', ['add', '-A'], { cwd: repo });
+execFileSync('git', ['commit', '-m', '历史多文件'], { cwd: repo });
+await page.waitForTimeout(1200);
+await click(page.locator('.git-icon-btn'));
+
+const historyToggle = page.locator('.git-history-toggle');
+if ((await page.locator('.git-history-button').count()) === 0) await click(historyToggle);
+await waitFor(
+  async () =>
+    (await page.locator('.git-history-button').filter({ hasText: '历史多文件' }).count()) > 0,
+  '提交历史刷新到最新提交',
+);
+await click(page.locator('.git-history-button').filter({ hasText: '历史多文件' }).first());
+await waitFor(
+  async () => (await page.locator('.diff-file-select').count()) > 0,
+  '提交 diff 页签出现',
+);
+await waitFor(
+  async () => (await page.locator('.diff-file-select option').count()) > 0,
+  '提交 diff 文件列表加载完成',
+);
+assert(
+  (await page.locator('.diff-file-select option').count()) === 2,
+  '文件下拉有 2 个文件',
+);
+
+const commitPane = page
+  .locator('.diff-pane')
+  .filter({ has: page.locator('.diff-file-select') });
+const firstBody = await commitPane.locator('.diff-body').innerText();
+await page.locator('.diff-file-select').selectOption({ index: 1 });
+await page.waitForTimeout(400);
+const secondBody = await commitPane.locator('.diff-body').innerText();
+assert(firstBody !== secondBody, '切换文件后正文变化');
+
 await page.screenshot({ path: join(shotDir, 'git-panel.png') });
 await app.close();
 rmSync(dataDir, { recursive: true, force: true });

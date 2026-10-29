@@ -51,6 +51,14 @@ function normalizeTab(value) {
             worktreeStatus: value.diffChange.worktreeStatus || null,
           }
         : null,
+    diffCommit:
+      value.diffCommit && typeof value.diffCommit === 'object' && value.diffCommit.hash
+        ? {
+            hash: String(value.diffCommit.hash).slice(0, 40),
+            short: String(value.diffCommit.short || '').slice(0, 40),
+            subject: String(value.diffCommit.subject || '').slice(0, 200),
+          }
+        : null,
   };
 }
 

@@ -50,6 +50,7 @@ export type Tab = {
   conversationId?: string;
   filePath?: string;
   diffChange?: GitChange;
+  diffCommit?: CommitRef;
   exited: boolean;
   exitCode?: number;
 };

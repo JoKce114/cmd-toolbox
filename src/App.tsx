@@ -35,6 +35,7 @@ import { useGitStatus } from './gitStatus';
 import { GLOBAL_GROUP_KEY, isBrowserTab, isDiffTab, isEditorTab, projectGroupKey } from './types';
 import type {
   AppInfo,
+  CommitRef,
   GitChange,
   GitPullStrategy,
   GitStatus,
@@ -206,6 +207,7 @@ export default function App() {
             conversationId: tab.conversationId || '',
             filePath: tab.filePath || '',
             diffChange: tab.diffChange || null,
+            diffCommit: tab.diffCommit || null,
           })),
         activeTabByGroup: activeTabByGroupRef.current,
         sidebarCollapsed: sidebarCollapsedRef.current,
@@ -398,7 +400,10 @@ export default function App() {
             continue;
           }
 
-          if (saved.shellId === 'diff' && saved.diffChange && saved.diffChange.path) {
+          if (
+            saved.shellId === 'diff' &&
+            ((saved.diffChange && saved.diffChange.path) || saved.diffCommit?.hash)
+          ) {
             restoredTabs[saved.groupKey] = [
               ...existing,
               {
@@ -411,7 +416,8 @@ export default function App() {
                 descriptor: saved.descriptor || '差异',
                 custom: saved.custom,
                 cwd: group.path,
-                diffChange: saved.diffChange,
+                diffChange: saved.diffChange?.path ? saved.diffChange : undefined,
+                diffCommit: saved.diffCommit?.hash ? saved.diffCommit : undefined,
                 exited: false,
               },
             ];
@@ -1083,6 +1089,7 @@ export default function App() {
           conversationId: tab.conversationId || '',
           filePath: tab.filePath || '',
           diffChange: tab.diffChange || null,
+          diffCommit: tab.diffCommit || null,
           paneNo: tab.paneNo,
           url: tab.url || '',
         }));
@@ -1297,6 +1304,41 @@ export default function App() {
         custom: true,
         cwd: group.path,
         diffChange: change,
+        exited: false,
+      };
+      applyTabs({ ...tabsRef.current, [group.key]: [...groupTabs, tab] });
+      setActiveGroupKey(group.key);
+      setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+    },
+    [applyTabs, pushToast],
+  );
+
+  const openCommitDiffTab = useCallback(
+    (group: Group, commit: CommitRef) => {
+      if (!group.exists) {
+        pushToast('项目目录不存在，请先编辑项目路径', 'error');
+        return;
+      }
+      const groupTabs = tabsRef.current[group.key] || [];
+      const existing = groupTabs.find(
+        (item) => item.shellId === 'diff' && item.diffCommit?.hash === commit.hash,
+      );
+      if (existing) {
+        setActiveGroupKey(group.key);
+        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: existing.id }));
+        return;
+      }
+      const tab: Tab = {
+        id: crypto.randomUUID(),
+        groupKey: group.key,
+        sessionId: '',
+        shellId: 'diff',
+        seq: 1,
+        paneNo: nextPaneNo(groupTabs.map((item) => item.paneNo)),
+        descriptor: commit.short,
+        custom: true,
+        cwd: group.path,
+        diffCommit: commit,
         exited: false,
       };
       applyTabs({ ...tabsRef.current, [group.key]: [...groupTabs, tab] });
@@ -2177,13 +2219,17 @@ export default function App() {
         />
       );
     }
-    if (isDiffTab(tab) && tab.diffChange) {
+    if (isDiffTab(tab) && (tab.diffChange || tab.diffCommit)) {
       return (
         <DiffPane
           key={tab.id}
           projectPath={group.path}
           wordWrap={prefs.editorWordWrap}
-          change={tab.diffChange}
+          target={
+            tab.diffCommit
+              ? { kind: 'commit', commit: tab.diffCommit }
+              : { kind: 'change', change: tab.diffChange! }
+          }
           active={active}
           onClose={() => closeTabs(tab.groupKey, [tab.id])}
           onOpenFile={(relPath) => openEditorFile(group, relPath)}
@@ -2319,6 +2365,9 @@ export default function App() {
                 onSyncChoice={(choice) => void runSyncChoice(choice)}
                 onSyncClose={() => setSyncPrompt(null)}
                 commits={gitCommits}
+                onOpenCommit={(commit) => {
+                  if (gitGroup) openCommitDiffTab(gitGroup, commit);
+                }}
               />
             ) : null
           }
