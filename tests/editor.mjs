@@ -426,6 +426,56 @@ assert(
   '原页签的未保存修改没有被冲掉',
 );
 
+console.log('17. 没动过的内页签会被新文件顶替');
+// 回到 edit-proj 的编辑器，清掉已有内页签，从干净状态开始
+await page.locator('.group-item').filter({ hasText: 'edit-proj' }).click({ button: 'right' });
+await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+await click(page.getByRole('menuitem', { name: '打开编辑器', exact: true }));
+await page.waitForTimeout(600);
+const innerPane = page.locator('.editor-pane:not(.is-hidden)');
+
+await click(innerPane.locator('.file-row').filter({ hasText: 'index.php' }));
+await waitFor(
+  async () => (await innerPane.locator('.editor-tab').count()) >= 1,
+  '打开第一个文件',
+);
+const innerBefore = await innerPane.locator('.editor-tab').count();
+
+// 打开另一个没改过的文件：应顶替当前内页签，数量不减
+await click(innerPane.locator('.file-row').filter({ hasText: 'gbk.txt' }));
+await waitFor(
+  async () =>
+    (await innerPane.locator('.editor-tab-name').filter({ hasText: 'gbk.txt' }).count()) === 1,
+  '内容切到新文件',
+);
+assert(
+  (await innerPane.locator('.editor-tab').count()) === innerBefore,
+  '内页签数量没有增加',
+);
+assert(
+  (await innerPane.locator('.editor-tab-name').filter({ hasText: 'gbk.txt' }).count()) === 1,
+  '内页签换成了新文件',
+);
+
+console.log('18. 改过的内页签不会被顶替');
+await innerPane.locator('.cm-content').click();
+await page.keyboard.type('// inner touched');
+await waitFor(
+  async () => (await innerPane.locator('.editor-tab-dot').count()) > 0,
+  '内页签标记为已修改',
+);
+const innerAfterEdit = await innerPane.locator('.editor-tab').count();
+
+await click(innerPane.locator('.file-row').filter({ hasText: 'index.php' }));
+await waitFor(
+  async () => (await innerPane.locator('.editor-tab').count()) === innerAfterEdit + 1,
+  '改过的内页签占住位置，新开一个',
+);
+assert(
+  (await innerPane.locator('.editor-tab-name').filter({ hasText: 'gbk.txt' }).count()) === 1,
+  '改过的文件仍留在内页签里',
+);
+
 await app.close();
 rmSync(dataDir, { recursive: true, force: true });
 console.log(`\n全部通过：${passed} 项`);

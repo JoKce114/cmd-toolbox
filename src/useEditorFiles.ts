@@ -40,10 +40,14 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   const [activePath, setActivePath] = useState('');
   const groupRef = useRef(group);
   const filesRef = useRef(files);
+  const activePathRef = useRef(activePath);
+  // 改过或保存过就永久占住自己的内页签，只有没碰过的才允许被新文件顶替
+  const touchedRef = useRef<Set<string>>(new Set());
   // 本应用内写过哪些文件：仅用于区分「多页签互相覆盖」和「外部程序改过」
   const savedByAppRef = useRef<Set<string>>(new Set());
   groupRef.current = group;
   filesRef.current = files;
+  activePathRef.current = activePath;
 
   const patch = useCallback((relPath: string, next: Partial<EditorFileState>) => {
     setFiles((previous) => {
@@ -56,15 +60,33 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   const open = useCallback(
     async (relPath: string) => {
       if (!relPath) return;
-      setActivePath(relPath);
 
       // 已经打开过就直接切过去，保留未保存的修改
-      if (filesRef.current[relPath]) return;
+      if (filesRef.current[relPath]) {
+        setActivePath(relPath);
+        return;
+      }
 
-      setFiles((previous) => ({
-        ...previous,
-        [relPath]: { ...EMPTY, relPath, loading: true },
-      }));
+      // 顶替一个没被动过的内页签：当前激活的优先，其次最近打开的。
+      // 这样「看一眼就换文件」不会把页签栏撑满，改过的文件则各自占住位置。
+      const replaceable = (path: string) => {
+        const entry = filesRef.current[path];
+        return Boolean(entry) && !entry.dirty && !touchedRef.current.has(path);
+      };
+      const current = activePathRef.current;
+      let target = current && replaceable(current) ? current : '';
+      if (!target) {
+        const candidates = Object.keys(filesRef.current).filter(replaceable);
+        target = candidates[candidates.length - 1] || '';
+      }
+
+      setActivePath(relPath);
+      setFiles((previous) => {
+        const next = { ...previous };
+        if (target) delete next[target];
+        next[relPath] = { ...EMPTY, relPath, loading: true };
+        return next;
+      });
 
       try {
         const result: OpenedFile = await window.api.files.read(groupRef.current.path, relPath);
@@ -106,6 +128,9 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
       setFiles((previous) => {
         const current = previous[relPath];
         if (!current) return previous;
+        const dirty = normalizeNewlines(content) !== normalizeNewlines(current.savedContent);
+        // 内容一变就占住页签：dirty 会在保存后复位，这里不能再跟着放开
+        if (dirty) touchedRef.current.add(relPath);
         return {
           ...previous,
           [relPath]: {
@@ -113,7 +138,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
             content,
             // CodeMirror 会把 \r\n 规范化成 \n，磁盘内容仍是 \r\n；
             // 直接比较会让 CRLF 文件一打开就是「已修改」状态。
-            dirty: normalizeNewlines(content) !== normalizeNewlines(current.savedContent),
+            dirty,
           },
         };
       });
@@ -155,6 +180,8 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
           );
         }
         savedByAppRef.current.add(relPath);
+        // 手动保存过的文件同样占住页签，不再被新文件顶替
+        touchedRef.current.add(relPath);
         const after = await window.api.files.read(groupRef.current.path, relPath);
         setFiles((previous) => {
           const target = previous[relPath];
@@ -181,6 +208,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   );
 
   const close = useCallback((relPath: string) => {
+    touchedRef.current.delete(relPath);
     setFiles((previous) => {
       const next = { ...previous };
       delete next[relPath];
@@ -199,6 +227,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   }, []);
 
   const rename = useCallback((from: string, to: string) => {
+    if (touchedRef.current.delete(from)) touchedRef.current.add(to);
     setFiles((previous) => {
       if (from === to || !previous[from] || previous[to]) return previous;
       const next = { ...previous };
@@ -210,6 +239,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   }, []);
 
   useEffect(() => {
+    touchedRef.current = new Set();
     setFiles({});
     setActivePath('');
   }, [group.key]);
