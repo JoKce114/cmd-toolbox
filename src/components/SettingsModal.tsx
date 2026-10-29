@@ -389,12 +389,12 @@ export function SettingsModal({
                 <span className="settings-item-desc">
                   {startupDisabled
                     ? loginItem?.reason || '正在读取系统设置…'
-                    : '登录 Windows 后自动打开 Cmd Toolbox'}
+                    : loginItem?.reason || '登录 Windows 后自动打开 Cmd Toolbox'}
                 </span>
               </div>
               <Toggle
                 checked={launchOnStartup}
-                disabled={startupDisabled}
+                disabled={startupDisabled || Boolean(loginItem?.reason)}
                 onChange={(next) => {
                   setLoginError('');
                   setLaunchOnStartup(next);
