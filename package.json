@@ -7,6 +7,10 @@
   "main": "desktop/main.js",
   "author": "Cmd Toolbox",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JoKce114/cmd-toolbox.git"
+  },
   "scripts": {
     "dev": "concurrently -k -n VITE,APP \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env CMDTOOLBOX_DEV=1 electron .\"",
     "typecheck": "tsc --noEmit",

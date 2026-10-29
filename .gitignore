@@ -8,3 +8,6 @@ test-shots/
 .superpowers/
 
 release-build*/
+
+# 本地启动器（由 scripts/build-launcher.ps1 生成）
+build/CmdToolbox.exe
