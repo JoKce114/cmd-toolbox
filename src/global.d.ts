@@ -7,6 +7,8 @@ import type {
   GitPushResult,
   GitStatus,
   HeadCommit,
+  LoginItemResult,
+  LoginItemState,
   OpenedFile,
   Project,
   StashEntry,
@@ -62,6 +64,10 @@ declare global {
   interface Window {
     api: {
       getInfo: () => Promise<AppInfo>;
+      loginItem: {
+        get: () => Promise<LoginItemState>;
+        set: (enabled: boolean) => Promise<LoginItemResult>;
+      };
       updates: {
         check: (seenVersion?: string | null) => Promise<UpdateCheckResult>;
       };

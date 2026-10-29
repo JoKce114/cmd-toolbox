@@ -222,3 +222,11 @@ export type OpenedFile = {
   readOnly: boolean;
   mtime: number;
 };
+
+export type LoginItemState = {
+  supported: boolean;
+  enabled: boolean;
+  reason?: string;
+};
+
+export type LoginItemResult = { ok: true } | { ok: false; message: string };

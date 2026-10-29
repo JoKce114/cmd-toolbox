@@ -12,6 +12,7 @@ const git = require('./git');
 const fileApi = require('./file-api');
 const updates = require('./updates');
 const updater = require('./updater');
+const { createLoginItem } = require('./login-item');
 const { listShells, listTools, resolveShell } = require('./shells');
 
 const APP_NAME = 'Cmd Toolbox';
@@ -30,6 +31,8 @@ if (dataDirArgument) {
     app.setPath('userData', resolved);
   }
 }
+
+const loginItem = createLoginItem(app);
 
 let mainWindow = null;
 let quittingForUpdate = false;
@@ -184,6 +187,11 @@ function registerIpc() {
     tools: listTools(),
     defaultShellId: listShells()[0]?.id || 'cmd',
   }));
+
+  ipcMain.handle('app:get-login-item', () => loginItem.getState());
+  ipcMain.handle('app:set-login-item', (_event, enabled) =>
+    loginItem.setEnabled(Boolean(enabled)),
+  );
 
   ipcMain.handle('updates:check', (_event, seenVersion) =>
     updates.checkForUpdate(app.getVersion(), seenVersion),
@@ -521,6 +529,7 @@ if (!hasLock) {
       CMDTOOLBOX_MCP_TOKEN: mcp.token,
     });
     mcpConfig.installGlobal(mcp);
+    loginItem.repairOnStartup();
     registerIpc();
     createWindow();
     updater.init(send, () => {

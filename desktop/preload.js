@@ -22,6 +22,11 @@ function subscribe(channel, handler) {
 contextBridge.exposeInMainWorld('api', {
   getInfo: () => invoke('app:info'),
 
+  loginItem: {
+    get: () => invoke('app:get-login-item'),
+    set: (enabled) => invoke('app:set-login-item', enabled),
+  },
+
   updates: {
     check: (seenVersion) => invoke('updates:check', seenVersion),
   },
