@@ -862,9 +862,17 @@ async function commitDiff(projectPath, hash) {
   const target = assertCommitHash(hash);
   if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
 
-  // 默认的 git show 对 merge commit 不输出 diff；-m --first-parent 让它相对第一父输出
+  // 默认的 git show 对 merge commit 不输出 diff；-m --first-parent 让它相对第一父输出。
+  // quotePath=false 让中文路径原样输出；diff.relative / mnemonicPrefix 会改写 a/ b/ 前缀，
+  // 用户全局配置了它们时路径会残留，这里显式关掉。
   const result = await runGit(projectPath, [
     '--no-pager',
+    '-c',
+    'core.quotePath=false',
+    '-c',
+    'diff.relative=false',
+    '-c',
+    'diff.mnemonicPrefix=false',
     'show',
     '--no-color',
     '--no-ext-diff',

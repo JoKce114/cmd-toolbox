@@ -44,6 +44,7 @@ function makeRepo() {
   execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir });
   execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
   execFileSync('git', ['config', 'core.autocrlf', 'false'], { cwd: dir });
+  execFileSync('git', ['config', 'diff.renames', 'true'], { cwd: dir });
   return dir;
 }
 
@@ -124,6 +125,35 @@ assert(
   mergeFiles.some((file) => file.path === 'side.txt'),
   '包含来自被合并分支的文件',
 );
+assert(
+  !mergeFiles.some((file) => file.path === 'main.txt'),
+  '不含第一父已有的文件（--first-parent 生效）',
+);
+
+console.log('4. 头部误判 / 非 ASCII 路径 / 二进制');
+const edge = makeRepo();
+writeFileSync(join(edge, 'notes.txt'), '-- old comment\n');
+writeFileSync(join(edge, '中文.txt'), 'a\n');
+writeFileSync(join(edge, 'blob.dat'), Buffer.from([0, 1, 2, 3, 0, 255]));
+execFileSync('git', ['add', '-A'], { cwd: edge });
+execFileSync('git', ['commit', '-m', '边缘初始'], { cwd: edge });
+
+rmSync(join(edge, 'notes.txt'));
+writeFileSync(join(edge, '中文.txt'), 'b\n');
+writeFileSync(join(edge, 'blob.dat'), Buffer.from([0, 9, 9, 9, 0, 254]));
+execFileSync('git', ['add', '-A'], { cwd: edge });
+execFileSync('git', ['commit', '-m', '边缘第二'], { cwd: edge });
+const edgeHash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: edge, encoding: 'utf8' }).trim();
+
+const edgeFiles = splitCommitPatch((await git.commitDiff(edge, edgeHash)).patch);
+const edgeByPath = Object.fromEntries(edgeFiles.map((file) => [file.path, file]));
+assert(
+  edgeByPath['notes.txt']?.status === 'deleted' &&
+    edgeFiles.filter((file) => file.path === 'notes.txt').length === 1,
+  'hunk 正文的 --- / +++ 行不会冒充文件头',
+);
+assert(edgeByPath['中文.txt']?.status === 'modified', '非 ASCII 路径保持原文、不加引号转义');
+assert(edgeByPath['blob.dat']?.status === 'modified', '二进制文件不被丢弃');
 
 rmSync(buildDir, { recursive: true, force: true });
 console.log(`\n全部通过：${passed} 项`);
