@@ -41,6 +41,8 @@ import type {
   GitStatus,
   Group,
   HeadCommit,
+  LoginItemResult,
+  LoginItemState,
   MenuEntry,
   MenuState,
   Project,
@@ -235,6 +237,7 @@ export default function App() {
 
   const [prefs, setPrefs] = useState(readPrefs);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [loginItem, setLoginItem] = useState<LoginItemState | null>(null);
   const outputBySessionRef = useRef<Record<string, string>>({});
   const idleTimersRef = useRef(new Map<string, number>());
   const toastIdRef = useRef(0);
@@ -625,6 +628,34 @@ export default function App() {
     void bridge.state().then(setUpdater).catch(() => {});
     return unsubscribe;
   }, []);
+
+  // 每次打开设置都重读注册表，显示的永远是系统里的真实状态
+  useEffect(() => {
+    if (!settingsOpen) return;
+    let cancelled = false;
+    window.api.loginItem
+      .get()
+      .then((state) => {
+        if (!cancelled) setLoginItem(state);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoginItem({ supported: false, enabled: false, reason: '读取系统设置失败' });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsOpen]);
+
+  const setLoginItemEnabled = useCallback(
+    async (enabled: boolean): Promise<LoginItemResult> => {
+      const result = await window.api.loginItem.set(enabled);
+      if (result.ok) setLoginItem(await window.api.loginItem.get());
+      return result;
+    },
+    [],
+  );
 
   const startUpdate = useCallback(async () => {
     const bridge = window.api?.updater;
@@ -2813,6 +2844,8 @@ export default function App() {
           onCheckUpdate={() => void runUpdateCheck('manual')}
           onStartUpdate={() => void startUpdate()}
           onInstallUpdate={() => void installUpdate()}
+          loginItem={loginItem ?? undefined}
+          onSetLoginItem={setLoginItemEnabled}
           onClose={() => setSettingsOpen(false)}
           onSave={(next) => {
             writePrefs(next);

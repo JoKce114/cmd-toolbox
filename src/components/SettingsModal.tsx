@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Download,
   FileCode2,
   Info,
   Keyboard,
+  Power,
   RefreshCw,
   RotateCcw,
   Settings,
@@ -25,7 +26,7 @@ import {
   EDITOR_LINE_HEIGHT_MIN,
 } from '../prefs';
 import type { AppPrefs, EditorFontFamily } from '../prefs';
-import type { UpdateCheckResult, UpdaterState } from '../types';
+import type { LoginItemResult, LoginItemState, UpdateCheckResult, UpdaterState } from '../types';
 
 type SettingsModalProps = {
   prefs: AppPrefs;
@@ -36,14 +37,17 @@ type SettingsModalProps = {
   onCheckUpdate?: () => void;
   onStartUpdate?: () => void;
   onInstallUpdate?: () => void;
+  loginItem?: LoginItemState;
+  onSetLoginItem?: (enabled: boolean) => Promise<LoginItemResult>;
   onClose: () => void;
   onSave: (prefs: AppPrefs) => void;
 };
 
-type TabId = 'about' | 'terminal' | 'editor' | 'keys';
+type TabId = 'about' | 'regular' | 'terminal' | 'editor' | 'keys';
 
 const TABS: { id: TabId; label: string; icon: typeof Info }[] = [
   { id: 'about', label: '关于', icon: Info },
+  { id: 'regular', label: '常规', icon: Power },
   { id: 'terminal', label: '终端', icon: Terminal },
   { id: 'editor', label: '编辑器', icon: FileCode2 },
   { id: 'keys', label: '快捷键', icon: Keyboard },
@@ -125,6 +129,8 @@ export function SettingsModal({
   onCheckUpdate,
   onStartUpdate,
   onInstallUpdate,
+  loginItem,
+  onSetLoginItem,
   onClose,
   onSave,
 }: SettingsModalProps) {
@@ -157,6 +163,17 @@ export function SettingsModal({
   const [recording, setRecording] = useState<EditorActionId | null>(null);
   const [bindingError, setBindingError] = useState<string>('');
 
+  const [launchOnStartup, setLaunchOnStartup] = useState(loginItem?.enabled ?? false);
+  const [loginError, setLoginError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // 面板打开时开机启动状态是异步读回来的，到达后同步到本地开关
+  useEffect(() => {
+    if (loginItem) setLaunchOnStartup(loginItem.enabled);
+  }, [loginItem]);
+
+  const startupDisabled = !loginItem || !loginItem.supported;
+
   const updateBinding = (action: EditorActionId, combo: string) => {
     const normalized = normalizeCombo(combo);
 
@@ -180,6 +197,39 @@ export function SettingsModal({
 
     setBindingError('');
     setKeybindings((previous) => ({ ...previous, [action]: normalized }));
+  };
+
+  const handleSave = async () => {
+    setLoginError('');
+    if (onSetLoginItem && loginItem && launchOnStartup !== loginItem.enabled) {
+      setSaving(true);
+      try {
+        const result = await onSetLoginItem(launchOnStartup);
+        if (!result.ok) {
+          // 写入失败时面板保持打开，把原因留在页面上
+          setLoginError(result.message);
+          return;
+        }
+      } finally {
+        setSaving(false);
+      }
+    }
+    onSave({
+      ...prefs,
+      terminalFontSize,
+      copyOnSelect,
+      editorFontSize,
+      editorLineHeight: Math.round(editorLineHeight * 100) / 100,
+      editorFontFamily,
+      editorLineNumbers,
+      editorHighlightActiveLine,
+      editorBracketMatching,
+      editorShowWhitespace,
+      editorWordWrap,
+      editorTabSize,
+      editorIndentWithSpaces,
+      editorKeybindings: keybindings,
+    });
   };
 
   return (
@@ -306,6 +356,33 @@ export function SettingsModal({
 
             <p className="settings-hint">
               更新说明取自 GitHub Release，发布新版本后可在「检查更新」里看到。
+            </p>
+          </section>
+        ) : null}
+
+        {tab === 'regular' ? (
+          <section className="settings-group">
+            <div className="settings-item">
+              <div className="settings-item-text">
+                <span className="settings-item-label">开机自动启动</span>
+                <span className="settings-item-desc">
+                  {startupDisabled
+                    ? loginItem?.reason || '正在读取系统设置…'
+                    : '登录 Windows 后自动打开 Cmd Toolbox'}
+                </span>
+              </div>
+              <Toggle
+                checked={launchOnStartup}
+                disabled={startupDisabled}
+                onChange={(next) => {
+                  setLoginError('');
+                  setLaunchOnStartup(next);
+                }}
+              />
+            </div>
+            {loginError ? <p className="settings-key-error">{loginError}</p> : null}
+            <p className="settings-hint">
+              开机启动在点「保存」后才写入系统；便携版移动目录后会自动修正路径。
             </p>
           </section>
         ) : null}
@@ -556,26 +633,10 @@ export function SettingsModal({
         <button
           type="button"
           className="btn btn-primary"
-          onClick={() =>
-            onSave({
-              ...prefs,
-              terminalFontSize,
-              copyOnSelect,
-              editorFontSize,
-              editorLineHeight: Math.round(editorLineHeight * 100) / 100,
-              editorFontFamily,
-              editorLineNumbers,
-              editorHighlightActiveLine,
-              editorBracketMatching,
-              editorShowWhitespace,
-              editorWordWrap,
-              editorTabSize,
-              editorIndentWithSpaces,
-              editorKeybindings: keybindings,
-            })
-          }
+          disabled={saving}
+          onClick={() => void handleSave()}
         >
-          保存
+          {saving ? '保存中…' : '保存'}
         </button>
       </div>
     </Modal>
