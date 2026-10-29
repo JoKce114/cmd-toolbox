@@ -187,6 +187,10 @@ node tests/smoke.mjs
   否则会存进 `1.2000000000000002` 这种值，设置里显示成一长串小数。
 - **便携版的开机启动必须用 `PORTABLE_EXECUTABLE_FILE`**，不能用
   `process.execPath`——后者在便携版里指向解包后的临时目录，写进注册表后随即失效。
+- **卸载要清开机启动项**：`build/installer.nsh` 的 `customUnInstall` 宏删掉
+  HKCU Run 下的 `Cmd Toolbox` 值。值名与 `desktop/login-item.js` 的
+  `LOGIN_VALUE_NAME` 是同一个字符串，**改名时两处必须同改**，
+  否则卸载会留下一条指向已删除 exe 的死条目，每次开机弹错误。
 
 ## 界面约定
 

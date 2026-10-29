@@ -116,7 +116,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Cmd Toolbox",
       "deleteAppDataOnUninstall": false,
-      "runAfterFinish": true
+      "runAfterFinish": true,
+      "include": "build/installer.nsh"
     },
     "portable": {
       "artifactName": "CmdToolbox-portable-${version}.${ext}",
