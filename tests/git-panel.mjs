@@ -618,7 +618,8 @@ await waitFor(
 );
 
 console.log('17. 收起与恢复改动');
-writeFileSync(join(repo, 'stash-ui.txt'), 's\n');
+// 先造两条 stash：ref 是位置型的，只有两行都在时才能验证并发操作期间的整行禁用
+writeFileSync(join(repo, 'stash-earlier.txt'), 'e\n');
 await page.waitForTimeout(1200);
 await click(page.locator('.git-icon-btn'));
 await waitFor(
@@ -628,14 +629,63 @@ await waitFor(
 await click(page.locator('.git-ops-button[data-action="stash"]'));
 await waitFor(
   async () => (await page.locator('.git-stash-item').count()) === 1,
-  '出现 stash 记录',
+  '出现第一条 stash 记录',
+);
+assert(!existsSync(join(repo, 'stash-earlier.txt')), '较早的文件已被收起');
+
+writeFileSync(join(repo, 'stash-ui.txt'), 's\n');
+await page.waitForTimeout(1200);
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-change-row').count()) > 0,
+  '再次出现待收起的改动',
+);
+await click(page.locator('.git-ops-button[data-action="stash"]'));
+await waitFor(
+  async () => (await page.locator('.git-stash-item').count()) === 2,
+  '出现第二条 stash 记录',
 );
 assert(!existsSync(join(repo, 'stash-ui.txt')), '文件已被收起');
+
+// 用 MutationObserver 记录「所有行的操作按钮同时被禁用」这一瞬时状态：
+// 恢复是异步的，单次 isDisabled() 轮询可能刚好错过，观察者不会
+await page.evaluate(() => {
+  window.__stashAllDisabled = false;
+  const check = () => {
+    const actions = [...document.querySelectorAll('.git-stash-item .git-row-action')];
+    if (actions.length >= 4 && actions.every((action) => action.disabled)) {
+      window.__stashAllDisabled = true;
+    }
+  };
+  const observer = new MutationObserver(check);
+  observer.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['disabled'],
+  });
+  window.__stashObserver = observer;
+  check();
+});
 
 await click(
   page.locator('.git-stash-item').first().locator('.git-row-action[title="恢复"]'),
 );
 await waitFor(async () => existsSync(join(repo, 'stash-ui.txt')), '恢复后文件回来');
+await waitFor(
+  async () => (await page.locator('.git-stash-item').count()) === 1,
+  '恢复后列表只剩一条',
+);
+const allDisabledSeen = await page.evaluate(() => {
+  window.__stashObserver?.disconnect();
+  return window.__stashAllDisabled;
+});
+assert(allDisabledSeen === true, '恢复进行中所有行的操作按钮同时禁用');
+
+await click(
+  page.locator('.git-stash-item').first().locator('.git-row-action[title="恢复"]'),
+);
+await waitFor(async () => existsSync(join(repo, 'stash-earlier.txt')), '第二条恢复后文件回来');
 await waitFor(
   async () => (await page.locator('.git-stash-item').count()) === 0,
   '恢复后列表清空',

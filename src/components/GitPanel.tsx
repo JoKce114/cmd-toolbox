@@ -484,7 +484,7 @@ export function GitPanel({
             className="btn btn-secondary btn-sm git-ops-button"
             data-action="stash"
             title={head ? '把全部未提交改动收进 stash' : '还没有提交，无法收起改动'}
-            disabled={!status.hasChanges || !head || stashSaving}
+            disabled={!status.hasChanges || !head || stashSaving || stashBusy !== null}
             onClick={async () => {
               setStashSaving(true);
               try {
@@ -640,7 +640,7 @@ export function GitPanel({
         ) : (
           <ul className="git-stash-list">
             {stashes.map((stash) => (
-              <li key={stash.ref} className="git-stash-item">
+              <li key={`${stash.ref}:${stash.message}`} className="git-stash-item">
                 <span className="git-stash-ref">{stash.ref}</span>
                 <span className="git-stash-message" title={stash.message}>
                   {stash.message}
@@ -650,7 +650,8 @@ export function GitPanel({
                   type="button"
                   className="git-row-action"
                   title="恢复"
-                  disabled={stashBusy === stash.ref}
+                  // stash ref 是位置型的，操作期间必须锁住所有行，否则后发起的操作会落到别的记录上
+                  disabled={stashBusy !== null}
                   onClick={() => void onStashPop(stash.ref)}
                 >
                   <Undo2 size={13} />
@@ -659,7 +660,7 @@ export function GitPanel({
                   type="button"
                   className="git-row-action"
                   title="丢弃"
-                  disabled={stashBusy === stash.ref}
+                  disabled={stashBusy !== null}
                   onClick={() => setConfirmDropStash(stash.ref)}
                 >
                   <Trash2 size={13} />

@@ -28,14 +28,11 @@ export function useCollapsedSection(id: string, defaultCollapsed = false) {
     });
   }, [id]);
 
-  // 操作成功后自动展开（例如收起改动后显示 stash 列表）
-  const setCollapsed = useCallback(
-    (next: boolean) => {
-      setCollapsedState(next);
-      persist(id, next);
-    },
-    [id],
-  );
+  // 仅供程序化展开，不写 localStorage：它只用来临时展示刚收起的内容
+  // （例如收起改动后露出 stash 列表），不该覆盖用户手点标题留下的偏好
+  const setCollapsed = useCallback((next: boolean) => {
+    setCollapsedState(next);
+  }, []);
 
   return [collapsed, toggle, setCollapsed] as const;
 }
