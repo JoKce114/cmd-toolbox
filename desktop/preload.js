@@ -94,6 +94,10 @@ contextBridge.exposeInMainWorld('api', {
     headCommit: (projectPath) => invoke('git:head-commit', projectPath),
     undoCommit: (projectPath) => invoke('git:undo-commit', projectPath),
     amend: (projectPath, message) => invoke('git:amend', projectPath, message),
+    stashList: (projectPath) => invoke('git:stash-list', projectPath),
+    stashSave: (projectPath) => invoke('git:stash-save', projectPath),
+    stashPop: (projectPath, ref) => invoke('git:stash-pop', projectPath, ref),
+    stashDrop: (projectPath, ref) => invoke('git:stash-drop', projectPath, ref),
   },
 
   files: {

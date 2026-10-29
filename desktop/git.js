@@ -798,6 +798,66 @@ async function amend(projectPath, message) {
   return { commit: head2.stdout.trim(), summary: text.split('\n')[0] };
 }
 
+const STASH_REF = /^stash@\{\d+\}$/;
+
+function assertStashRef(ref) {
+  const value = String(ref || '').trim();
+  if (!STASH_REF.test(value)) throw new Error('stash 标识不合法');
+  return value;
+}
+
+async function stashList(projectPath) {
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+  const result = await runGit(projectPath, [
+    'stash',
+    'list',
+    `--format=%gd${UNIT}%gs${UNIT}%cr`,
+  ]);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  const stashes = result.stdout
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(0, 20)
+    .map((line) => {
+      const parts = line.split(UNIT);
+      return {
+        ref: (parts[0] || '').trim(),
+        message: (parts[1] || '').trim() || '(无说明)',
+        when: (parts[2] || '').trim(),
+      };
+    });
+  return { stashes };
+}
+
+// -u 把未跟踪文件一起收起，否则切分支时它们仍会碍事
+async function stashSave(projectPath) {
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+  const result = await runGit(projectPath, ['stash', 'push', '-u', '-m', 'Cmd Toolbox']);
+  const output = `${result.stdout}${result.stderr}`;
+  if (/No local changes to save/i.test(output)) throw new Error('没有可收起的改动');
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  return { ok: true };
+}
+
+async function stashPop(projectPath, ref) {
+  const target = assertStashRef(ref);
+  const result = await runGit(projectPath, ['stash', 'pop', target]);
+  if (!result.ok) {
+    // 冲突时 git 不会删除 stash，工作区进入冲突态：这不是失败，交给调用方提示
+    const conflicts = await collectConflicts(projectPath, result);
+    if (conflicts.length) return { ok: true, conflicts };
+    throw new Error(cleanError(result.error, result.stderr));
+  }
+  return { ok: true, conflicts: [] };
+}
+
+async function stashDrop(projectPath, ref) {
+  const target = assertStashRef(ref);
+  const result = await runGit(projectPath, ['stash', 'drop', target]);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  return { ok: true };
+}
+
 module.exports = {
   log,
   status,
@@ -823,4 +883,8 @@ module.exports = {
   headCommit,
   undoCommit,
   amend,
+  stashList,
+  stashSave,
+  stashPop,
+  stashDrop,
 };

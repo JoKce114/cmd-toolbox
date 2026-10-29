@@ -9,6 +9,7 @@ import type {
   HeadCommit,
   OpenedFile,
   Project,
+  StashEntry,
   UpdateCheckResult,
   UpdaterResult,
   UpdaterState,
@@ -169,6 +170,13 @@ declare global {
           projectPath: string,
           message: string,
         ) => Promise<{ commit: string; summary: string }>;
+        stashList: (projectPath: string) => Promise<{ stashes: StashEntry[] }>;
+        stashSave: (projectPath: string) => Promise<{ ok: true }>;
+        stashPop: (
+          projectPath: string,
+          ref: string,
+        ) => Promise<{ ok: true; conflicts: string[] }>;
+        stashDrop: (projectPath: string, ref: string) => Promise<{ ok: true }>;
       };
       files: {
         list: (projectPath: string, relDir: string) => Promise<{ entries: FileEntry[] }>;

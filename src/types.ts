@@ -77,6 +77,12 @@ export type HeadCommit = {
   pushed: boolean;
 };
 
+export type StashEntry = {
+  ref: string;
+  message: string;
+  when: string;
+};
+
 export type GitStatus =
   | {
       ok: false;

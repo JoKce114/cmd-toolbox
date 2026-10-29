@@ -418,4 +418,78 @@ assert(latestLog.subject === '第三条', 'subject 解析正确');
 assert(spacedLog.subject === '修复  登录   超时', 'subject 保留多个空格');
 assert(oldestLog.subject === '第一条', '按时间倒序返回');
 
+console.log('18. stash');
+const stashRepo = makeRepo();
+writeFileSync(join(stashRepo, 'tracked.txt'), 'v1\n');
+await git.stageAll(stashRepo);
+await git.commit(stashRepo, '初始');
+writeFileSync(join(stashRepo, 'tracked.txt'), 'v2\n');
+writeFileSync(join(stashRepo, 'untracked.txt'), 'u\n');
+
+await git.stashSave(stashRepo);
+const cleanStatus = await git.status(stashRepo);
+assert(
+  cleanStatus.ok && cleanStatus.stagedCount === 0 && cleanStatus.unstagedCount === 0,
+  '收起后工作区干净',
+);
+assert(!existsSync(join(stashRepo, 'untracked.txt')), '未跟踪文件一并收起');
+
+const listed = await git.stashList(stashRepo);
+assert(listed.stashes.length === 1, 'stash 列表有一条');
+assert(/^stash@\{0\}$/.test(listed.stashes[0].ref), 'ref 格式正确');
+
+await git.stashPop(stashRepo, listed.stashes[0].ref);
+assert(readFileSync(join(stashRepo, 'tracked.txt'), 'utf8') === 'v2\n', '恢复后改动回来');
+assert(existsSync(join(stashRepo, 'untracked.txt')), '未跟踪文件一并恢复');
+assert((await git.stashList(stashRepo)).stashes.length === 0, '恢复后列表清空');
+
+writeFileSync(join(stashRepo, 'tracked.txt'), 'v3\n');
+await git.stashSave(stashRepo);
+writeFileSync(join(stashRepo, 'untracked.txt'), 'u2\n');
+await git.stashSave(stashRepo);
+const twoStashes = await git.stashList(stashRepo);
+assert(twoStashes.stashes.length === 2, '两次收起得到两条');
+await git.stashDrop(stashRepo, twoStashes.stashes[0].ref);
+assert((await git.stashList(stashRepo)).stashes.length === 1, '丢弃后剩一条');
+
+let refError = '';
+try {
+  await git.stashDrop(stashRepo, 'stash@{-1}');
+} catch (error) {
+  refError = error.message;
+}
+assert(refError.includes('不合法'), '非法 stash ref 被拒绝');
+
+let popError = '';
+try {
+  await git.stashPop(stashRepo, '../../x');
+} catch (error) {
+  popError = error.message;
+}
+assert(popError.includes('不合法'), '越界 stash ref 被拒绝');
+
+let noChangeError = '';
+try {
+  await git.stashSave(stashRepo);
+} catch (error) {
+  noChangeError = error.message;
+}
+assert(noChangeError.includes('没有可收起的改动'), '无改动时给出提示');
+
+console.log('18b. stash 恢复冲突');
+const popRepo = makeRepo();
+writeFileSync(join(popRepo, 'conflict.txt'), 'base\n');
+await git.stageAll(popRepo);
+await git.commit(popRepo, '基线');
+writeFileSync(join(popRepo, 'conflict.txt'), 'stashed\n');
+await git.stashSave(popRepo);
+writeFileSync(join(popRepo, 'conflict.txt'), 'committed\n');
+await git.stageAll(popRepo);
+await git.commit(popRepo, '提交改动');
+
+const popConflict = await git.stashPop(popRepo, 'stash@{0}');
+assert(popConflict.ok === true, 'stashPop 冲突时仍返回 ok');
+assert(popConflict.conflicts.includes('conflict.txt'), '返回冲突文件列表');
+assert((await git.stashList(popRepo)).stashes.length === 1, '冲突后 stash 仍在列表');
+
 console.log(`\n全部通过：${passed} 项`);
