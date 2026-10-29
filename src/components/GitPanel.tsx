@@ -650,8 +650,8 @@ export function GitPanel({
                   type="button"
                   className="git-row-action"
                   title="恢复"
-                  // stash ref 是位置型的，操作期间必须锁住所有行，否则后发起的操作会落到别的记录上
-                  disabled={stashBusy !== null}
+                  // stash ref 是位置型的，任何 stash 操作（含收起）在飞时都要锁住所有行
+                  disabled={stashBusy !== null || stashSaving}
                   onClick={() => void onStashPop(stash.ref)}
                 >
                   <Undo2 size={13} />
@@ -660,7 +660,7 @@ export function GitPanel({
                   type="button"
                   className="git-row-action"
                   title="丢弃"
-                  disabled={stashBusy !== null}
+                  disabled={stashBusy !== null || stashSaving}
                   onClick={() => setConfirmDropStash(stash.ref)}
                 >
                   <Trash2 size={13} />

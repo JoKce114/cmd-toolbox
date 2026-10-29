@@ -691,6 +691,57 @@ await waitFor(
   '恢复后列表清空',
 );
 
+// 17b. 收起改动进行中同样禁用行操作
+// 恢复出来的两个文件还在工作区，先收成一条 stash，让行按钮渲染出来
+await page.waitForFunction(
+  () =>
+    !document.querySelector('.git-ops-button[data-action="stash"]')?.hasAttribute('disabled'),
+  null,
+  { timeout: 15000 },
+);
+await click(page.locator('.git-ops-button[data-action="stash"]'));
+await waitFor(
+  async () => (await page.locator('.git-stash-item').count()) === 1,
+  '再次出现 stash 记录',
+);
+// stash push 需要工作区有改动，否则立刻失败、观察窗口太短
+writeFileSync(join(repo, 'stash-saving.txt'), 'g\n');
+await page.waitForTimeout(1200);
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-change-row').count()) > 0,
+  '收起前工作区有改动',
+);
+await page.evaluate(() => {
+  window.__stashSaveAllDisabled = false;
+  const check = () => {
+    const actions = [...document.querySelectorAll('.git-stash-item .git-row-action')];
+    if (actions.length >= 2 && actions.every((action) => action.disabled)) {
+      window.__stashSaveAllDisabled = true;
+    }
+  };
+  const observer = new MutationObserver(check);
+  observer.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['disabled'],
+  });
+  window.__stashSaveObserver = observer;
+  check();
+});
+await click(page.locator('.git-ops-button[data-action="stash"]'));
+await waitFor(
+  async () => (await page.locator('.git-stash-item').count()) === 2,
+  '收起后出现第二条 stash',
+);
+const saveAllDisabledSeen = await page.evaluate(() => {
+  window.__stashSaveObserver?.disconnect();
+  return window.__stashSaveAllDisabled;
+});
+assert(saveAllDisabledSeen === true, '收起改动进行中所有行的操作按钮同时禁用');
+assert(!existsSync(join(repo, 'stash-saving.txt')), '收起后文件已进 stash');
+
 await page.screenshot({ path: join(shotDir, 'git-panel.png') });
 await app.close();
 rmSync(dataDir, { recursive: true, force: true });
