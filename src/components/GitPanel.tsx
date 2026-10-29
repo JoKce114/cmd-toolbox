@@ -3,6 +3,7 @@ import {
   ArrowDownToLine,
   ArrowUp,
   Check,
+  ChevronRight,
   FileCode,
   GitBranch,
   Plus,
@@ -11,6 +12,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { cn } from '../lib';
+import { useCollapsedSection } from '../useCollapsedSection';
 import type { GitChange, GitChangeStatus, GitStatus, SyncPrompt } from '../types';
 import { BranchPickerModal } from './BranchPickerModal';
 import { MergeModal } from './MergeModal';
@@ -104,6 +106,8 @@ export function GitPanel({
     | { kind: 'all' }
     | null
   >(null);
+  const [panelCollapsed, togglePanel] = useCollapsedSection('git');
+  const [historyCollapsed, toggleHistory] = useCollapsedSection('git-history', true);
 
   const runPathAction = async (key: string, action: () => Promise<boolean>) => {
     setBusyPaths((previous) => new Set(previous).add(key));
@@ -201,7 +205,19 @@ export function GitPanel({
 
   const header = (
     <header className="git-panel-head">
-      <span className="git-panel-title">源代码管理</span>
+      <button
+        type="button"
+        className="git-panel-toggle"
+        aria-expanded={!panelCollapsed}
+        title={panelCollapsed ? '展开源代码管理' : '收起源代码管理'}
+        onClick={togglePanel}
+      >
+        <ChevronRight
+          size={12}
+          className={cn('section-caret', !panelCollapsed && 'is-open')}
+        />
+        <span className="git-panel-title">源代码管理</span>
+      </button>
       <button
         type="button"
         className="git-icon-btn"
@@ -219,7 +235,9 @@ export function GitPanel({
     return (
       <section className="git-panel">
         {header}
-        <p className="git-panel-hint">正在读取 Git 状态…</p>
+        <div className={cn('git-panel-body', panelCollapsed && 'is-hidden')}>
+          <p className="git-panel-hint">正在读取 Git 状态…</p>
+        </div>
       </section>
     );
   }
@@ -228,21 +246,23 @@ export function GitPanel({
     return (
       <section className="git-panel">
         {header}
-        <p className="git-panel-hint">{status.message}</p>
-        {status.reason === 'not-repo' ? (
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm git-init-btn"
-            disabled={initBusy}
-            onClick={async () => {
-              setInitBusy(true);
-              await onInit();
-              setInitBusy(false);
-            }}
-          >
-            {initBusy ? '初始化中…' : '初始化仓库'}
-          </button>
-        ) : null}
+        <div className={cn('git-panel-body', panelCollapsed && 'is-hidden')}>
+          <p className="git-panel-hint">{status.message}</p>
+          {status.reason === 'not-repo' ? (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm git-init-btn"
+              disabled={initBusy}
+              onClick={async () => {
+                setInitBusy(true);
+                await onInit();
+                setInitBusy(false);
+              }}
+            >
+              {initBusy ? '初始化中…' : '初始化仓库'}
+            </button>
+          ) : null}
+        </div>
       </section>
     );
   }
@@ -419,6 +439,7 @@ export function GitPanel({
         />
       ) : null}
 
+      <div className={cn('git-panel-body', panelCollapsed && 'is-hidden')}>
       {status.hasChanges || phase === 'committed' ? (
         <>
           <textarea
@@ -517,6 +538,7 @@ export function GitPanel({
           </ul>
         </div>
       ) : null}
+      </div>
 
       {confirmDiscard ? (
         <ConfirmDialog
@@ -542,11 +564,20 @@ export function GitPanel({
       ) : null}
 
       <div className="git-history">
-        <div className="git-group-head">
+        <button
+          type="button"
+          className="git-group-head git-history-toggle"
+          aria-expanded={!historyCollapsed}
+          title={historyCollapsed ? '展开最近提交' : '收起最近提交'}
+          onClick={toggleHistory}
+        >
+          <ChevronRight
+            size={12}
+            className={cn('section-caret', !historyCollapsed && 'is-open')}
+          />
           <span className="git-history-title">最近提交</span>
-          <span className="git-group-count">{commits.length}</span>
-        </div>
-        {commits.length === 0 ? (
+        </button>
+        {historyCollapsed ? null : commits.length === 0 ? (
           <p className="git-panel-hint">还没有提交记录</p>
         ) : (
           <ul className="git-history-list">
@@ -555,8 +586,8 @@ export function GitPanel({
                 <span className="git-history-subject" title={commit.subject}>
                   {commit.subject}
                 </span>
-                <span className="git-history-meta">
-                  {commit.short} · {commit.author} · {commit.when}
+                <span className="git-history-meta" title={`${commit.author} · ${commit.when}`}>
+                  {commit.short} · {commit.when}
                 </span>
               </li>
             ))}

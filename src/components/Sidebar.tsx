@@ -1,8 +1,17 @@
 import { useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
-import { AlertTriangle, FolderPlus, PanelLeftClose, PanelLeftOpen, Plus, SquareTerminal } from 'lucide-react';
+import {
+  AlertTriangle,
+  ChevronRight,
+  FolderPlus,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  SquareTerminal,
+} from 'lucide-react';
 import { cn } from '../lib';
 import { tint } from '../theme';
+import { useCollapsedSection } from '../useCollapsedSection';
 import type { Group } from '../types';
 import { MODEL_STATUS_LABEL, type ModelStatus } from '../sessionStatus';
 
@@ -96,7 +105,6 @@ function GroupRow({
               />
             ) : null}
           </span>
-          <span className="group-path">{group.path}</span>
         </span>
         {count > 0 ? <span className="group-count">{count}</span> : null}
       </button>
@@ -157,6 +165,7 @@ export function Sidebar({
 }: SidebarProps) {
   const globalGroup = groups.find((group) => group.kind === 'global');
   const projects = groups.filter((group) => group.kind === 'project');
+  const [projectsCollapsed, toggleProjects] = useCollapsedSection('projects');
   const draggingIdRef = useRef<string | null>(null);
   const dropHintRef = useRef<{ id: string; position: 'before' | 'after' } | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -229,7 +238,6 @@ export function Sidebar({
         {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
       </button>
       <div className="sidebar-scroll">
-        <div className="sidebar-label">工作区</div>
         {globalGroup ? (
           <GroupRow
             group={globalGroup}
@@ -243,24 +251,23 @@ export function Sidebar({
           />
         ) : null}
 
-        <div className="section-header">
-          <div className="section-title">
-            <span>项目</span>
-            <span className="section-count">{projects.length}</span>
-          </div>
-          <button
-            type="button"
-            className="section-add"
-            title="添加项目"
-            aria-label="添加项目"
-            onClick={onAddProject}
-          >
-            <Plus size={14} />
-          </button>
-        </div>
+        <button
+          type="button"
+          className="section-header"
+          aria-expanded={!projectsCollapsed}
+          title={projectsCollapsed ? '展开项目列表' : '收起项目列表'}
+          onClick={toggleProjects}
+        >
+          <ChevronRight
+            size={12}
+            className={cn('section-caret', !projectsCollapsed && 'is-open')}
+          />
+          <span className="section-title">项目</span>
+          <span className="section-count">{projects.length}</span>
+        </button>
 
         <div
-          className="projects-scroll"
+          className={cn('projects-scroll', projectsCollapsed && 'is-hidden')}
           onDragLeave={(event) => {
             const related = event.relatedTarget;
             if (related instanceof Node && event.currentTarget.contains(related)) return;
@@ -291,9 +298,6 @@ export function Sidebar({
             <div className="projects-empty">
               <FolderPlus size={18} strokeWidth={1.7} />
               <p>还没有保存的项目</p>
-              <button type="button" onClick={onAddProject}>
-                添加本地目录
-              </button>
             </div>
           ) : null}
         </div>

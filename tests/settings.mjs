@@ -71,21 +71,22 @@ console.log('1. 打开设置');
 await click(page.getByRole('button', { name: '设置', exact: true }).or(page.locator('.titlebar-settings')));
 await waitFor(async () => (await page.locator('.settings-body').count()) > 0, '设置面板');
 ok(true, '设置面板打开');
+const tabLabels = await page.locator('.settings-tab').allInnerTexts();
 ok(
-  (await page.locator('.settings-group-title').allInnerTexts()).some((text) =>
-    text.includes('终端'),
-  ) &&
-    (await page.locator('.settings-group-title').allInnerTexts()).some((text) =>
-      text.includes('编辑器'),
-    ) &&
-    (await page.locator('.settings-group-title').allInnerTexts()).some((text) =>
-      text.includes('关于'),
-    ),
-  '包含终端、编辑器与关于分组',
+  ['关于', '终端', '编辑器', '快捷键'].every((label) =>
+    tabLabels.some((text) => text.includes(label)),
+  ),
+  '包含关于、终端、编辑器与快捷键页签',
+);
+ok(
+  (await page.locator('.settings-tab.is-active').innerText()).includes('关于'),
+  '默认停在关于页签',
 );
 await page.screenshot({ path: join(shots, 'settings.png') });
 
 console.log('2. 自动换行开关');
+await click(page.getByRole('tab', { name: '编辑器' }));
+await page.waitForTimeout(200);
 const wrapSwitch = page.locator('.settings-item').filter({ hasText: '自动换行' }).locator('.settings-switch');
 ok((await wrapSwitch.getAttribute('aria-checked')) === 'true', '默认开启');
 await click(wrapSwitch);
@@ -127,6 +128,8 @@ ok(wrapOn.hasWrapping || wrapOn.scrollW <= wrapOn.clientW + 2, '开启时内容�
 // 关掉换行
 await click(page.locator('.titlebar-settings'));
 await waitFor(async () => (await page.locator('.settings-body').count()) > 0, '设置面板');
+await click(page.getByRole('tab', { name: '编辑器' }));
+await page.waitForTimeout(200);
 await click(page.locator('.settings-item').filter({ hasText: '自动换行' }).locator('.settings-switch'));
 await page.waitForTimeout(300);
 await click(page.getByRole('button', { name: '保存', exact: true }));

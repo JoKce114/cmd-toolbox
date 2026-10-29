@@ -142,7 +142,6 @@ try {
       };
     };
     return {
-      section: measure('.section-add'),
       quick: measure('.group-quick-add'),
     };
   });
