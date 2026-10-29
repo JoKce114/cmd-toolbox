@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib';
 import { useCollapsedSection } from '../useCollapsedSection';
-import type { GitChange, GitChangeStatus, GitStatus, HeadCommit, SyncPrompt } from '../types';
+import type { GitChange, GitChangeStatus, GitStatus, HeadCommit, StashEntry, SyncPrompt } from '../types';
 import { AmendModal } from './AmendModal';
 import { BranchPickerModal } from './BranchPickerModal';
 import { MergeModal } from './MergeModal';
@@ -75,6 +75,10 @@ export type GitPanelProps = {
   onUndoCommit: () => Promise<string | null>;
   onAmend: (message: string) => Promise<boolean>;
   onStashSave: () => Promise<boolean>;
+  stashes: StashEntry[];
+  stashBusy: string | null;
+  onStashPop: (ref: string) => Promise<boolean>;
+  onStashDrop: (ref: string) => Promise<boolean>;
 };
 
 export function GitPanel({
@@ -110,6 +114,10 @@ export function GitPanel({
   onUndoCommit,
   onAmend,
   onStashSave,
+  stashes,
+  stashBusy,
+  onStashPop,
+  onStashDrop,
 }: GitPanelProps) {
   const [message, setMessage] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
@@ -128,6 +136,11 @@ export function GitPanel({
   >(null);
   const [panelCollapsed, togglePanel] = useCollapsedSection('git');
   const [historyCollapsed, toggleHistory] = useCollapsedSection('git-history', true);
+  const [stashCollapsed, toggleStash, setStashCollapsed] = useCollapsedSection(
+    'git-stash',
+    true,
+  );
+  const [confirmDropStash, setConfirmDropStash] = useState<string | null>(null);
   const [confirmUndo, setConfirmUndo] = useState(false);
   const [undoBusy, setUndoBusy] = useState(false);
   const [amendOpen, setAmendOpen] = useState(false);
@@ -475,7 +488,7 @@ export function GitPanel({
             onClick={async () => {
               setStashSaving(true);
               try {
-                await onStashSave();
+                if (await onStashSave()) setStashCollapsed(false);
               } finally {
                 setStashSaving(false);
               }
@@ -606,6 +619,74 @@ export function GitPanel({
         </div>
       ) : null}
       </div>
+
+      <div className="git-stash">
+        <button
+          type="button"
+          className="git-group-head git-stash-toggle"
+          aria-expanded={!stashCollapsed}
+          title={stashCollapsed ? '展开暂存的改动' : '收起暂存的改动'}
+          onClick={toggleStash}
+        >
+          <ChevronRight
+            size={12}
+            className={cn('section-caret', !stashCollapsed && 'is-open')}
+          />
+          <span className="git-stash-title">暂存的改动</span>
+          <span className="git-group-count">{stashes.length}</span>
+        </button>
+        {stashCollapsed ? null : stashes.length === 0 ? (
+          <p className="git-panel-hint">没有收起的改动</p>
+        ) : (
+          <ul className="git-stash-list">
+            {stashes.map((stash) => (
+              <li key={stash.ref} className="git-stash-item">
+                <span className="git-stash-ref">{stash.ref}</span>
+                <span className="git-stash-message" title={stash.message}>
+                  {stash.message}
+                </span>
+                <span className="git-stash-meta">{stash.when}</span>
+                <button
+                  type="button"
+                  className="git-row-action"
+                  title="恢复"
+                  disabled={stashBusy === stash.ref}
+                  onClick={() => void onStashPop(stash.ref)}
+                >
+                  <Undo2 size={13} />
+                </button>
+                <button
+                  type="button"
+                  className="git-row-action"
+                  title="丢弃"
+                  disabled={stashBusy === stash.ref}
+                  onClick={() => setConfirmDropStash(stash.ref)}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {confirmDropStash ? (
+        <ConfirmDialog
+          title="丢弃 stash"
+          confirmLabel="确定丢弃"
+          message={
+            <>
+              <p>丢弃「{confirmDropStash}」？丢弃后无法恢复。</p>
+            </>
+          }
+          onClose={() => setConfirmDropStash(null)}
+          onConfirm={async () => {
+            const ref = confirmDropStash;
+            setConfirmDropStash(null);
+            if (ref) await onStashDrop(ref);
+          }}
+        />
+      ) : null}
 
       {confirmUndo ? (
         <ConfirmDialog

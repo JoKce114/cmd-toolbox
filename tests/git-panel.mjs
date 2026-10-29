@@ -617,6 +617,30 @@ await waitFor(
   '提交信息已更新',
 );
 
+console.log('17. 收起与恢复改动');
+writeFileSync(join(repo, 'stash-ui.txt'), 's\n');
+await page.waitForTimeout(1200);
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-change-row').count()) > 0,
+  '出现待收起的改动',
+);
+await click(page.locator('.git-ops-button[data-action="stash"]'));
+await waitFor(
+  async () => (await page.locator('.git-stash-item').count()) === 1,
+  '出现 stash 记录',
+);
+assert(!existsSync(join(repo, 'stash-ui.txt')), '文件已被收起');
+
+await click(
+  page.locator('.git-stash-item').first().locator('.git-row-action[title="恢复"]'),
+);
+await waitFor(async () => existsSync(join(repo, 'stash-ui.txt')), '恢复后文件回来');
+await waitFor(
+  async () => (await page.locator('.git-stash-item').count()) === 0,
+  '恢复后列表清空',
+);
+
 await page.screenshot({ path: join(shotDir, 'git-panel.png') });
 await app.close();
 rmSync(dataDir, { recursive: true, force: true });

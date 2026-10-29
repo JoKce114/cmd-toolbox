@@ -44,6 +44,7 @@ import type {
   MenuEntry,
   MenuState,
   Project,
+  StashEntry,
   SyncPrompt,
   Tab,
   UpdateCheckResult,
@@ -730,6 +731,29 @@ export default function App() {
     };
   }, [gitStatus]);
 
+  const [stashes, setStashes] = useState<StashEntry[]>([]);
+  const [stashBusy, setStashBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    const group = gitGroupRef.current;
+    if (!group) {
+      setStashes([]);
+      return;
+    }
+    let cancelled = false;
+    void window.api.git
+      .stashList(group.path)
+      .then((result) => {
+        if (!cancelled) setStashes(result.stashes);
+      })
+      .catch(() => {
+        if (!cancelled) setStashes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gitStatus]);
+
   useEffect(() => {
     const group = gitGroupRef.current;
     if (!group) {
@@ -811,6 +835,50 @@ export default function App() {
       return false;
     }
   }, [pushToast, refreshGit]);
+
+  const gitStashPop = useCallback(
+    async (ref: string) => {
+      const group = gitGroupRef.current;
+      if (!group) return false;
+      setStashBusy(ref);
+      try {
+        const result = await window.api.git.stashPop(group.path, ref);
+        if (result.conflicts.length) {
+          pushToast(`恢复后有 ${result.conflicts.length} 处冲突，stash 记录已保留`, 'error');
+        } else {
+          pushToast('已恢复收起的改动', 'success');
+        }
+        await refreshGit();
+        return true;
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+        return false;
+      } finally {
+        setStashBusy(null);
+      }
+    },
+    [pushToast, refreshGit],
+  );
+
+  const gitStashDrop = useCallback(
+    async (ref: string) => {
+      const group = gitGroupRef.current;
+      if (!group) return false;
+      setStashBusy(ref);
+      try {
+        await window.api.git.stashDrop(group.path, ref);
+        pushToast('已丢弃 stash 记录', 'success');
+        await refreshGit();
+        return true;
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+        return false;
+      } finally {
+        setStashBusy(null);
+      }
+    },
+    [pushToast, refreshGit],
+  );
 
   const [syncPrompt, setSyncPrompt] = useState<SyncPrompt | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
@@ -2440,6 +2508,10 @@ export default function App() {
                 onUndoCommit={gitUndoCommit}
                 onAmend={gitAmend}
                 onStashSave={gitStashSave}
+                stashes={stashes}
+                stashBusy={stashBusy}
+                onStashPop={gitStashPop}
+                onStashDrop={gitStashDrop}
               />
             ) : null
           }
