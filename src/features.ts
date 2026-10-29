@@ -1,4 +1,3 @@
-// 开机自动启动的设置入口暂时隐藏：功能本身已完成并有测试覆盖，
-// 但只在打包安装版里可用，尚未在真机上验证过「重启后确实自启」。
-// 验证通过后把这里改成 true 即可恢复「常规」页签，不需要改别的代码。
-export const STARTUP_SETTING_ENABLED = false;
+// 开机自动启动的设置入口开关。
+// 功能代码在 desktop/login-item.js，只在打包安装版里可用（开发模式恒为禁用）。
+export const STARTUP_SETTING_ENABLED = true;

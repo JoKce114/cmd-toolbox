@@ -126,12 +126,7 @@ node tests/login-item.mjs     # 开机自启动（假 app，不碰注册表）
 
 - `tests/login-item.mjs` 用假 `app` 对象，**不会**读写真实注册表。
   开机启动在开发模式（`app.isPackaged === false`）下永久不可用，
-  所以 UI 测试无法端到端验证它，只在 `tests/login-item.mjs` 里做离线逻辑测试。
-- **开机自动启动的设置入口当前是隐藏的**：`src/features.ts` 的
-  `STARTUP_SETTING_ENABLED = false` 控制「常规」页签是否出现。
-  功能代码（`desktop/login-item.js`、IPC、类型）完整保留并有测试覆盖，
-  但「重启后确实自启」还没在真机上验证过。验证通过后把它改成 `true` 即可恢复，
-  同时要在 `CHANGELOG.md` 补回对应条目。
+  所以 UI 测试只能断言开关置灰与原因文案。
 
 ### 改了 `src/` 之后先重建再跑 GUI 测试
 
@@ -161,8 +156,8 @@ node tests/smoke.mjs
 
 设置面板、公告弹窗的断言大量依赖中文文案。改文案前先 grep 一下 `tests/`。
 「关于」页签必须排在设置面板第一位，`tests/update-notify.mjs` 有断言。
-设置项按页签分组（关于 / 终端 / 编辑器 / 快捷键；「常规」页签因开机启动待真机验证而隐藏），
-新增设置项放进对应页签，不要恢复成单页长列表。
+设置项按页签分组（关于 / 常规 / 终端 / 编辑器 / 快捷键），新增设置项放进对应页签，
+不要恢复成单页长列表。
 
 ## 已知的坑
 
@@ -201,9 +196,8 @@ node tests/smoke.mjs
 - 侧栏项目行只显示项目名，完整路径放在 `title` 里。不要再加回第二行路径——
   它是左栏变拥挤的主要原因
 - 设置页签顺序固定为 **关于 / 常规 / 终端 / 编辑器 / 快捷键**，「关于」必须第一位
-  （`tests/update-notify.mjs` 有断言）。「常规」是否显示由 `src/features.ts` 的
-  `STARTUP_SETTING_ENABLED` 决定，当前为 `false`。编辑器页签内部按
-  字体 / 显示 / 缩进 三组排列，组标题是 `.settings-group-title`
+  （`tests/update-notify.mjs` 有断言）。编辑器页签内部按 字体 / 显示 / 缩进 三组排列，
+  组标题是 `.settings-group-title`
 - 设置面板里凡是需要写系统状态的操作（如开机启动），一律在点「保存」时执行，
   不能切开关就立即生效，否则「取消」会名不副实
 
