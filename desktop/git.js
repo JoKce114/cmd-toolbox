@@ -607,12 +607,10 @@ async function fileDiff(projectPath, filePath, changeStatus) {
 // 最近的提交列表，供面板展示
 async function log(projectPath, limit = 30) {
   const count = Math.max(1, Math.min(200, Number(limit) || 30));
-  // 用不可见分隔符串起字段，避免提交信息里的空格干扰解析
-  const SEP = String.fromCharCode(31);
   const result = await runGit(projectPath, [
     'log',
     '-' + count,
-    '--pretty=format:%H' + SEP + '%h' + SEP + '%an' + SEP + '%ar' + SEP + '%s',
+    '--pretty=format:%H' + UNIT + '%h' + UNIT + '%an' + UNIT + '%ar' + UNIT + '%s',
   ]);
   if (!result.ok) {
     // 空仓库没有 HEAD，返回空列表而不是报错
@@ -737,7 +735,12 @@ async function headCommit(projectPath) {
   const message = (parts.slice(3).join(UNIT) || subject).trim();
 
   // 无远端仓库时输出为空，pushed 为 false 是正确的
-  const remote = await runGit(projectPath, ['branch', '-r', '--contains', hash]);
+  const remote = await runGit(projectPath, [
+    'branch',
+    '-r',
+    '--contains',
+    assertCommitHash(hash),
+  ]);
   return {
     hash,
     short,
@@ -752,8 +755,14 @@ async function undoCommit(projectPath) {
   const head = await headCommit(projectPath);
   if (!head) throw new Error('还没有任何提交可以撤销');
 
-  // 首次提交没有 HEAD~1，只能删掉引用；此时索引保留，文件仍处于已暂存状态
+  // 首次提交没有 HEAD~1，只能删掉引用；此时索引保留，文件仍处于已暂存状态。
+  // HEAD 是符号引用时才删得到分支引用；游离 HEAD 下 update-ref -d HEAD 会删掉
+  // .git/HEAD 文件本身，直接损坏仓库，因此先拒绝。
   const parent = await runGit(projectPath, ['rev-parse', '--verify', '--quiet', 'HEAD~1']);
+  if (!parent.ok) {
+    const symbolic = await runGit(projectPath, ['symbolic-ref', '-q', 'HEAD']);
+    if (!symbolic.ok) throw new Error('当前处于游离 HEAD 状态，无法撤销提交');
+  }
   const args = parent.ok ? ['reset', '--soft', 'HEAD~1'] : ['update-ref', '-d', 'HEAD'];
   const result = await runGit(projectPath, args);
   if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
@@ -785,6 +794,7 @@ async function amend(projectPath, message) {
   if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
 
   const head2 = await runGit(projectPath, ['rev-parse', '--short', 'HEAD']);
+  if (!head2.ok) throw new Error(cleanError(head2.error, head2.stderr));
   return { commit: head2.stdout.trim(), summary: text.split('\n')[0] };
 }
 

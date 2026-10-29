@@ -326,4 +326,74 @@ assert(amendError.includes('未修改'), '无变更时拒绝 amend');
 const headRepo = makeRepo();
 assert((await git.headCommit(headRepo)) === null, '空仓库 headCommit 返回 null');
 
+console.log('18. HEAD 信息');
+const headInfoRepo = makeRepo();
+writeFileSync(join(headInfoRepo, 'readme.md'), 'hello\n');
+await git.stageAll(headInfoRepo);
+await git.commit(headInfoRepo, '主题行\n\n正文第一行\n正文第二行');
+const info = await git.headCommit(headInfoRepo);
+assert(/^[0-9a-f]{40}$/.test(info.hash), 'hash 是 40 位十六进制');
+assert(info.hash.startsWith(info.short) && info.short.length >= 4, 'short 是 hash 的前缀');
+assert(info.subject === '主题行', 'subject 只取第一行');
+assert(info.message === '主题行\n\n正文第一行\n正文第二行', 'message 完整保留换行');
+assert(info.pushed === false, '无远端时为未推送');
+
+console.log('19. 推送状态');
+const remoteDir = mkdtempSync(join(tmpdir(), 'cmdtb-remote-'));
+execFileSync('git', ['init', '--bare'], { cwd: remoteDir, stdio: 'ignore' });
+const pushRepo = makeRepo();
+writeFileSync(join(pushRepo, 'a.txt'), 'a\n');
+await git.stageAll(pushRepo);
+await git.commit(pushRepo, '已推送');
+execFileSync('git', ['remote', 'add', 'origin', remoteDir], { cwd: pushRepo });
+execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: pushRepo, stdio: 'ignore' });
+const pushedHead = await git.headCommit(pushRepo);
+assert(pushedHead.pushed === true, '已推送的提交标记为已推送');
+writeFileSync(join(pushRepo, 'b.txt'), 'b\n');
+await git.stageAll(pushRepo);
+await git.commit(pushRepo, '未推送');
+const unpushedHead = await git.headCommit(pushRepo);
+assert(unpushedHead.pushed === false, '未推送的提交标记为未推送');
+
+console.log('20. 修改提交保留正文');
+const amendBodyRepo = makeRepo();
+writeFileSync(join(amendBodyRepo, 'a.txt'), 'a\n');
+await git.stageAll(amendBodyRepo);
+await git.commit(amendBodyRepo, '标题\n\n正文保留');
+writeFileSync(join(amendBodyRepo, 'b.txt'), 'b\n');
+await git.stageAll(amendBodyRepo);
+const amendedSame = await git.amend(amendBodyRepo, '标题\n\n正文保留');
+assert(amendedSame.summary === '标题', '相同信息走 --no-edit 并返回摘要');
+assert(
+  execFileSync('git', ['log', '-1', '--pretty=%B'], {
+    cwd: amendBodyRepo,
+    encoding: 'utf8',
+  }).trim() === '标题\n\n正文保留',
+  '--no-edit 保留原提交正文',
+);
+assert(
+  execFileSync('git', ['show', '--name-only', '--pretty=format:', 'HEAD'], {
+    cwd: amendBodyRepo,
+    encoding: 'utf8',
+  }).includes('b.txt'),
+  '--no-edit 并入暂存改动',
+);
+
+console.log('21. 游离 HEAD 下撤销提交');
+const detachedRepo = makeRepo();
+writeFileSync(join(detachedRepo, 'a.txt'), 'a\n');
+await git.stageAll(detachedRepo);
+await git.commit(detachedRepo, '唯一提交');
+execFileSync('git', ['checkout', '--detach', 'HEAD'], { cwd: detachedRepo, stdio: 'ignore' });
+let detachedError = '';
+try {
+  await git.undoCommit(detachedRepo);
+} catch (error) {
+  detachedError = error.message;
+}
+assert(detachedError.includes('游离 HEAD'), '游离 HEAD 时拒绝撤销提交');
+const detachedStatus = await git.status(detachedRepo);
+assert(detachedStatus.ok === true, '拒绝后仓库仍然可用');
+assert((await git.headCommit(detachedRepo)) !== null, '拒绝后 HEAD 未被删除');
+
 console.log(`\n全部通过：${passed} 项`);
