@@ -59,6 +59,8 @@ import {
 import { TitleBar } from './components/TitleBar';
 import { SettingsModal } from './components/SettingsModal';
 import {
+  EDITOR_FONT_SIZE_MAX,
+  EDITOR_FONT_SIZE_MIN,
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_MIN,
   readPrefs,
@@ -2456,6 +2458,24 @@ export default function App() {
           tabSize={prefs.editorTabSize}
           indentWithSpaces={prefs.editorIndentWithSpaces}
           keybindings={prefs.editorKeybindings}
+          fontSize={prefs.editorFontSize}
+          lineHeight={prefs.editorLineHeight}
+          fontFamily={prefs.editorFontFamily}
+          showLineNumbers={prefs.editorLineNumbers}
+          highlightActiveLine={prefs.editorHighlightActiveLine}
+          bracketMatching={prefs.editorBracketMatching}
+          showWhitespace={prefs.editorShowWhitespace}
+          onFontSizeDelta={(delta) => {
+            setPrefs((previous) => {
+              const editorFontSize = Math.min(
+                EDITOR_FONT_SIZE_MAX,
+                Math.max(EDITOR_FONT_SIZE_MIN, previous.editorFontSize + delta),
+              );
+              const next = { ...previous, editorFontSize };
+              writePrefs(next);
+              return next;
+            });
+          }}
         />
       );
     }

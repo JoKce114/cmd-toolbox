@@ -1,6 +1,9 @@
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import type { Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
+import { EDITOR_FONT_STACKS } from './prefs';
+import type { EditorFontFamily } from './prefs';
 
 // VS Code Light+ 的取色，尽量贴近同一套语义
 const vscodeLight = HighlightStyle.define([
@@ -155,5 +158,23 @@ export const vscodeDarkExtensions = [darkTheme, syntaxHighlighting(vscodeDark)];
 
 export function themeExtensions(mode: 'light' | 'dark') {
   return mode === 'dark' ? vscodeDarkExtensions : vscodeLightExtensions;
+}
+
+// 字号、行高、字体由主题扩展注入。styles.css 里不能再写这三条，
+// 静态 CSS 的优先级会盖掉这里的值，表现为「改了设置但没反应」。
+export function editorAppearanceExtension(options: {
+  fontSize: number;
+  lineHeight: number;
+  fontFamily: EditorFontFamily;
+}): Extension {
+  return EditorView.theme({
+    '&': {
+      fontSize: `${options.fontSize}px`,
+    },
+    '.cm-scroller': {
+      fontFamily: EDITOR_FONT_STACKS[options.fontFamily],
+      lineHeight: String(options.lineHeight),
+    },
+  });
 }
 

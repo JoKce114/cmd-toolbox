@@ -2,8 +2,9 @@ import { useEffect, useRef } from 'react';
 import {
   EditorView,
   keymap,
-  lineNumbers,
-  highlightActiveLine,
+  lineNumbers as lineNumbersExtension,
+  highlightActiveLine as highlightActiveLineExtension,
+  highlightWhitespace,
   Decoration,
   WidgetType,
 } from '@codemirror/view';
@@ -11,14 +12,15 @@ import type { DecorationSet } from '@codemirror/view';
 import { EditorState, Compartment, StateField, RangeSetBuilder, Transaction } from '@codemirror/state';
 import type { EditorState as EditorStateType } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { indentUnit } from '@codemirror/language';
+import { bracketMatching as bracketMatchingExtension, indentUnit } from '@codemirror/language';
 import { bindingsExtension } from '../editorKeymap';
 import type { KeyBindingMap } from '../editorKeymap';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { createRoot } from 'react-dom/client';
 import { languageFor } from '../editorLanguage';
 import { searchPhrases } from '../editorSearchPhrases';
-import { themeExtensions } from '../editorTheme';
+import { editorAppearanceExtension, themeExtensions } from '../editorTheme';
+import type { EditorFontFamily } from '../prefs';
 import type { TerminalThemeMode } from '../theme';
 import { parseConflicts, resolveConflict } from '../conflictParser';
 import type { ConflictBlock, ConflictChoice } from '../conflictParser';
@@ -33,6 +35,14 @@ export type CodeMirrorHostProps = {
   tabSize: number;
   indentWithSpaces: boolean;
   keybindings: KeyBindingMap;
+  fontSize: number;
+  lineHeight: number;
+  fontFamily: EditorFontFamily;
+  showLineNumbers: boolean;
+  highlightActiveLine: boolean;
+  bracketMatching: boolean;
+  showWhitespace: boolean;
+  onFontSizeDelta?: (delta: number) => void;
   onChange: (value: string) => void;
   onConflictCountChange?: (count: number) => void;
 };
@@ -118,6 +128,20 @@ function buildDecorations(state: EditorStateType): DecorationSet {
   return builder.finish();
 }
 
+function displayExtensions(options: {
+  showLineNumbers: boolean;
+  highlightActiveLine: boolean;
+  bracketMatching: boolean;
+  showWhitespace: boolean;
+}) {
+  return [
+    options.showLineNumbers ? lineNumbersExtension() : [],
+    options.highlightActiveLine ? highlightActiveLineExtension() : [],
+    options.bracketMatching ? bracketMatchingExtension() : [],
+    options.showWhitespace ? highlightWhitespace() : [],
+  ];
+}
+
 const conflictField = StateField.define<DecorationSet>({
   create: buildDecorations,
   update(value, tr) {
@@ -136,6 +160,14 @@ export function CodeMirrorHost({
   tabSize,
   indentWithSpaces,
   keybindings,
+  fontSize,
+  lineHeight,
+  fontFamily,
+  showLineNumbers,
+  highlightActiveLine,
+  bracketMatching,
+  showWhitespace,
+  onFontSizeDelta,
   onChange,
   onConflictCountChange,
 }: CodeMirrorHostProps) {
@@ -146,10 +178,14 @@ export function CodeMirrorHost({
   const wrapRef = useRef(new Compartment());
   const indentRef = useRef(new Compartment());
   const keysRef = useRef(new Compartment());
+  const appearanceRef = useRef(new Compartment());
+  const displayRef = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   const onCountRef = useRef(onConflictCountChange);
+  const onFontDeltaRef = useRef(onFontSizeDelta);
   onChangeRef.current = onChange;
   onCountRef.current = onConflictCountChange;
+  onFontDeltaRef.current = onFontSizeDelta;
 
   // 只在 filePath / readOnly 变化时重建，避免每次按键都销毁编辑器
   useEffect(() => {
@@ -162,8 +198,17 @@ export function CodeMirrorHost({
       state: EditorState.create({
         doc: value,
         extensions: [
-          lineNumbers(),
-          highlightActiveLine(),
+          displayRef.current.of(
+            displayExtensions({
+              showLineNumbers,
+              highlightActiveLine,
+              bracketMatching,
+              showWhitespace,
+            }),
+          ),
+          appearanceRef.current.of(
+            editorAppearanceExtension({ fontSize, lineHeight, fontFamily }),
+          ),
           history(),
           highlightSelectionMatches(),
           // 自定义键位放在 searchKeymap 之前：CodeMirror 按顺序匹配，
@@ -247,6 +292,45 @@ export function CodeMirrorHost({
       effects: keysRef.current.reconfigure(bindingsExtension(keybindings)),
     });
   }, [keybindings]);
+
+  // 外观变化只重配主题扩展，不重建编辑器
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: appearanceRef.current.reconfigure(
+        editorAppearanceExtension({ fontSize, lineHeight, fontFamily }),
+      ),
+    });
+    requestAnimationFrame(() => view.requestMeasure());
+  }, [fontSize, lineHeight, fontFamily]);
+
+  // 显示开关同理：行号、高亮当前行、括号匹配、空白字符
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: displayRef.current.reconfigure(
+        displayExtensions({ showLineNumbers, highlightActiveLine, bracketMatching, showWhitespace }),
+      ),
+    });
+    requestAnimationFrame(() => view.requestMeasure());
+  }, [showLineNumbers, highlightActiveLine, bracketMatching, showWhitespace]);
+
+  // Ctrl + 滚轮调整字号，与终端行为一致（TerminalPane 用的是同一套判定）。
+  // passive 必须为 false，否则 preventDefault 无效，Chromium 会连带缩放整页。
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onFontDeltaRef.current?.(event.deltaY < 0 ? 1 : -1);
+    };
+    host.addEventListener('wheel', onWheel, { capture: true, passive: false });
+    return () => host.removeEventListener('wheel', onWheel, { capture: true });
+  }, []);
 
   // 文件内容被外部替换（如重新加载）时，同步到编辑器
   useEffect(() => {

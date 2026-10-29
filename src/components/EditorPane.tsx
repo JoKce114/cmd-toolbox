@@ -8,6 +8,7 @@ import { CodeMirrorHost } from './CodeMirrorHost';
 import type { Group, Tab } from '../types';
 import type { TerminalThemeMode } from '../theme';
 import type { KeyBindingMap } from '../editorKeymap';
+import type { EditorFontFamily } from '../prefs';
 import type { ToastKind } from './Toast';
 
 const ENCODING_LABEL: Record<string, string> = {
@@ -31,6 +32,14 @@ export type EditorPaneProps = {
   tabSize: number;
   indentWithSpaces: boolean;
   keybindings: KeyBindingMap;
+  fontSize: number;
+  lineHeight: number;
+  fontFamily: EditorFontFamily;
+  showLineNumbers: boolean;
+  highlightActiveLine: boolean;
+  bracketMatching: boolean;
+  showWhitespace: boolean;
+  onFontSizeDelta: (delta: number) => void;
 };
 
 export function EditorPane({
@@ -46,6 +55,14 @@ export function EditorPane({
   tabSize,
   indentWithSpaces,
   keybindings,
+  fontSize,
+  lineHeight,
+  fontFamily,
+  showLineNumbers,
+  highlightActiveLine,
+  bracketMatching,
+  showWhitespace,
+  onFontSizeDelta,
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const {
@@ -320,6 +337,14 @@ export function EditorPane({
               tabSize={tabSize}
               indentWithSpaces={indentWithSpaces}
               keybindings={keybindings}
+              fontSize={fontSize}
+              lineHeight={lineHeight}
+              fontFamily={fontFamily}
+              showLineNumbers={showLineNumbers}
+              highlightActiveLine={highlightActiveLine}
+              bracketMatching={bracketMatching}
+              showWhitespace={showWhitespace}
+              onFontSizeDelta={onFontSizeDelta}
               onChange={(value) => update(activePath, value)}
               onConflictCountChange={setConflictCount}
             />
