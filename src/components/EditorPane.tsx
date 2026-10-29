@@ -79,15 +79,15 @@ export function EditorPane({
   const onDirtyChangeRef = useRef(onDirtyChange);
   onDirtyChangeRef.current = onDirtyChange;
 
-  // 页签自带的起始文件只在首次挂载时应用一次。
-  // 若把它留在依赖里，用户点文件树切到别的文件后会被立即拉回来。
-  const initialPathRef = useRef(tab.filePath || '');
+  // 页签的 filePath 会变（上层用同一个编辑器页签顶替新文件），
+  // 所以要比对「上次已应用的路径」而不是只在挂载时读一次。
+  const appliedPathRef = useRef('');
   useEffect(() => {
-    const initial = initialPathRef.current;
-    if (!initial) return;
-    initialPathRef.current = '';
-    void open(initial);
-  }, [open]);
+    const next = tab.filePath || '';
+    if (!next || next === appliedPathRef.current) return;
+    appliedPathRef.current = next;
+    void open(next);
+  }, [tab.filePath, open]);
 
   useEffect(() => {
     const base = activePath ? activePath.split('/').pop() || '编辑器' : '编辑器';

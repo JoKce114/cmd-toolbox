@@ -170,6 +170,8 @@ export default function App() {
 
   const tabsRef = useRef<Record<string, Tab[]>>({});
   const dirtyTabsRef = useRef<Map<string, boolean>>(new Map());
+  // 改过就永久占住，保存后也不释放：新文件只能顶替没动过的编辑器页签
+  const touchedTabsRef = useRef<Set<string>>(new Set());
   const activeTabByGroupRef = useRef(activeTabByGroup);
   const sessionReadyRef = useRef(false);
   const sidebarCollapsedRef = useRef(false);
@@ -1405,8 +1407,12 @@ export default function App() {
   );
 
   const handleDirtyChange = useCallback((tabId: string, dirty: boolean) => {
-    if (dirty) dirtyTabsRef.current.set(tabId, true);
-    else dirtyTabsRef.current.delete(tabId);
+    if (dirty) {
+      dirtyTabsRef.current.set(tabId, true);
+      touchedTabsRef.current.add(tabId);
+    } else {
+      dirtyTabsRef.current.delete(tabId);
+    }
   }, []);
 
   const createEditor = useCallback(
@@ -1508,7 +1514,12 @@ export default function App() {
 
   const openEditorFile = useCallback(
     (group: Group, relPath: string) => {
-      const existing = (tabsRef.current[group.key] || []).find(
+      if (!group.exists) {
+        pushToast('项目目录不存在，请先编辑项目路径', 'error');
+        return;
+      }
+      const groupTabs = tabsRef.current[group.key] || [];
+      const existing = groupTabs.find(
         (item) => item.shellId === 'editor' && item.filePath === relPath,
       );
       if (existing) {
@@ -1516,9 +1527,35 @@ export default function App() {
         setActiveGroupKey(group.key);
         return;
       }
+
+      // 没动过的编辑器页签可以直接换文件，避免为了看一眼文件攒出一排页签。
+      // 优先当前激活的，其次最近打开的那个。
+      const reusable = groupTabs.filter(
+        (item) => item.shellId === 'editor' && !touchedTabsRef.current.has(item.id),
+      );
+      const activeId = activeTabByGroupRef.current[group.key];
+      const target =
+        reusable.find((item) => item.id === activeId) ?? reusable[reusable.length - 1];
+      if (target) {
+        applyTabs({
+          ...tabsRef.current,
+          [group.key]: groupTabs.map((item) =>
+            item.id === target.id ? { ...item, filePath: relPath } : item,
+          ),
+        });
+        setActiveGroupKey(group.key);
+        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: target.id }));
+        // 停留在右栏时激活的必须是右栏自己的页签
+        if ((rightIdsByGroupRef.current[group.key] || []).includes(target.id)) {
+          setRightActiveByGroup((previous) => ({ ...previous, [group.key]: target.id }));
+          setFocusSideByGroup((previous) => ({ ...previous, [group.key]: 'right' }));
+        }
+        return;
+      }
+
       createEditor(group, relPath);
     },
-    [createEditor],
+    [applyTabs, createEditor, pushToast],
   );
 
   const createTerminal = useCallback(
@@ -1614,6 +1651,7 @@ export default function App() {
 
       for (const tab of closing) {
         dirtyTabsRef.current.delete(tab.id);
+        touchedTabsRef.current.delete(tab.id);
         if (!tab.sessionId) continue;
         discardSession(tab.sessionId);
         void window.api.pty.kill(tab.sessionId).catch(() => {});

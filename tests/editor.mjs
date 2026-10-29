@@ -205,6 +205,7 @@ const beforeTabs = await page.locator('.tab').count();
 await click(
   page.locator('.git-change-item').filter({ hasText: 'index.php' }).locator('.git-change-row'),
 );
+// 此时的编辑器页签都改过内容，属于「占住」状态，应当新开
 await waitFor(
   async () => (await page.locator('.tab').count()) === beforeTabs + 1,
   '新开编辑器页签',
@@ -355,6 +356,75 @@ await waitFor(
 );
 const theirsText = await page.locator('.editor-pane:not(.is-hidden) .cm-content').innerText();
 assert(theirsText.includes('theirs') && !theirsText.includes('ours'), '只剩传入分支内容');
+
+console.log('15. 没动过的编辑器页签会被新文件顶替');
+// 新建一个空白编辑器页签：filePath 为空、未改动，正是可复用对象
+await page.locator('.group-item').filter({ hasText: 'edit-proj' }).click({ button: 'right' });
+await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+await click(page.getByRole('menuitem', { name: '打开编辑器', exact: true }));
+await waitFor(
+  async () => (await page.locator('.editor-pane:not(.is-hidden) .editor-placeholder').count()) > 0,
+  '出现空白编辑器',
+);
+const reusableTabs = await page.locator('.tab').count();
+
+// 从 Git 面板打开一个文件：应顶替这个空白页签，页签数不变
+writeFileSync(join(repo, 'picked.txt'), 'picked\n');
+await page.waitForTimeout(1500);
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-change-row').filter({ hasText: 'picked.txt' }).count()) > 0,
+  'Git 面板列出新文件',
+);
+await click(
+  page
+    .locator('.git-change-item')
+    .filter({ hasText: 'picked.txt' })
+    .locator('.git-row-action[title="打开文件编辑"]'),
+);
+await waitFor(
+  async () =>
+    (await page.locator('.editor-pane:not(.is-hidden)').innerText()).includes('picked'),
+  '空白页签被顶替为新文件',
+);
+assert(
+  (await page.locator('.tab').count()) === reusableTabs,
+  '页签数量没有增加',
+);
+
+console.log('16. 改过的编辑器页签不会被顶替');
+const keepPane = page.locator('.editor-pane:not(.is-hidden)');
+await keepPane.locator('.cm-content').click();
+await page.keyboard.type('// touched');
+await waitFor(
+  async () => (await keepPane.locator('.editor-tab-dot').count()) > 0,
+  '页签标记为已修改',
+);
+const tabsAfterEdit = await page.locator('.tab').count();
+
+writeFileSync(join(repo, 'picked2.txt'), 'picked2\n');
+await page.waitForTimeout(1500);
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-change-row').filter({ hasText: 'picked2.txt' }).count()) > 0,
+  'Git 面板列出第二个新文件',
+);
+await click(
+  page
+    .locator('.git-change-item')
+    .filter({ hasText: 'picked2.txt' })
+    .locator('.git-row-action[title="打开文件编辑"]'),
+);
+await waitFor(
+  async () => (await page.locator('.tab').count()) === tabsAfterEdit + 1,
+  '改过的页签占住位置，新开了一个',
+);
+await click(page.locator('.tab').filter({ hasText: 'picked.txt' }).first());
+await page.waitForTimeout(400);
+assert(
+  (await page.locator('.editor-pane:not(.is-hidden)').innerText()).includes('// touched'),
+  '原页签的未保存修改没有被冲掉',
+);
 
 await app.close();
 rmSync(dataDir, { recursive: true, force: true });
