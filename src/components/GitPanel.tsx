@@ -1,19 +1,23 @@
 import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
+  Archive,
   ArrowDownToLine,
   ArrowUp,
   Check,
   ChevronRight,
   FileCode,
   GitBranch,
+  Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Trash2,
   Undo2,
 } from 'lucide-react';
 import { cn } from '../lib';
 import { useCollapsedSection } from '../useCollapsedSection';
-import type { GitChange, GitChangeStatus, GitStatus, SyncPrompt } from '../types';
+import type { GitChange, GitChangeStatus, GitStatus, HeadCommit, SyncPrompt } from '../types';
+import { AmendModal } from './AmendModal';
 import { BranchPickerModal } from './BranchPickerModal';
 import { MergeModal } from './MergeModal';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -67,6 +71,10 @@ export type GitPanelProps = {
     when: string;
     subject: string;
   }) => void;
+  head: HeadCommit | null;
+  onUndoCommit: () => Promise<string | null>;
+  onAmend: (message: string) => Promise<boolean>;
+  onStashSave: () => Promise<boolean>;
 };
 
 export function GitPanel({
@@ -98,6 +106,10 @@ export function GitPanel({
   onSyncClose,
   commits,
   onOpenCommit,
+  head,
+  onUndoCommit,
+  onAmend,
+  onStashSave,
 }: GitPanelProps) {
   const [message, setMessage] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
@@ -116,6 +128,11 @@ export function GitPanel({
   >(null);
   const [panelCollapsed, togglePanel] = useCollapsedSection('git');
   const [historyCollapsed, toggleHistory] = useCollapsedSection('git-history', true);
+  const [confirmUndo, setConfirmUndo] = useState(false);
+  const [undoBusy, setUndoBusy] = useState(false);
+  const [amendOpen, setAmendOpen] = useState(false);
+  const [amendBusy, setAmendBusy] = useState(false);
+  const [stashSaving, setStashSaving] = useState(false);
 
   const runPathAction = async (key: string, action: () => Promise<boolean>) => {
     setBusyPaths((previous) => new Set(previous).add(key));
@@ -448,6 +465,48 @@ export function GitPanel({
       ) : null}
 
       <div className={cn('git-panel-body', panelCollapsed && 'is-hidden')}>
+        <div className="git-ops-row">
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm git-ops-button"
+            data-action="stash"
+            title="把全部未提交改动收进 stash"
+            disabled={!status.hasChanges || stashSaving}
+            onClick={async () => {
+              setStashSaving(true);
+              try {
+                await onStashSave();
+              } finally {
+                setStashSaving(false);
+              }
+            }}
+          >
+            <Archive size={13} />
+            {stashSaving ? '收起中…' : '收起改动'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm git-ops-button"
+            data-action="undo"
+            title="撤销最后一次提交，改动回到暂存区"
+            disabled={!head || undoBusy}
+            onClick={() => setConfirmUndo(true)}
+          >
+            <RotateCcw size={13} />
+            {undoBusy ? '撤销中…' : '撤销提交'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm git-ops-button"
+            data-action="amend"
+            title="修改最后一次提交的信息"
+            disabled={!head || amendBusy}
+            onClick={() => setAmendOpen(true)}
+          >
+            <Pencil size={13} />
+            修改提交
+          </button>
+        </div>
       {status.hasChanges || phase === 'committed' ? (
         <>
           <textarea
@@ -547,6 +606,55 @@ export function GitPanel({
         </div>
       ) : null}
       </div>
+
+      {confirmUndo ? (
+        <ConfirmDialog
+          title="撤销提交"
+          confirmLabel="确定撤销"
+          message={
+            <>
+              <p>撤销最后一次提交？改动会回到暂存区。</p>
+              {head?.pushed ? (
+                <p className="confirm-note">
+                  这个提交已经推送过，撤销后需要强推才能同步远端。
+                </p>
+              ) : null}
+            </>
+          }
+          onClose={() => setConfirmUndo(false)}
+          onConfirm={async () => {
+            setConfirmUndo(false);
+            setUndoBusy(true);
+            try {
+              const restored = await onUndoCommit();
+              if (restored) {
+                setMessage(restored);
+                setPhase('idle');
+              }
+            } finally {
+              setUndoBusy(false);
+            }
+          }}
+        />
+      ) : null}
+
+      {amendOpen && head ? (
+        <AmendModal
+          current={head.message}
+          stagedCount={status.stagedCount}
+          pushed={head.pushed}
+          busy={amendBusy}
+          onClose={() => setAmendOpen(false)}
+          onConfirm={async (next) => {
+            setAmendBusy(true);
+            try {
+              if (await onAmend(next)) setAmendOpen(false);
+            } finally {
+              setAmendBusy(false);
+            }
+          }}
+        />
+      ) : null}
 
       {confirmDiscard ? (
         <ConfirmDialog

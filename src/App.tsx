@@ -40,6 +40,7 @@ import type {
   GitPullStrategy,
   GitStatus,
   Group,
+  HeadCommit,
   MenuEntry,
   MenuState,
   Project,
@@ -707,6 +708,28 @@ export default function App() {
     };
   }, [gitStatus]);
 
+  const [headCommit, setHeadCommit] = useState<HeadCommit | null>(null);
+
+  useEffect(() => {
+    const group = gitGroupRef.current;
+    if (!group) {
+      setHeadCommit(null);
+      return;
+    }
+    let cancelled = false;
+    void window.api.git
+      .headCommit(group.path)
+      .then((result) => {
+        if (!cancelled) setHeadCommit(result);
+      })
+      .catch(() => {
+        if (!cancelled) setHeadCommit(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gitStatus]);
+
   useEffect(() => {
     const group = gitGroupRef.current;
     if (!group) {
@@ -743,6 +766,51 @@ export default function App() {
     },
     [pushToast, refreshGit],
   );
+
+  const gitUndoCommit = useCallback(async (): Promise<string | null> => {
+    const group = gitGroupRef.current;
+    if (!group) return null;
+    try {
+      const result = await window.api.git.undoCommit(group.path);
+      pushToast('已撤销提交，改动回到暂存区', 'success');
+      await refreshGit();
+      return result.message;
+    } catch (error) {
+      pushToast(toErrorMessage(error), 'error');
+      return null;
+    }
+  }, [pushToast, refreshGit]);
+
+  const gitAmend = useCallback(
+    async (message: string) => {
+      const group = gitGroupRef.current;
+      if (!group) return false;
+      try {
+        const result = await window.api.git.amend(group.path, message);
+        pushToast(`已修改提交 ${result.commit}`, 'success');
+        await refreshGit();
+        return true;
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+        return false;
+      }
+    },
+    [pushToast, refreshGit],
+  );
+
+  const gitStashSave = useCallback(async () => {
+    const group = gitGroupRef.current;
+    if (!group) return false;
+    try {
+      await window.api.git.stashSave(group.path);
+      pushToast('改动已收起', 'success');
+      await refreshGit();
+      return true;
+    } catch (error) {
+      pushToast(toErrorMessage(error), 'error');
+      return false;
+    }
+  }, [pushToast, refreshGit]);
 
   const [syncPrompt, setSyncPrompt] = useState<SyncPrompt | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
@@ -2368,6 +2436,10 @@ export default function App() {
                 onOpenCommit={(commit) => {
                   if (gitGroup) openCommitDiffTab(gitGroup, commit);
                 }}
+                head={headCommit}
+                onUndoCommit={gitUndoCommit}
+                onAmend={gitAmend}
+                onStashSave={gitStashSave}
               />
             ) : null
           }
