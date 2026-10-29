@@ -114,6 +114,28 @@ const readStyle = () =>
       whitespace: Boolean(document.querySelector('.cm-highlightSpace')),
       matching: Boolean(document.querySelector('.cm-matchingBracket')),
       activeLine: document.querySelectorAll('.cm-activeLine').length,
+      styles: document.querySelectorAll('style').length,
+      // Chromium 下 style-mod 用 adoptedStyleSheets 挂载，新的 StyleModule
+      // 会往同一个 sheet 里 insertRule 且永不回收，所以累的是规则条数，
+      // 不是 <style> 元素个数（没有 adoptedStyleSheets 时退回到 <style>）。
+      styleRules: (() => {
+        const count = (sheet) => {
+          try {
+            return sheet ? sheet.cssRules.length : 0;
+          } catch {
+            return 0;
+          }
+        };
+        const adopted = Array.from(document.adoptedStyleSheets || []).reduce(
+          (total, sheet) => total + count(sheet),
+          0,
+        );
+        const inline = Array.from(document.querySelectorAll('style')).reduce(
+          (total, element) => total + count(element.sheet),
+          0,
+        );
+        return adopted + inline;
+      })(),
     };
   });
 
@@ -217,6 +239,39 @@ const horizontalPrevented = await page.evaluate(() => {
 await page.waitForTimeout(400);
 ok(horizontalPrevented === true, '横向 Ctrl+滚轮同样阻止默认行为');
 ok((await readStyle()).fontSize === '14px', '横向 Ctrl+滚轮不改字号');
+
+console.log('7. 连续 Ctrl+滚轮不会累积样式规则（StyleModule 泄漏）');
+// 每次重配外观时若都新建 EditorView.theme，style-mod 会把新的规则永久插进
+// 文档的样式表；Ctrl+滚轮是这条路的热路径。字号在 13/14 之间来回，
+// 每个刻度都是真实的状态变更，20 步后样式规则数与 <style> 数量都必须不变。
+await seedPrefs({ editorFontSize: 13 });
+await openEditor();
+const beforeTick = await readStyle();
+const styleRules = [];
+const styleTags = [];
+for (let i = 0; i < 20; i += 1) {
+  await page.evaluate((deltaY) => {
+    document.querySelector('.cm-content').dispatchEvent(
+      new WheelEvent('wheel', { deltaY, ctrlKey: true, bubbles: true, cancelable: true }),
+    );
+  }, i % 2 === 0 ? -120 : 120);
+  await page.waitForTimeout(80);
+  const current = await readStyle();
+  styleRules.push(current.styleRules);
+  styleTags.push(current.styles);
+}
+const afterTick = await readStyle();
+ok(
+  styleRules.every((count) => count === beforeTick.styleRules),
+  `20 次缩放过程中样式规则数始终为 ${beforeTick.styleRules}，实际 ${styleRules.join(',')}`,
+);
+ok(
+  styleTags.every((count) => count === beforeTick.styles),
+  `20 次缩放过程中 <style> 数量始终为 ${beforeTick.styles}，实际 ${styleTags.join(',')}`,
+);
+ok(afterTick.styleRules === beforeTick.styleRules,
+  `缩放结束后规则数仍为 ${beforeTick.styleRules}，实际 ${afterTick.styleRules}`);
+ok(afterTick.fontSize === '13px', '来回缩放后字号回到 13px');
 
 console.log(`\n全部通过：${passed} 项`);
 await app.close();

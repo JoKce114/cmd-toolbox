@@ -11,7 +11,8 @@ const ok = (cond, msg) => {
   console.log('  ok  ' + msg);
 };
 
-// 从注册表命令行里取路径（与模块内的解析逻辑一致，用来做独立校验）
+// 从注册表命令行里取路径（与模块内的解析逻辑一致，用来做独立校验）。
+// Electron 写入时不加引号，args 恒为空，所以整条值就是路径。
 function pathOf(commandLine) {
   const value = String(commandLine ?? '').trim();
   if (!value) return '';
@@ -19,11 +20,15 @@ function pathOf(commandLine) {
     const end = value.indexOf('"', 1);
     return end === -1 ? value.slice(1) : value.slice(1, end);
   }
-  return value.split(/\s+/)[0];
+  return value;
 }
 
 // 假 app + 假注册表。getLoginItemSettings 刻意复刻 Electron 的真实语义：
 // 它只比较注册表路径与传入路径，路径过期时返回 openAtLogin: false。
+// setLoginItemSettings 按 options.name ?? AppUserModelId 写入——这就是真实的
+// 默认行为，不显式传 name 的话会写到 local.cmd.toolbox 名下，读不到 Cmd Toolbox。
+const APP_USER_MODEL_ID = 'local.cmd.toolbox';
+
 function makeHarness({ packaged = true, acceptWrites = true, entry = null } = {}) {
   const registry = new Map();
   if (entry != null) registry.set(LOGIN_VALUE_NAME, entry);
@@ -33,19 +38,23 @@ function makeHarness({ packaged = true, acceptWrites = true, entry = null } = {}
     isPackaged: packaged,
     getLoginItemSettings: (options) => {
       counters.electronReads += 1;
-      const command = registry.get(LOGIN_VALUE_NAME);
+      const command = registry.get(APP_USER_MODEL_ID);
       return { openAtLogin: command != null && pathOf(command) === options.path };
     },
     setLoginItemSettings: (options) => {
       writes.push(options);
       if (!acceptWrites) return;
-      if (options.openAtLogin) registry.set(LOGIN_VALUE_NAME, `"${options.path}"`);
-      else registry.delete(LOGIN_VALUE_NAME);
+      const name = options.name ?? APP_USER_MODEL_ID;
+      if (options.openAtLogin) registry.set(name, options.path);
+      else registry.delete(name);
     },
   };
   const readRunEntry = (valueName) => {
     counters.registryReads += 1;
-    return registry.get(valueName) ?? null;
+    const command = registry.get(valueName);
+    return command == null
+      ? { status: 'absent' }
+      : { status: 'present', commandLine: command };
   };
   return { app, writes, counters, registry, readRunEntry };
 }
@@ -70,6 +79,7 @@ console.log('2. 正常开启与关闭');
   ok(item.getState().enabled === false, '初始为关闭');
   const enabled = item.setEnabled(true);
   ok(enabled.ok === true, '开启成功');
+  ok(h.writes[0].name === 'Cmd Toolbox', "写入时显式传 name: 'Cmd Toolbox'");
   ok(item.getState().enabled === true, '读回为开启');
   const disabled = item.setEnabled(false);
   ok(disabled.ok === true, '关闭成功');
@@ -102,6 +112,7 @@ console.log('5. 启动时修复路径');
   ok(stale.writes.length === 1, '路径过期时重写一次');
   ok(stale.writes[0].path === process.execPath, '重写为当前 exe 路径');
   ok(stale.writes[0].openAtLogin === true, '重写时保持开启状态');
+  ok(stale.writes[0].name === 'Cmd Toolbox', '重写时同样显式传 name');
 
   const matching = makeHarness({ entry: `"${process.execPath}"` });
   createLoginItem(matching.app, { readRunEntry: matching.readRunEntry }).repairOnStartup();
@@ -131,6 +142,50 @@ console.log('6. 便携版使用真实 exe 路径');
   ok(plainResult.ok === true, '非便携版写入成功');
   ok(plain.writes[0].path === process.execPath, '没有该变量时回落到 process.execPath');
   ok(Array.isArray(plain.writes[0].args) && plain.writes[0].args.length === 0, '不携带额外参数');
+}
+
+console.log('7. 省略 name 会写到 AppUserModelId 名下（回归防线）');
+{
+  const h = makeHarness();
+  const item = createLoginItem(h.app, { readRunEntry: h.readRunEntry });
+  const result = item.setEnabled(true);
+  ok(h.writes[0].name === LOGIN_VALUE_NAME, '写入项名是 Cmd Toolbox');
+  ok(h.registry.has('Cmd Toolbox'), '注册表里存在 Cmd Toolbox 项');
+  ok(!h.registry.has(APP_USER_MODEL_ID), '没有写到 local.cmd.toolbox 名下');
+  ok(result.ok === true, '开启成功（若漏传 name，这里会因读不到而失败）');
+}
+
+console.log('8. 含空格的路径原样往返');
+{
+  const exe = 'C:\\Program Files\\Cmd Toolbox\\CmdToolbox.exe';
+  process.env.PORTABLE_EXECUTABLE_FILE = exe;
+  const h = makeHarness();
+  const item = createLoginItem(h.app, { readRunEntry: h.readRunEntry });
+  const result = item.setEnabled(true);
+  delete process.env.PORTABLE_EXECUTABLE_FILE;
+  ok(result.ok === true, '无引号的含空格路径写入后校验通过');
+  ok(h.registry.get(LOGIN_VALUE_NAME) === exe, '注册表里是完整路径，未被空格截断');
+  ok(item.getState().enabled === true, '读回为开启');
+}
+
+console.log('9. 读取失败与「未开启」区分开');
+{
+  const calls = [];
+  const app = {
+    isPackaged: true,
+    setLoginItemSettings: (options) => calls.push(options),
+  };
+  const failing = () => ({ status: 'error', detail: '拒绝访问' });
+  const item = createLoginItem(app, { readRunEntry: failing });
+  const state = item.getState();
+  ok(state.enabled === false, '读取失败时报告为未开启');
+  ok(state.reason === '拒绝访问', '同时给出失败原因');
+  const on = item.setEnabled(true);
+  ok(on.ok === false && on.message.includes('拒绝访问'), '开启时如实报错');
+  const off = item.setEnabled(false);
+  ok(off.ok === false && off.message.includes('拒绝访问'), '关闭时也如实报错，不假装成功');
+  item.repairOnStartup();
+  ok(calls.length === 2, '启动修复遇到读取失败时不额外写入（只有 setEnabled 的两次调用）');
 }
 
 console.log(`\n全部通过：${passed} 项`);

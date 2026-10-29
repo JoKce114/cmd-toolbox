@@ -633,7 +633,13 @@ export default function App() {
   useEffect(() => {
     if (!settingsOpen) return;
     let cancelled = false;
-    window.api.loginItem
+    // 与 updater 的写法一致：桥缺失时不能直接抛错，否则整个设置面板渲染失败
+    const bridge = window.api?.loginItem;
+    if (!bridge) {
+      setLoginItem({ supported: false, enabled: false, reason: '读取系统设置失败' });
+      return;
+    }
+    bridge
       .get()
       .then((state) => {
         if (!cancelled) setLoginItem(state);

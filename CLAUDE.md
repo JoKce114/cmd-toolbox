@@ -137,6 +137,8 @@ node tests/login-item.mjs     # 开机自启动（假 app，不碰注册表）
 
 ```bash
 node tests/settings.mjs
+node tests/editor-appearance.mjs
+node tests/prefs-migration.mjs
 node tests/git-panel.mjs
 node tests/update-notify.mjs
 node tests/smoke.mjs

@@ -24,6 +24,8 @@ import {
   EDITOR_FONT_SIZE_MIN,
   EDITOR_LINE_HEIGHT_MAX,
   EDITOR_LINE_HEIGHT_MIN,
+  TERMINAL_FONT_SIZE_MAX,
+  TERMINAL_FONT_SIZE_MIN,
 } from '../prefs';
 import type { AppPrefs, EditorFontFamily } from '../prefs';
 import type { LoginItemResult, LoginItemState, UpdateCheckResult, UpdaterState } from '../types';
@@ -416,8 +418,8 @@ export function SettingsModal({
               <div className="settings-slider">
                 <input
                   type="range"
-                  min={11}
-                  max={20}
+                  min={TERMINAL_FONT_SIZE_MIN}
+                  max={TERMINAL_FONT_SIZE_MAX}
                   value={terminalFontSize}
                   onChange={(event) => setTerminalFontSize(Number(event.target.value))}
                 />

@@ -162,19 +162,35 @@ export function themeExtensions(mode: 'light' | 'dark') {
 
 // 字号、行高、字体由主题扩展注入。styles.css 里不能再写这三条，
 // 静态 CSS 的优先级会盖掉这里的值，表现为「改了设置但没反应」。
+//
+// 主题必须只创建一次：EditorView.theme() 每次调用都会生成新的 StyleModule，
+// 重新配置时 CodeMirror 会把它挂到文档上，而 style-mod 只会往里加规则、
+// 从不删除。Ctrl+滚轮每次滚动都会重配外观，若在这里按参数新建主题，
+// 每个滚轮刻度都会往文档样式表里累积一份 CSS。所以主题写死为 CSS 变量，
+// 由 editorAttributes（facet，重配不产生 StyleModule）注入实际取值。
+const appearanceTheme = EditorView.theme({
+  '&': {
+    fontSize: 'var(--cm-font-size, 13px)',
+  },
+  '.cm-scroller': {
+    fontFamily: 'var(--cm-font-family, monospace)',
+    lineHeight: 'var(--cm-line-height, 1.5)',
+  },
+});
+
 export function editorAppearanceExtension(options: {
   fontSize: number;
   lineHeight: number;
   fontFamily: EditorFontFamily;
 }): Extension {
-  return EditorView.theme({
-    '&': {
-      fontSize: `${options.fontSize}px`,
-    },
-    '.cm-scroller': {
-      fontFamily: EDITOR_FONT_STACKS[options.fontFamily],
-      lineHeight: String(options.lineHeight),
-    },
-  });
+  return [
+    appearanceTheme,
+    EditorView.editorAttributes.of({
+      style:
+        `--cm-font-size:${options.fontSize}px;` +
+        `--cm-font-family:${EDITOR_FONT_STACKS[options.fontFamily]};` +
+        `--cm-line-height:${options.lineHeight}`,
+    }),
+  ];
 }
 

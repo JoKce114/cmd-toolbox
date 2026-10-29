@@ -81,7 +81,7 @@ const terminalFontEm = async () =>
   ).trim();
 
 // 设置面板的「保存」会把 readPrefs 归一化后的完整 prefs 写回 localStorage，
-// 借此直接断言迁移/舍入/兜底结果（新字段在 Task 1 还没有对应控件）。
+// 借此直接断言迁移/舍入/兜底结果（这些字段现在都有对应的设置控件）。
 const saveAndReadPrefs = async () => {
   await click(page.getByRole('button', { name: '保存' }));
   await page.waitForTimeout(400);
