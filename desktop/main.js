@@ -340,6 +340,38 @@ function registerIpc() {
     git.mergeInto(assertProjectPath(projectPath), source, target),
   );
 
+  ipcMain.handle('git:head-commit', (_event, projectPath) =>
+    git.headCommit(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:undo-commit', (_event, projectPath) =>
+    git.undoCommit(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:amend', (_event, projectPath, message) =>
+    git.amend(assertProjectPath(projectPath), message),
+  );
+
+  ipcMain.handle('git:stash-list', (_event, projectPath) =>
+    git.stashList(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:stash-save', (_event, projectPath) =>
+    git.stashSave(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:stash-pop', (_event, projectPath, ref) =>
+    git.stashPop(assertProjectPath(projectPath), ref),
+  );
+
+  ipcMain.handle('git:stash-drop', (_event, projectPath, ref) =>
+    git.stashDrop(assertProjectPath(projectPath), ref),
+  );
+
+  ipcMain.handle('git:commit-diff', (_event, projectPath, hash) =>
+    git.commitDiff(assertProjectPath(projectPath), hash),
+  );
+
   ipcMain.handle('fs:list', (_event, projectPath, relDir) =>
     fileApi.list(assertProjectPath(projectPath), relDir),
   );

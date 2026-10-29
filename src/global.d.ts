@@ -6,8 +6,10 @@ import type {
   GitPullStrategy,
   GitPushResult,
   GitStatus,
+  HeadCommit,
   OpenedFile,
   Project,
+  StashEntry,
   UpdateCheckResult,
   UpdaterResult,
   UpdaterState,
@@ -31,6 +33,7 @@ export interface SessionTab {
   conversationId?: string;
   filePath?: string;
   diffChange?: import('./types').GitChange | null;
+  diffCommit?: import('./types').CommitRef | null;
 }
 
 export interface SessionSnapshot {
@@ -160,6 +163,22 @@ declare global {
           switchedFrom: string;
           returnedTo: string;
         }>;
+        headCommit: (projectPath: string) => Promise<HeadCommit | null>;
+        undoCommit: (
+          projectPath: string,
+        ) => Promise<{ message: string; wasPushed: boolean }>;
+        amend: (
+          projectPath: string,
+          message: string,
+        ) => Promise<{ commit: string; summary: string }>;
+        stashList: (projectPath: string) => Promise<{ stashes: StashEntry[] }>;
+        stashSave: (projectPath: string) => Promise<{ ok: true }>;
+        stashPop: (
+          projectPath: string,
+          ref: string,
+        ) => Promise<{ ok: true; conflicts: string[] }>;
+        stashDrop: (projectPath: string, ref: string) => Promise<{ ok: true }>;
+        commitDiff: (projectPath: string, hash: string) => Promise<{ patch: string }>;
       };
       files: {
         list: (projectPath: string, relDir: string) => Promise<{ entries: FileEntry[] }>;

@@ -79,6 +79,13 @@ async function waitFor(predicate, message, timeout = 15000) {
   }
 }
 
+// 撤销/修改提交收在「⋯」菜单里，必须先点开再选
+async function chooseOpsMenu(label) {
+  await click(page.locator('.git-ops-more'));
+  await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+  await click(page.getByRole('menuitem', { name: label, exact: true }));
+}
+
 async function addProject(path, name) {
   const modal = page.locator('.modal-card');
   const deadline = Date.now() + 20000;
@@ -356,7 +363,7 @@ assert(
   '冲突后不再保留弹窗',
 );
 await waitFor(
-  async () => (await page.locator('.git-conflict-hint').count()) > 0,
+  async () => (await page.locator('.git-resolve-btn').count()) > 0,
   '左侧列表标出冲突文件',
 );
 
@@ -530,6 +537,255 @@ assert(
   execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim() ===
     'feature-test',
   '分支未变',
+);
+
+console.log('14. 提交历史打开 diff 页签');
+execFileSync('git', ['checkout', 'main'], { cwd: repo, stdio: 'ignore' });
+execFileSync('git', ['reset', '--hard', 'HEAD'], { cwd: repo, stdio: 'ignore' });
+rmSync(join(repo, 'dirty.txt'), { force: true });
+writeFileSync(join(repo, 'history-a.txt'), 'a\n');
+writeFileSync(join(repo, 'history-b.txt'), 'b\n');
+execFileSync('git', ['add', '-A'], { cwd: repo });
+execFileSync('git', ['commit', '-m', '历史多文件'], { cwd: repo });
+await page.waitForTimeout(1200);
+await click(page.locator('.git-icon-btn'));
+
+const historyToggle = page.locator('.git-history-toggle');
+if ((await page.locator('.git-history-button').count()) === 0) await click(historyToggle);
+await waitFor(
+  async () =>
+    (await page.locator('.git-history-button').filter({ hasText: '历史多文件' }).count()) > 0,
+  '提交历史刷新到最新提交',
+);
+await click(page.locator('.git-history-button').filter({ hasText: '历史多文件' }).first());
+await waitFor(
+  async () => (await page.locator('.diff-file-select').count()) > 0,
+  '提交 diff 页签出现',
+);
+await waitFor(
+  async () => (await page.locator('.diff-file-select option').count()) > 0,
+  '提交 diff 文件列表加载完成',
+);
+assert(
+  (await page.locator('.diff-file-select option').count()) === 2,
+  '文件下拉有 2 个文件',
+);
+
+const commitPane = page
+  .locator('.diff-pane')
+  .filter({ has: page.locator('.diff-file-select') });
+const firstBody = await commitPane.locator('.diff-body').innerText();
+await page.locator('.diff-file-select').selectOption({ index: 1 });
+await page.waitForTimeout(400);
+const secondBody = await commitPane.locator('.diff-body').innerText();
+assert(firstBody !== secondBody, '切换文件后正文变化');
+
+console.log('15. 撤销提交');
+await chooseOpsMenu('撤销提交');
+await page.locator('.modal-card').filter({ hasText: '撤销提交' }).waitFor({ timeout: 8000 });
+await click(page.getByRole('button', { name: '确定撤销', exact: true }));
+await waitFor(
+  async () => (await page.locator('.git-message').inputValue()).includes('历史多文件'),
+  '撤销后提交信息回填到输入框',
+);
+assert(
+  execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: repo, encoding: 'utf8' }).trim() !==
+    '历史多文件',
+  '提交确实被撤销',
+);
+assert(
+  execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: repo, encoding: 'utf8' }).includes(
+    'history-a.txt',
+  ),
+  '改动回到暂存区',
+);
+
+console.log('15b. 撤销后修改提交读取真实 HEAD');
+// 撤销后 head 缓存可能仍是刚被撤销的提交，弹窗必须重新拉取真实 HEAD 做预填
+await chooseOpsMenu('修改提交');
+await page.locator('#amend-message').waitFor({ timeout: 8000 });
+const freshAmendValue = await page.locator('#amend-message').inputValue();
+const realHeadMessage = execFileSync('git', ['log', '-1', '--pretty=%B'], {
+  cwd: repo,
+  encoding: 'utf8',
+}).trim();
+assert(freshAmendValue !== '历史多文件', '修改提交没有复用刚撤销的提交信息');
+assert(freshAmendValue === realHeadMessage, '修改提交预填真实 HEAD 信息');
+await click(page.getByRole('button', { name: '取消', exact: true }));
+await page.locator('#amend-message').waitFor({ state: 'detached', timeout: 8000 });
+
+console.log('16. 修改提交');
+// 先重新提交，让 HEAD 恢复存在
+await click(page.getByRole('button', { name: '提交', exact: true }));
+await waitFor(
+  async () =>
+    execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: repo, encoding: 'utf8' }).trim() ===
+    '历史多文件',
+  '重新提交完成',
+);
+await waitFor(
+  async () => page.locator('.git-ops-more').isEnabled(),
+  '提交结束后操作按钮恢复可用',
+);
+await chooseOpsMenu('修改提交');
+await page.locator('#amend-message').waitFor({ timeout: 8000 });
+await page.locator('#amend-message').fill('改写后的信息');
+await click(page.getByRole('button', { name: '保存修改', exact: true }));
+await waitFor(
+  async () =>
+    execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: repo, encoding: 'utf8' }).trim() ===
+    '改写后的信息',
+  '提交信息已更新',
+);
+
+console.log('17. 收起与恢复改动');
+// 先造两条 stash：ref 是位置型的，只有两行都在时才能验证并发操作期间的整行禁用
+writeFileSync(join(repo, 'stash-earlier.txt'), 'e\n');
+await page.waitForTimeout(1200);
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-change-row').count()) > 0,
+  '出现待收起的改动',
+);
+await chooseOpsMenu('收起改动');
+await waitFor(
+  async () => (await page.locator('.git-stash-item').count()) === 1,
+  '出现第一条 stash 记录',
+);
+assert(!existsSync(join(repo, 'stash-earlier.txt')), '较早的文件已被收起');
+
+writeFileSync(join(repo, 'stash-ui.txt'), 's\n');
+await page.waitForTimeout(1200);
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-change-row').count()) > 0,
+  '再次出现待收起的改动',
+);
+await chooseOpsMenu('收起改动');
+await waitFor(
+  async () => (await page.locator('.git-stash-item').count()) === 2,
+  '出现第二条 stash 记录',
+);
+assert(!existsSync(join(repo, 'stash-ui.txt')), '文件已被收起');
+
+// 用 MutationObserver 记录「所有行的操作按钮同时被禁用」这一瞬时状态：
+// 恢复是异步的，单次 isDisabled() 轮询可能刚好错过，观察者不会
+await page.evaluate(() => {
+  window.__stashAllDisabled = false;
+  const check = () => {
+    const actions = [...document.querySelectorAll('.git-stash-item .git-row-action')];
+    if (actions.length >= 4 && actions.every((action) => action.disabled)) {
+      window.__stashAllDisabled = true;
+    }
+  };
+  const observer = new MutationObserver(check);
+  observer.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['disabled'],
+  });
+  window.__stashObserver = observer;
+  check();
+});
+
+await click(
+  page.locator('.git-stash-item').first().locator('.git-row-action[title="恢复"]'),
+);
+await waitFor(async () => existsSync(join(repo, 'stash-ui.txt')), '恢复后文件回来');
+await waitFor(
+  async () => (await page.locator('.git-stash-item').count()) === 1,
+  '恢复后列表只剩一条',
+);
+const allDisabledSeen = await page.evaluate(() => {
+  window.__stashObserver?.disconnect();
+  return window.__stashAllDisabled;
+});
+assert(allDisabledSeen === true, '恢复进行中所有行的操作按钮同时禁用');
+
+await click(
+  page.locator('.git-stash-item').first().locator('.git-row-action[title="恢复"]'),
+);
+await waitFor(async () => existsSync(join(repo, 'stash-earlier.txt')), '第二条恢复后文件回来');
+await waitFor(
+  async () => (await page.locator('.git-stash-item').count()) === 0,
+  '恢复后列表清空',
+);
+
+// 17b. 收起改动进行中同样禁用行操作
+// 恢复出来的两个文件还在工作区，先收成一条 stash，让行按钮渲染出来
+await waitFor(
+  async () => (await page.locator('.git-change-row').count()) > 0,
+  '恢复后工作区仍有改动',
+);
+await chooseOpsMenu('收起改动');
+await waitFor(
+  async () => (await page.locator('.git-stash-item').count()) === 1,
+  '再次出现 stash 记录',
+);
+// stash push 需要工作区有改动，否则立刻失败、观察窗口太短
+writeFileSync(join(repo, 'stash-saving.txt'), 'g\n');
+await page.waitForTimeout(1200);
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-change-row').count()) > 0,
+  '收起前工作区有改动',
+);
+await page.evaluate(() => {
+  window.__stashSaveAllDisabled = false;
+  const check = () => {
+    const actions = [...document.querySelectorAll('.git-stash-item .git-row-action')];
+    if (actions.length >= 2 && actions.every((action) => action.disabled)) {
+      window.__stashSaveAllDisabled = true;
+    }
+  };
+  const observer = new MutationObserver(check);
+  observer.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['disabled'],
+  });
+  window.__stashSaveObserver = observer;
+  check();
+});
+await chooseOpsMenu('收起改动');
+await waitFor(
+  async () => (await page.locator('.git-stash-item').count()) === 2,
+  '收起后出现第二条 stash',
+);
+const saveAllDisabledSeen = await page.evaluate(() => {
+  window.__stashSaveObserver?.disconnect();
+  return window.__stashSaveAllDisabled;
+});
+assert(saveAllDisabledSeen === true, '收起改动进行中所有行的操作按钮同时禁用');
+assert(!existsSync(join(repo, 'stash-saving.txt')), '收起后文件已进 stash');
+
+console.log('18. 冲突行可直接进入编辑器');
+// 上一步恢复的未跟踪文件会干扰 checkout，先清干净
+rmSync(join(repo, 'stash-ui.txt'), { force: true });
+execFileSync('git', ['reset', '--hard', 'HEAD'], { cwd: repo, stdio: 'ignore' });
+execFileSync('git', ['checkout', '-b', 'conflict-a'], { cwd: repo, stdio: 'ignore' });
+writeFileSync(join(repo, 'index.php'), '<?php echo "a";\n');
+execFileSync('git', ['commit', '-am', 'a 改'], { cwd: repo, stdio: 'ignore' });
+execFileSync('git', ['checkout', 'main'], { cwd: repo, stdio: 'ignore' });
+writeFileSync(join(repo, 'index.php'), '<?php echo "b";\n');
+execFileSync('git', ['commit', '-am', 'b 改'], { cwd: repo, stdio: 'ignore' });
+try {
+  execFileSync('git', ['merge', 'conflict-a'], { cwd: repo, stdio: 'ignore' });
+} catch {
+  // 冲突时 git merge 退出码非零，属预期
+}
+await page.waitForTimeout(1200);
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-resolve-btn').count()) > 0,
+  '出现解决冲突按钮',
+);
+await click(page.locator('.git-resolve-btn').first());
+await waitFor(
+  async () => (await page.locator('.conflict-bar').count()) > 0,
+  '编辑器打开冲突文件并显示工具栏',
 );
 
 await page.screenshot({ path: join(shotDir, 'git-panel.png') });

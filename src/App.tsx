@@ -35,13 +35,16 @@ import { useGitStatus } from './gitStatus';
 import { GLOBAL_GROUP_KEY, isBrowserTab, isDiffTab, isEditorTab, projectGroupKey } from './types';
 import type {
   AppInfo,
+  CommitRef,
   GitChange,
   GitPullStrategy,
   GitStatus,
   Group,
+  HeadCommit,
   MenuEntry,
   MenuState,
   Project,
+  StashEntry,
   SyncPrompt,
   Tab,
   UpdateCheckResult,
@@ -167,6 +170,8 @@ export default function App() {
 
   const tabsRef = useRef<Record<string, Tab[]>>({});
   const dirtyTabsRef = useRef<Map<string, boolean>>(new Map());
+  // 改过就永久占住，保存后也不释放：新文件只能顶替没动过的编辑器页签
+  const touchedTabsRef = useRef<Set<string>>(new Set());
   const activeTabByGroupRef = useRef(activeTabByGroup);
   const sessionReadyRef = useRef(false);
   const sidebarCollapsedRef = useRef(false);
@@ -206,6 +211,7 @@ export default function App() {
             conversationId: tab.conversationId || '',
             filePath: tab.filePath || '',
             diffChange: tab.diffChange || null,
+            diffCommit: tab.diffCommit || null,
           })),
         activeTabByGroup: activeTabByGroupRef.current,
         sidebarCollapsed: sidebarCollapsedRef.current,
@@ -398,7 +404,10 @@ export default function App() {
             continue;
           }
 
-          if (saved.shellId === 'diff' && saved.diffChange && saved.diffChange.path) {
+          if (
+            saved.shellId === 'diff' &&
+            ((saved.diffChange && saved.diffChange.path) || saved.diffCommit?.hash)
+          ) {
             restoredTabs[saved.groupKey] = [
               ...existing,
               {
@@ -411,7 +420,8 @@ export default function App() {
                 descriptor: saved.descriptor || '差异',
                 custom: saved.custom,
                 cwd: group.path,
-                diffChange: saved.diffChange,
+                diffChange: saved.diffChange?.path ? saved.diffChange : undefined,
+                diffCommit: saved.diffCommit?.hash ? saved.diffCommit : undefined,
                 exited: false,
               },
             ];
@@ -701,6 +711,57 @@ export default function App() {
     };
   }, [gitStatus]);
 
+  const [headCommit, setHeadCommit] = useState<HeadCommit | null>(null);
+
+  // 切项目时先清空，避免新项目的面板在 head 刷新前沿用上一个项目的提交信息
+  const gitGroupKey = gitGroup?.key ?? null;
+  useEffect(() => {
+    setHeadCommit(null);
+  }, [gitGroupKey]);
+
+  useEffect(() => {
+    const group = gitGroupRef.current;
+    if (!group) {
+      setHeadCommit(null);
+      return;
+    }
+    let cancelled = false;
+    void window.api.git
+      .headCommit(group.path)
+      .then((result) => {
+        if (!cancelled) setHeadCommit(result);
+      })
+      .catch(() => {
+        if (!cancelled) setHeadCommit(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gitStatus]);
+
+  const [stashes, setStashes] = useState<StashEntry[]>([]);
+  const [stashBusy, setStashBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    const group = gitGroupRef.current;
+    if (!group) {
+      setStashes([]);
+      return;
+    }
+    let cancelled = false;
+    void window.api.git
+      .stashList(group.path)
+      .then((result) => {
+        if (!cancelled) setStashes(result.stashes);
+      })
+      .catch(() => {
+        if (!cancelled) setStashes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gitStatus]);
+
   useEffect(() => {
     const group = gitGroupRef.current;
     if (!group) {
@@ -733,6 +794,111 @@ export default function App() {
       } catch (error) {
         pushToast(toErrorMessage(error), 'error');
         return false;
+      }
+    },
+    [pushToast, refreshGit],
+  );
+
+  const gitUndoCommit = useCallback(async (): Promise<string | null> => {
+    const group = gitGroupRef.current;
+    if (!group) return null;
+    try {
+      const result = await window.api.git.undoCommit(group.path);
+      pushToast('已撤销提交，改动回到暂存区', 'success');
+      await refreshGit();
+      return result.message;
+    } catch (error) {
+      pushToast(toErrorMessage(error), 'error');
+      return null;
+    }
+  }, [pushToast, refreshGit]);
+
+  const gitAmend = useCallback(
+    async (message: string) => {
+      const group = gitGroupRef.current;
+      if (!group) return false;
+      try {
+        const result = await window.api.git.amend(group.path, message);
+        pushToast(`已修改提交 ${result.commit}`, 'success');
+        await refreshGit();
+        return true;
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+        return false;
+      }
+    },
+    [pushToast, refreshGit],
+  );
+
+  // 撤销 / 修改提交打开弹窗前强制拉一次真实 HEAD，不用可能滞后的缓存
+  const gitRefreshHead = useCallback(async (): Promise<HeadCommit | null> => {
+    const group = gitGroupRef.current;
+    if (!group) return null;
+    try {
+      const fresh = await window.api.git.headCommit(group.path);
+      setHeadCommit(fresh);
+      if (!fresh) pushToast('还没有提交可以操作', 'error');
+      return fresh;
+    } catch (error) {
+      setHeadCommit(null);
+      pushToast(toErrorMessage(error), 'error');
+      return null;
+    }
+  }, [pushToast]);
+
+  const gitStashSave = useCallback(async () => {
+    const group = gitGroupRef.current;
+    if (!group) return false;
+    try {
+      await window.api.git.stashSave(group.path);
+      pushToast('改动已收起', 'success');
+      await refreshGit();
+      return true;
+    } catch (error) {
+      pushToast(toErrorMessage(error), 'error');
+      return false;
+    }
+  }, [pushToast, refreshGit]);
+
+  const gitStashPop = useCallback(
+    async (ref: string) => {
+      const group = gitGroupRef.current;
+      if (!group) return false;
+      setStashBusy(ref);
+      try {
+        const result = await window.api.git.stashPop(group.path, ref);
+        if (result.conflicts.length) {
+          pushToast(`恢复后有 ${result.conflicts.length} 处冲突，stash 记录已保留`, 'error');
+        } else {
+          pushToast('已恢复收起的改动', 'success');
+        }
+        await refreshGit();
+        return true;
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+        return false;
+      } finally {
+        setStashBusy(null);
+      }
+    },
+    [pushToast, refreshGit],
+  );
+
+  const gitStashDrop = useCallback(
+    async (ref: string) => {
+      const group = gitGroupRef.current;
+      if (!group) return false;
+      setStashBusy(ref);
+      try {
+        await window.api.git.stashDrop(group.path, ref);
+        pushToast('已丢弃 stash 记录', 'success');
+        await refreshGit();
+        return true;
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+        return false;
+      } finally {
+        setStashBusy(null);
       }
     },
     [pushToast, refreshGit],
@@ -971,7 +1137,7 @@ export default function App() {
       try {
         const result = await window.api.git.merge(group.path, branch);
         if (result.conflicted.length > 0) {
-          pushToast(`合并 ${branch} 时发生冲突，请到终端处理`, 'error');
+          pushToast(`合并 ${branch} 时发生冲突，请在更改列表中解决冲突`, 'error');
         } else {
           pushToast(`已合并 ${branch}`, 'success');
         }
@@ -994,7 +1160,7 @@ export default function App() {
         const result = await window.api.git.mergeInto(group.path, source, target);
         if (result.conflicted.length > 0) {
           pushToast(
-            `合并 ${source} 到 ${target} 时发生冲突，请到终端处理`,
+            `合并 ${source} 到 ${target} 时发生冲突，请在更改列表中解决冲突`,
             'error',
           );
         } else if (result.returnedTo) {
@@ -1083,6 +1249,7 @@ export default function App() {
           conversationId: tab.conversationId || '',
           filePath: tab.filePath || '',
           diffChange: tab.diffChange || null,
+          diffCommit: tab.diffCommit || null,
           paneNo: tab.paneNo,
           url: tab.url || '',
         }));
@@ -1240,8 +1407,12 @@ export default function App() {
   );
 
   const handleDirtyChange = useCallback((tabId: string, dirty: boolean) => {
-    if (dirty) dirtyTabsRef.current.set(tabId, true);
-    else dirtyTabsRef.current.delete(tabId);
+    if (dirty) {
+      dirtyTabsRef.current.set(tabId, true);
+      touchedTabsRef.current.add(tabId);
+    } else {
+      dirtyTabsRef.current.delete(tabId);
+    }
   }, []);
 
   const createEditor = useCallback(
@@ -1306,9 +1477,49 @@ export default function App() {
     [applyTabs, pushToast],
   );
 
+  const openCommitDiffTab = useCallback(
+    (group: Group, commit: CommitRef) => {
+      if (!group.exists) {
+        pushToast('项目目录不存在，请先编辑项目路径', 'error');
+        return;
+      }
+      const groupTabs = tabsRef.current[group.key] || [];
+      const existing = groupTabs.find(
+        (item) => item.shellId === 'diff' && item.diffCommit?.hash === commit.hash,
+      );
+      if (existing) {
+        setActiveGroupKey(group.key);
+        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: existing.id }));
+        return;
+      }
+      const tab: Tab = {
+        id: crypto.randomUUID(),
+        groupKey: group.key,
+        sessionId: '',
+        shellId: 'diff',
+        seq: 1,
+        paneNo: nextPaneNo(groupTabs.map((item) => item.paneNo)),
+        descriptor: commit.short,
+        custom: true,
+        cwd: group.path,
+        diffCommit: commit,
+        exited: false,
+      };
+      applyTabs({ ...tabsRef.current, [group.key]: [...groupTabs, tab] });
+      setActiveGroupKey(group.key);
+      setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+    },
+    [applyTabs, pushToast],
+  );
+
   const openEditorFile = useCallback(
     (group: Group, relPath: string) => {
-      const existing = (tabsRef.current[group.key] || []).find(
+      if (!group.exists) {
+        pushToast('项目目录不存在，请先编辑项目路径', 'error');
+        return;
+      }
+      const groupTabs = tabsRef.current[group.key] || [];
+      const existing = groupTabs.find(
         (item) => item.shellId === 'editor' && item.filePath === relPath,
       );
       if (existing) {
@@ -1316,9 +1527,35 @@ export default function App() {
         setActiveGroupKey(group.key);
         return;
       }
+
+      // 没动过的编辑器页签可以直接换文件，避免为了看一眼文件攒出一排页签。
+      // 优先当前激活的，其次最近打开的那个。
+      const reusable = groupTabs.filter(
+        (item) => item.shellId === 'editor' && !touchedTabsRef.current.has(item.id),
+      );
+      const activeId = activeTabByGroupRef.current[group.key];
+      const target =
+        reusable.find((item) => item.id === activeId) ?? reusable[reusable.length - 1];
+      if (target) {
+        applyTabs({
+          ...tabsRef.current,
+          [group.key]: groupTabs.map((item) =>
+            item.id === target.id ? { ...item, filePath: relPath } : item,
+          ),
+        });
+        setActiveGroupKey(group.key);
+        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: target.id }));
+        // 停留在右栏时激活的必须是右栏自己的页签
+        if ((rightIdsByGroupRef.current[group.key] || []).includes(target.id)) {
+          setRightActiveByGroup((previous) => ({ ...previous, [group.key]: target.id }));
+          setFocusSideByGroup((previous) => ({ ...previous, [group.key]: 'right' }));
+        }
+        return;
+      }
+
       createEditor(group, relPath);
     },
-    [createEditor],
+    [applyTabs, createEditor, pushToast],
   );
 
   const createTerminal = useCallback(
@@ -1414,6 +1651,7 @@ export default function App() {
 
       for (const tab of closing) {
         dirtyTabsRef.current.delete(tab.id);
+        touchedTabsRef.current.delete(tab.id);
         if (!tab.sessionId) continue;
         discardSession(tab.sessionId);
         void window.api.pty.kill(tab.sessionId).catch(() => {});
@@ -2177,13 +2415,17 @@ export default function App() {
         />
       );
     }
-    if (isDiffTab(tab) && tab.diffChange) {
+    if (isDiffTab(tab) && (tab.diffChange || tab.diffCommit)) {
       return (
         <DiffPane
           key={tab.id}
           projectPath={group.path}
           wordWrap={prefs.editorWordWrap}
-          change={tab.diffChange}
+          target={
+            tab.diffCommit
+              ? { kind: 'commit', commit: tab.diffCommit }
+              : { kind: 'change', change: tab.diffChange! }
+          }
           active={active}
           onClose={() => closeTabs(tab.groupKey, [tab.id])}
           onOpenFile={(relPath) => openEditorFile(group, relPath)}
@@ -2319,6 +2561,18 @@ export default function App() {
                 onSyncChoice={(choice) => void runSyncChoice(choice)}
                 onSyncClose={() => setSyncPrompt(null)}
                 commits={gitCommits}
+                onOpenCommit={(commit) => {
+                  if (gitGroup) openCommitDiffTab(gitGroup, commit);
+                }}
+                head={headCommit}
+                onRefreshHead={gitRefreshHead}
+                onUndoCommit={gitUndoCommit}
+                onAmend={gitAmend}
+                onStashSave={gitStashSave}
+                stashes={stashes}
+                stashBusy={stashBusy}
+                onStashPop={gitStashPop}
+                onStashDrop={gitStashDrop}
               />
             ) : null
           }
@@ -2339,6 +2593,7 @@ export default function App() {
                   setRenameTarget({ groupKey: tab.groupKey, tabId: tab.id })
                 }
                 onNewTab={() => spawnOnSide('left')}
+                onNewEditor={() => createEditor(activeGroup)}
                 onShellMenu={(event) => openShellMenu(event, activeGroup)}
                 onReorderTabs={(fromId, toId, position) =>
                   reorderTabs(activeGroup.key, fromId, toId, position)
@@ -2361,6 +2616,7 @@ export default function App() {
                     onShellMenu={(event) => openShellMenu(event, activeGroup)}
                     onReveal={() => revealPath(activeGroup.path)}
                     onEditProject={() => editGroupProject(activeGroup)}
+                    onOpenEditor={() => createEditor(activeGroup)}
                   />
                 ) : null}
                 {allTabs.map((tab) => renderWorkbenchPane(tab))}
@@ -2386,6 +2642,7 @@ export default function App() {
                     setRenameTarget({ groupKey: tab.groupKey, tabId: tab.id })
                   }
                   onNewTab={() => spawnOnSide('left')}
+                  onNewEditor={() => createEditor(activeGroup)}
                   onShellMenu={(event) => openShellMenu(event, activeGroup)}
                   onReorderTabs={(fromId, toId, position) =>
                     reorderTabs(activeGroup.key, fromId, toId, position)
@@ -2435,6 +2692,7 @@ export default function App() {
                     setRenameTarget({ groupKey: tab.groupKey, tabId: tab.id })
                   }
                   onNewTab={() => spawnOnSide('right')}
+                  onNewEditor={() => createEditor(activeGroup)}
                   onShellMenu={(event) => openShellMenu(event, activeGroup)}
                   onReorderTabs={(fromId, toId, position) =>
                     reorderTabs(activeGroup.key, fromId, toId, position)

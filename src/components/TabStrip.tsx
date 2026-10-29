@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
-import { ChevronDown, Plus, X } from 'lucide-react';
+import { ChevronDown, FileCode2, Plus, X } from 'lucide-react';
 import { cn } from '../lib';
 import type { Group, Tab } from '../types';
 
@@ -18,6 +18,7 @@ type TabStripProps = {
   onTabMenu: (event: ReactMouseEvent, tab: Tab) => void;
   onRenameTab: (tab: Tab) => void;
   onNewTab: () => void;
+  onNewEditor: () => void;
   onShellMenu: (event: ReactMouseEvent) => void;
   onReorderTabs: (fromTabId: string, toTabId: string, position: 'before' | 'after') => void;
   onPlaceTab?: (
@@ -43,6 +44,7 @@ export function TabStrip({
   onTabMenu,
   onRenameTab,
   onNewTab,
+  onNewEditor,
   onShellMenu,
   onReorderTabs,
   onPlaceTab,
@@ -231,27 +233,40 @@ export function TabStrip({
         })}
       </div>
 
-      <div className={cn('new-terminal', !canChooseShell && 'single')}>
+      <div className="tab-strip-new">
         <button
           type="button"
-          className="new-terminal-main"
-          title="新建终端 (Ctrl+T)"
-          onClick={onNewTab}
+          className="new-editor-btn"
+          title="新建编辑器"
+          aria-label="新建编辑器"
+          disabled={!group.exists}
+          onClick={onNewEditor}
         >
-          <Plus size={14} strokeWidth={2} />
-          <span>新建终端</span>
+          <FileCode2 size={14} strokeWidth={1.8} />
+          <span>新建编辑器</span>
         </button>
-        {canChooseShell ? (
+        <div className={cn('new-terminal', !canChooseShell && 'single')}>
           <button
             type="button"
-            className="new-terminal-caret"
-            title="选择终端类型"
-            aria-label="选择终端类型"
-            onClick={onShellMenu}
+            className="new-terminal-main"
+            title="新建终端 (Ctrl+T)"
+            onClick={onNewTab}
           >
-            <ChevronDown size={13} />
+            <Plus size={14} strokeWidth={2} />
+            <span>新建终端</span>
           </button>
-        ) : null}
+          {canChooseShell ? (
+            <button
+              type="button"
+              className="new-terminal-caret"
+              title="选择终端类型"
+              aria-label="选择终端类型"
+              onClick={onShellMenu}
+            >
+              <ChevronDown size={13} />
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );

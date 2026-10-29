@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -259,5 +260,273 @@ try {
   dashName = error.message;
 }
 assert(dashName.length > 0, '以 - 开头的分支名被拒绝');
+
+console.log('16. 撤销提交');
+const undoRepo = makeRepo();
+writeFileSync(join(undoRepo, 'one.txt'), 'a\n');
+await git.stageAll(undoRepo);
+await git.commit(undoRepo, '第一次');
+writeFileSync(join(undoRepo, 'two.txt'), 'b\n');
+await git.stageAll(undoRepo);
+await git.commit(undoRepo, '第二次');
+
+const undone = await git.undoCommit(undoRepo);
+assert(undone.message === '第二次', '返回被撤销提交的完整信息');
+assert(undone.wasPushed === false, '无远端时标记为未推送');
+const afterUndo = await git.status(undoRepo);
+assert(afterUndo.ok && afterUndo.stagedCount === 1, '改动回到暂存区');
+assert(
+  execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: undoRepo, encoding: 'utf8' }).trim() ===
+    '第一次',
+  'HEAD 回退到上一个提交',
+);
+
+const firstUndo = await git.undoCommit(undoRepo);
+assert(firstUndo.message === '第一次', '可继续撤销到首次提交');
+assert((await git.headCommit(undoRepo)) === null, '撤销首次提交后没有 HEAD');
+const unbornStatus = await git.status(undoRepo);
+assert(unbornStatus.ok && unbornStatus.stagedCount === 2, '首次提交撤销后文件全部暂存');
+
+console.log('17. 修改提交');
+const amendRepo = makeRepo();
+writeFileSync(join(amendRepo, 'a.txt'), 'a\n');
+await git.stageAll(amendRepo);
+await git.commit(amendRepo, '原始信息');
+writeFileSync(join(amendRepo, 'b.txt'), 'b\n');
+await git.stageAll(amendRepo);
+const amended = await git.amend(amendRepo, '修改后的信息');
+assert(amended.summary === '修改后的信息', '返回新的提交信息');
+assert(
+  execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: amendRepo, encoding: 'utf8' }).trim() ===
+    '修改后的信息',
+  '提交信息已更新',
+);
+assert(
+  execFileSync('git', ['rev-list', '--count', 'HEAD'], {
+    cwd: amendRepo,
+    encoding: 'utf8',
+  }).trim() === '1',
+  '仍然只有一条提交',
+);
+assert(
+  execFileSync('git', ['show', '--name-only', '--pretty=format:', 'HEAD'], {
+    cwd: amendRepo,
+    encoding: 'utf8',
+  }).includes('b.txt'),
+  '暂存改动并入提交',
+);
+
+let amendError = '';
+try {
+  await git.amend(amendRepo, '修改后的信息');
+} catch (error) {
+  amendError = error.message;
+}
+assert(amendError.includes('未修改'), '无变更时拒绝 amend');
+
+const headRepo = makeRepo();
+assert((await git.headCommit(headRepo)) === null, '空仓库 headCommit 返回 null');
+
+console.log('18. HEAD 信息');
+const headInfoRepo = makeRepo();
+writeFileSync(join(headInfoRepo, 'readme.md'), 'hello\n');
+await git.stageAll(headInfoRepo);
+await git.commit(headInfoRepo, '主题行\n\n正文第一行\n正文第二行');
+const info = await git.headCommit(headInfoRepo);
+assert(/^[0-9a-f]{40}$/.test(info.hash), 'hash 是 40 位十六进制');
+assert(info.hash.startsWith(info.short) && info.short.length >= 4, 'short 是 hash 的前缀');
+assert(info.subject === '主题行', 'subject 只取第一行');
+assert(info.message === '主题行\n\n正文第一行\n正文第二行', 'message 完整保留换行');
+assert(info.pushed === false, '无远端时为未推送');
+
+console.log('19. 推送状态');
+const remoteDir = mkdtempSync(join(tmpdir(), 'cmdtb-remote-'));
+execFileSync('git', ['init', '--bare'], { cwd: remoteDir, stdio: 'ignore' });
+const pushRepo = makeRepo();
+writeFileSync(join(pushRepo, 'a.txt'), 'a\n');
+await git.stageAll(pushRepo);
+await git.commit(pushRepo, '已推送');
+execFileSync('git', ['remote', 'add', 'origin', remoteDir], { cwd: pushRepo });
+execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: pushRepo, stdio: 'ignore' });
+const pushedHead = await git.headCommit(pushRepo);
+assert(pushedHead.pushed === true, '已推送的提交标记为已推送');
+writeFileSync(join(pushRepo, 'b.txt'), 'b\n');
+await git.stageAll(pushRepo);
+await git.commit(pushRepo, '未推送');
+const unpushedHead = await git.headCommit(pushRepo);
+assert(unpushedHead.pushed === false, '未推送的提交标记为未推送');
+
+console.log('20. 修改提交保留正文');
+const amendBodyRepo = makeRepo();
+writeFileSync(join(amendBodyRepo, 'a.txt'), 'a\n');
+await git.stageAll(amendBodyRepo);
+await git.commit(amendBodyRepo, '标题\n\n正文保留');
+writeFileSync(join(amendBodyRepo, 'b.txt'), 'b\n');
+await git.stageAll(amendBodyRepo);
+const amendedSame = await git.amend(amendBodyRepo, '标题\n\n正文保留');
+assert(amendedSame.summary === '标题', '相同信息走 --no-edit 并返回摘要');
+assert(
+  execFileSync('git', ['log', '-1', '--pretty=%B'], {
+    cwd: amendBodyRepo,
+    encoding: 'utf8',
+  }).trim() === '标题\n\n正文保留',
+  '--no-edit 保留原提交正文',
+);
+assert(
+  execFileSync('git', ['show', '--name-only', '--pretty=format:', 'HEAD'], {
+    cwd: amendBodyRepo,
+    encoding: 'utf8',
+  }).includes('b.txt'),
+  '--no-edit 并入暂存改动',
+);
+
+console.log('21. 游离 HEAD 下撤销提交');
+const detachedRepo = makeRepo();
+writeFileSync(join(detachedRepo, 'a.txt'), 'a\n');
+await git.stageAll(detachedRepo);
+await git.commit(detachedRepo, '唯一提交');
+execFileSync('git', ['checkout', '--detach', 'HEAD'], { cwd: detachedRepo, stdio: 'ignore' });
+let detachedError = '';
+try {
+  await git.undoCommit(detachedRepo);
+} catch (error) {
+  detachedError = error.message;
+}
+assert(detachedError === '当前处于游离 HEAD 状态，无法撤销提交', '游离 HEAD 时拒绝撤销提交');
+const detachedStatus = await git.status(detachedRepo);
+assert(detachedStatus.ok === true, '拒绝后仓库仍然可用');
+assert((await git.headCommit(detachedRepo)) !== null, '拒绝后 HEAD 未被删除');
+
+console.log('21b. 浅克隆下撤销提交');
+// depth 1 的克隆里 HEAD~1 不存在，但不能误判成「首个提交」而删掉分支引用
+const shallowSource = makeRepo();
+writeFileSync(join(shallowSource, 'a.txt'), 'a\n');
+await git.stageAll(shallowSource);
+await git.commit(shallowSource, '源仓库第一次');
+writeFileSync(join(shallowSource, 'b.txt'), 'b\n');
+await git.stageAll(shallowSource);
+await git.commit(shallowSource, '源仓库第二次');
+const shallowDir = join(mkdtempSync(join(tmpdir(), 'cmdtb-shallow-')), 'clone');
+execFileSync(
+  'git',
+  ['clone', '--depth', '1', pathToFileURL(shallowSource).href, shallowDir],
+  { stdio: 'ignore' },
+);
+let shallowError = '';
+try {
+  await git.undoCommit(shallowDir);
+} catch (error) {
+  shallowError = error.message;
+}
+assert(
+  shallowError === '浅克隆仓库无法判断首个提交历史，未执行撤销',
+  '浅克隆仓库拒绝撤销提交',
+);
+const shallowBranch = execFileSync('git', ['branch', '--show-current'], {
+  cwd: shallowDir,
+  encoding: 'utf8',
+}).trim();
+assert(shallowBranch === 'main', '拒绝后分支引用仍在');
+const shallowHead = execFileSync('git', ['rev-parse', '--verify', 'HEAD'], {
+  cwd: shallowDir,
+  encoding: 'utf8',
+}).trim();
+assert(/^[0-9a-f]{40}$/.test(shallowHead), '拒绝后 HEAD 仍然存在');
+
+console.log('22. 提交历史');
+const logRepo = makeRepo();
+writeFileSync(join(logRepo, 'a.txt'), 'a\n');
+await git.stageAll(logRepo);
+await git.commit(logRepo, '第一条');
+writeFileSync(join(logRepo, 'b.txt'), 'b\n');
+await git.stageAll(logRepo);
+await git.commit(logRepo, '修复  登录   超时');
+writeFileSync(join(logRepo, 'c.txt'), 'c\n');
+await git.stageAll(logRepo);
+await git.commit(logRepo, '第三条');
+const history = await git.log(logRepo);
+assert(history.commits.length === 3, '返回全部三条提交');
+const [latestLog, spacedLog, oldestLog] = history.commits;
+assert(/^[0-9a-f]{40}$/.test(latestLog.hash), 'hash 为 40 位十六进制');
+assert(latestLog.hash.startsWith(latestLog.short) && latestLog.short.length >= 4, 'short 是 hash 前缀');
+assert(latestLog.author === 'Test', 'author 解析正确');
+assert(latestLog.when.length > 0, 'when 非空');
+assert(latestLog.subject === '第三条', 'subject 解析正确');
+assert(spacedLog.subject === '修复  登录   超时', 'subject 保留多个空格');
+assert(oldestLog.subject === '第一条', '按时间倒序返回');
+
+console.log('18. stash');
+const stashRepo = makeRepo();
+writeFileSync(join(stashRepo, 'tracked.txt'), 'v1\n');
+await git.stageAll(stashRepo);
+await git.commit(stashRepo, '初始');
+writeFileSync(join(stashRepo, 'tracked.txt'), 'v2\n');
+writeFileSync(join(stashRepo, 'untracked.txt'), 'u\n');
+
+await git.stashSave(stashRepo);
+const cleanStatus = await git.status(stashRepo);
+assert(
+  cleanStatus.ok && cleanStatus.stagedCount === 0 && cleanStatus.unstagedCount === 0,
+  '收起后工作区干净',
+);
+assert(!existsSync(join(stashRepo, 'untracked.txt')), '未跟踪文件一并收起');
+
+const listed = await git.stashList(stashRepo);
+assert(listed.stashes.length === 1, 'stash 列表有一条');
+assert(/^stash@\{0\}$/.test(listed.stashes[0].ref), 'ref 格式正确');
+
+await git.stashPop(stashRepo, listed.stashes[0].ref);
+assert(readFileSync(join(stashRepo, 'tracked.txt'), 'utf8') === 'v2\n', '恢复后改动回来');
+assert(existsSync(join(stashRepo, 'untracked.txt')), '未跟踪文件一并恢复');
+assert((await git.stashList(stashRepo)).stashes.length === 0, '恢复后列表清空');
+
+writeFileSync(join(stashRepo, 'tracked.txt'), 'v3\n');
+await git.stashSave(stashRepo);
+writeFileSync(join(stashRepo, 'untracked.txt'), 'u2\n');
+await git.stashSave(stashRepo);
+const twoStashes = await git.stashList(stashRepo);
+assert(twoStashes.stashes.length === 2, '两次收起得到两条');
+await git.stashDrop(stashRepo, twoStashes.stashes[0].ref);
+assert((await git.stashList(stashRepo)).stashes.length === 1, '丢弃后剩一条');
+
+let refError = '';
+try {
+  await git.stashDrop(stashRepo, 'stash@{-1}');
+} catch (error) {
+  refError = error.message;
+}
+assert(refError.includes('不合法'), '非法 stash ref 被拒绝');
+
+let popError = '';
+try {
+  await git.stashPop(stashRepo, '../../x');
+} catch (error) {
+  popError = error.message;
+}
+assert(popError.includes('不合法'), '越界 stash ref 被拒绝');
+
+let noChangeError = '';
+try {
+  await git.stashSave(stashRepo);
+} catch (error) {
+  noChangeError = error.message;
+}
+assert(noChangeError.includes('没有可收起的改动'), '无改动时给出提示');
+
+console.log('18b. stash 恢复冲突');
+const popRepo = makeRepo();
+writeFileSync(join(popRepo, 'conflict.txt'), 'base\n');
+await git.stageAll(popRepo);
+await git.commit(popRepo, '基线');
+writeFileSync(join(popRepo, 'conflict.txt'), 'stashed\n');
+await git.stashSave(popRepo);
+writeFileSync(join(popRepo, 'conflict.txt'), 'committed\n');
+await git.stageAll(popRepo);
+await git.commit(popRepo, '提交改动');
+
+const popConflict = await git.stashPop(popRepo, 'stash@{0}');
+assert(popConflict.ok === true, 'stashPop 冲突时仍返回 ok');
+assert(popConflict.conflicts.includes('conflict.txt'), '返回冲突文件列表');
+assert((await git.stashList(popRepo)).stashes.length === 1, '冲突后 stash 仍在列表');
 
 console.log(`\n全部通过：${passed} 项`);

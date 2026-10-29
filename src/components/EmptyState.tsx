@@ -1,5 +1,12 @@
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { AlertTriangle, ChevronDown, FolderOpen, Pencil, SquareTerminal } from 'lucide-react';
+import {
+  AlertTriangle,
+  ChevronDown,
+  FileCode2,
+  FolderOpen,
+  Pencil,
+  SquareTerminal,
+} from 'lucide-react';
 import type { Group, ShellInfo } from '../types';
 
 type EmptyStateProps = {
@@ -11,6 +18,7 @@ type EmptyStateProps = {
   onShellMenu: (event: ReactMouseEvent) => void;
   onReveal: () => void;
   onEditProject: () => void;
+  onOpenEditor: () => void;
 };
 
 export function EmptyState({
@@ -22,6 +30,7 @@ export function EmptyState({
   onShellMenu,
   onReveal,
   onEditProject,
+  onOpenEditor,
 }: EmptyStateProps) {
   const isGlobal = group.kind === 'global';
 
@@ -77,6 +86,12 @@ export function EmptyState({
               <button type="button" className="btn btn-secondary" onClick={onShellMenu}>
                 其他终端
                 <ChevronDown size={13} />
+              </button>
+            ) : null}
+            {!isGlobal ? (
+              <button type="button" className="btn btn-secondary" onClick={onOpenEditor}>
+                <FileCode2 size={14} strokeWidth={1.8} />
+                打开编辑器
               </button>
             ) : null}
             <button type="button" className="btn btn-ghost" onClick={onReveal}>

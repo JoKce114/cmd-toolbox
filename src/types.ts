@@ -50,6 +50,7 @@ export type Tab = {
   conversationId?: string;
   filePath?: string;
   diffChange?: GitChange;
+  diffCommit?: CommitRef;
   exited: boolean;
   exitCode?: number;
 };
@@ -67,6 +68,35 @@ export type GitChange = {
   origPath?: string;
   indexStatus: GitChangeStatus | null;
   worktreeStatus: GitChangeStatus | null;
+};
+
+export type HeadCommit = {
+  hash: string;
+  short: string;
+  subject: string;
+  message: string;
+  pushed: boolean;
+};
+
+export type StashEntry = {
+  ref: string;
+  message: string;
+  when: string;
+};
+
+export type CommitRef = {
+  hash: string;
+  short: string;
+  subject: string;
+};
+
+export type CommitFile = {
+  path: string;
+  origPath?: string;
+  status: GitChangeStatus;
+  added: number;
+  removed: number;
+  patch: string;
 };
 
 export type GitStatus =

@@ -205,6 +205,7 @@ const beforeTabs = await page.locator('.tab').count();
 await click(
   page.locator('.git-change-item').filter({ hasText: 'index.php' }).locator('.git-change-row'),
 );
+// 此时的编辑器页签都改过内容，属于「占住」状态，应当新开
 await waitFor(
   async () => (await page.locator('.tab').count()) === beforeTabs + 1,
   '新开编辑器页签',
@@ -355,6 +356,151 @@ await waitFor(
 );
 const theirsText = await page.locator('.editor-pane:not(.is-hidden) .cm-content').innerText();
 assert(theirsText.includes('theirs') && !theirsText.includes('ours'), '只剩传入分支内容');
+
+console.log('15. 没动过的编辑器页签会被新文件顶替');
+// 新建一个空白编辑器页签：filePath 为空、未改动，正是可复用对象
+await page.locator('.group-item').filter({ hasText: 'edit-proj' }).click({ button: 'right' });
+await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+await click(page.getByRole('menuitem', { name: '打开编辑器', exact: true }));
+await waitFor(
+  async () => (await page.locator('.editor-pane:not(.is-hidden) .editor-placeholder').count()) > 0,
+  '出现空白编辑器',
+);
+const reusableTabs = await page.locator('.tab').count();
+
+// 从 Git 面板打开一个文件：应顶替这个空白页签，页签数不变
+writeFileSync(join(repo, 'picked.txt'), 'picked\n');
+await page.waitForTimeout(1500);
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-change-row').filter({ hasText: 'picked.txt' }).count()) > 0,
+  'Git 面板列出新文件',
+);
+await click(
+  page
+    .locator('.git-change-item')
+    .filter({ hasText: 'picked.txt' })
+    .locator('.git-row-action[title="打开文件编辑"]'),
+);
+await waitFor(
+  async () =>
+    (await page.locator('.editor-pane:not(.is-hidden)').innerText()).includes('picked'),
+  '空白页签被顶替为新文件',
+);
+assert(
+  (await page.locator('.tab').count()) === reusableTabs,
+  '页签数量没有增加',
+);
+
+console.log('16. 改过的编辑器页签不会被顶替');
+const keepPane = page.locator('.editor-pane:not(.is-hidden)');
+await keepPane.locator('.cm-content').click();
+await page.keyboard.type('// touched');
+await waitFor(
+  async () => (await keepPane.locator('.editor-tab-dot').count()) > 0,
+  '页签标记为已修改',
+);
+const tabsAfterEdit = await page.locator('.tab').count();
+
+writeFileSync(join(repo, 'picked2.txt'), 'picked2\n');
+await page.waitForTimeout(1500);
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-change-row').filter({ hasText: 'picked2.txt' }).count()) > 0,
+  'Git 面板列出第二个新文件',
+);
+await click(
+  page
+    .locator('.git-change-item')
+    .filter({ hasText: 'picked2.txt' })
+    .locator('.git-row-action[title="打开文件编辑"]'),
+);
+await waitFor(
+  async () => (await page.locator('.tab').count()) === tabsAfterEdit + 1,
+  '改过的页签占住位置，新开了一个',
+);
+await click(page.locator('.tab').filter({ hasText: 'picked.txt' }).first());
+await page.waitForTimeout(400);
+assert(
+  (await page.locator('.editor-pane:not(.is-hidden)').innerText()).includes('// touched'),
+  '原页签的未保存修改没有被冲掉',
+);
+
+console.log('17. 没动过的内页签会被新文件顶替');
+// 回到 edit-proj 的编辑器，清掉已有内页签，从干净状态开始
+await page.locator('.group-item').filter({ hasText: 'edit-proj' }).click({ button: 'right' });
+await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+await click(page.getByRole('menuitem', { name: '打开编辑器', exact: true }));
+await page.waitForTimeout(600);
+const innerPane = page.locator('.editor-pane:not(.is-hidden)');
+
+await click(innerPane.locator('.file-row').filter({ hasText: 'index.php' }));
+await waitFor(
+  async () => (await innerPane.locator('.editor-tab').count()) >= 1,
+  '打开第一个文件',
+);
+const innerBefore = await innerPane.locator('.editor-tab').count();
+
+// 打开另一个没改过的文件：应顶替当前内页签，数量不减
+await click(innerPane.locator('.file-row').filter({ hasText: 'gbk.txt' }));
+await waitFor(
+  async () =>
+    (await innerPane.locator('.editor-tab-name').filter({ hasText: 'gbk.txt' }).count()) === 1,
+  '内容切到新文件',
+);
+assert(
+  (await innerPane.locator('.editor-tab').count()) === innerBefore,
+  '内页签数量没有增加',
+);
+assert(
+  (await innerPane.locator('.editor-tab-name').filter({ hasText: 'gbk.txt' }).count()) === 1,
+  '内页签换成了新文件',
+);
+
+console.log('18. 改过的内页签不会被顶替');
+await innerPane.locator('.cm-content').click();
+await page.keyboard.type('// inner touched');
+await waitFor(
+  async () => (await innerPane.locator('.editor-tab-dot').count()) > 0,
+  '内页签标记为已修改',
+);
+const innerAfterEdit = await innerPane.locator('.editor-tab').count();
+
+await click(innerPane.locator('.file-row').filter({ hasText: 'index.php' }));
+await waitFor(
+  async () => (await innerPane.locator('.editor-tab').count()) === innerAfterEdit + 1,
+  '改过的内页签占住位置，新开一个',
+);
+assert(
+  (await innerPane.locator('.editor-tab-name').filter({ hasText: 'gbk.txt' }).count()) === 1,
+  '改过的文件仍留在内页签里',
+);
+
+console.log('19. 未修改的文件按 Ctrl+S 也算占住页签');
+await page.locator('.group-item').filter({ hasText: 'edit-proj' }).click({ button: 'right' });
+await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+await click(page.getByRole('menuitem', { name: '打开编辑器', exact: true }));
+await page.waitForTimeout(600);
+const freshPane = page.locator('.editor-pane:not(.is-hidden)');
+
+await click(freshPane.locator('.file-row').filter({ hasText: 'index.php' }));
+await waitFor(
+  async () => (await freshPane.locator('.editor-tab-name').count()) === 1,
+  '打开第一个文件',
+);
+// 不改内容，只按 Ctrl+S：这是「我要留着它」的信号
+await freshPane.locator('.cm-content').click();
+await page.keyboard.press('Control+S');
+await page.waitForTimeout(600);
+await click(freshPane.locator('.file-row').filter({ hasText: 'gbk.txt' }));
+await waitFor(
+  async () => (await freshPane.locator('.editor-tab-name').count()) === 2,
+  '按过 Ctrl+S 的文件没有被顶替',
+);
+assert(
+  (await freshPane.locator('.editor-tab-name').filter({ hasText: 'index.php' }).count()) === 1,
+  'index.php 仍在内页签里',
+);
 
 await app.close();
 rmSync(dataDir, { recursive: true, force: true });

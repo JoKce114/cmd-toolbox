@@ -607,12 +607,10 @@ async function fileDiff(projectPath, filePath, changeStatus) {
 // 最近的提交列表，供面板展示
 async function log(projectPath, limit = 30) {
   const count = Math.max(1, Math.min(200, Number(limit) || 30));
-  // 用不可见分隔符串起字段，避免提交信息里的空格干扰解析
-  const SEP = String.fromCharCode(31);
   const result = await runGit(projectPath, [
     'log',
     '-' + count,
-    '--pretty=format:%H' + SEP + '%h' + SEP + '%an' + SEP + '%ar' + SEP + '%s',
+    '--pretty=format:%H' + UNIT + '%h' + UNIT + '%an' + UNIT + '%ar' + UNIT + '%s',
   ]);
   if (!result.ok) {
     // 空仓库没有 HEAD，返回空列表而不是报错
@@ -625,7 +623,7 @@ async function log(projectPath, limit = 30) {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => {
-      const parts = line.split(SEP);
+      const parts = line.split(UNIT);
       return {
         hash: parts[0] || '',
         short: parts[1] || '',
@@ -706,6 +704,198 @@ async function mergeInto(projectPath, source, target) {
   };
 }
 
+// 字段分隔符用不可见字符，避免提交信息里的空格干扰 split
+const UNIT = String.fromCharCode(31);
+const COMMIT_HASH = /^[0-9a-f]{4,40}$/;
+
+function assertCommitHash(hash) {
+  const value = String(hash || '').trim().toLowerCase();
+  if (!COMMIT_HASH.test(value)) throw new Error('提交标识不合法');
+  return value;
+}
+
+// 空仓库返回 null，调用方据此禁用「撤销 / 修改提交」
+async function headCommit(projectPath) {
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+  const result = await runGit(projectPath, [
+    'log',
+    '-1',
+    `--pretty=%H${UNIT}%h${UNIT}%s${UNIT}%B`,
+  ]);
+  if (!result.ok) {
+    if (/does not have any commits|unknown revision|bad default revision/i.test(result.stderr)) {
+      return null;
+    }
+    throw new Error(cleanError(result.error, result.stderr));
+  }
+  const parts = result.stdout.split(UNIT);
+  const hash = (parts[0] || '').trim();
+  const short = (parts[1] || '').trim();
+  const subject = (parts[2] || '').trim();
+  const message = (parts.slice(3).join(UNIT) || subject).trim();
+
+  // 无远端仓库时输出为空，pushed 为 false 是正确的
+  const remote = await runGit(projectPath, [
+    'branch',
+    '-r',
+    '--contains',
+    assertCommitHash(hash),
+  ]);
+  return {
+    hash,
+    short,
+    subject: subject || '(无提交信息)',
+    message,
+    pushed: Boolean(remote.ok && remote.stdout.trim()),
+  };
+}
+
+async function undoCommit(projectPath) {
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+  const head = await headCommit(projectPath);
+  if (!head) throw new Error('还没有任何提交可以撤销');
+
+  // 首次提交没有 HEAD~1，只能删掉引用；此时索引保留，文件仍处于已暂存状态。
+  // HEAD 是符号引用时才删得到分支引用；游离 HEAD 下 update-ref -d HEAD 会删掉
+  // .git/HEAD 文件本身，直接损坏仓库，因此先拒绝。
+  const parent = await runGit(projectPath, ['rev-parse', '--verify', '--quiet', 'HEAD~1']);
+  if (!parent.ok) {
+    // 浅克隆的边界提交同样取不到 HEAD~1，不能当成「首次提交」去删分支引用
+    const shallow = await runGit(projectPath, ['rev-parse', '--is-shallow-repository']);
+    if (shallow.ok && shallow.stdout.trim() === 'true') {
+      throw new Error('浅克隆仓库无法判断首个提交历史，未执行撤销');
+    }
+    const symbolic = await runGit(projectPath, ['symbolic-ref', '-q', 'HEAD']);
+    if (!symbolic.ok) throw new Error('当前处于游离 HEAD 状态，无法撤销提交');
+  }
+  const args = parent.ok ? ['reset', '--soft', 'HEAD~1'] : ['update-ref', '-d', 'HEAD'];
+  const result = await runGit(projectPath, args);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+
+  return { message: head.message, wasPushed: head.pushed };
+}
+
+async function amend(projectPath, message) {
+  const text = String(message || '').trim();
+  if (!text) throw new Error('请填写提交信息');
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+
+  const head = await headCommit(projectPath);
+  if (!head) throw new Error('还没有提交可以修改');
+
+  const current = await status(projectPath);
+  const stagedCount = current.ok ? current.stagedCount : 0;
+  // git commit --amend 在无改动时会静默改掉提交时间，这里先拦住
+  if (text === head.message && stagedCount === 0) {
+    throw new Error('提交信息未修改，也没有暂存改动');
+  }
+
+  const result = await runGit(
+    projectPath,
+    text === head.message
+      ? ['commit', '--amend', '--no-edit']
+      : ['commit', '--amend', '-m', text],
+  );
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+
+  const head2 = await runGit(projectPath, ['rev-parse', '--short', 'HEAD']);
+  if (!head2.ok) throw new Error(cleanError(head2.error, head2.stderr));
+  return { commit: head2.stdout.trim(), summary: text.split('\n')[0] };
+}
+
+const STASH_REF = /^stash@\{\d+\}$/;
+
+function assertStashRef(ref) {
+  const value = String(ref || '').trim();
+  if (!STASH_REF.test(value)) throw new Error('stash 标识不合法');
+  return value;
+}
+
+async function stashList(projectPath) {
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+  const result = await runGit(projectPath, [
+    'stash',
+    'list',
+    `--format=%gd${UNIT}%gs${UNIT}%cr`,
+  ]);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  const stashes = result.stdout
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(0, 20)
+    .map((line) => {
+      const parts = line.split(UNIT);
+      return {
+        ref: (parts[0] || '').trim(),
+        message: (parts[1] || '').trim() || '(无说明)',
+        when: (parts[2] || '').trim(),
+      };
+    });
+  return { stashes };
+}
+
+// -u 把未跟踪文件一起收起，否则切分支时它们仍会碍事
+async function stashSave(projectPath) {
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+  const result = await runGit(projectPath, ['stash', 'push', '-u', '-m', 'Cmd Toolbox']);
+  const output = `${result.stdout}${result.stderr}`;
+  if (/No local changes to save/i.test(output)) throw new Error('没有可收起的改动');
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  return { ok: true };
+}
+
+async function stashPop(projectPath, ref) {
+  const target = assertStashRef(ref);
+  const result = await runGit(projectPath, ['stash', 'pop', target]);
+  if (!result.ok) {
+    // 冲突时 git 不会删除 stash，工作区进入冲突态：这不是失败，交给调用方提示
+    const conflicts = await collectConflicts(projectPath, result);
+    if (conflicts.length) return { ok: true, conflicts };
+    throw new Error(cleanError(result.error, result.stderr));
+  }
+  return { ok: true, conflicts: [] };
+}
+
+async function stashDrop(projectPath, ref) {
+  const target = assertStashRef(ref);
+  const result = await runGit(projectPath, ['stash', 'drop', target]);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  return { ok: true };
+}
+
+async function commitDiff(projectPath, hash) {
+  const target = assertCommitHash(hash);
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+
+  // 默认的 git show 对 merge commit 不输出 diff；-m --first-parent 让它相对第一父输出。
+  // quotePath=false 让中文路径原样输出；diff.relative / mnemonicPrefix 会改写 a/ b/ 前缀，
+  // 用户全局配置了它们时路径会残留，这里显式关掉。
+  const result = await runGit(projectPath, [
+    '--no-pager',
+    '-c',
+    'core.quotePath=false',
+    '-c',
+    'diff.relative=false',
+    '-c',
+    'diff.mnemonicPrefix=false',
+    'show',
+    '--no-color',
+    '--no-ext-diff',
+    '-U3',
+    '-m',
+    '--first-parent',
+    '--format=',
+    target,
+  ]);
+  if (!result.ok) {
+    if (/unknown revision|bad object|invalid object name|bad revision/i.test(result.stderr)) {
+      throw new Error('该提交已不在本地历史中');
+    }
+    throw new Error(cleanError(result.error, result.stderr));
+  }
+  return { patch: result.stdout };
+}
+
 module.exports = {
   log,
   status,
@@ -728,4 +918,12 @@ module.exports = {
   createBranch,
   merge,
   mergeInto,
+  headCommit,
+  undoCommit,
+  amend,
+  stashList,
+  stashSave,
+  stashPop,
+  stashDrop,
+  commitDiff,
 };

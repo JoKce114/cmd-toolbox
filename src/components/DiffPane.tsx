@@ -1,13 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
+import { splitCommitPatch } from '../commitDiff';
 import { parsePatch, type DiffLine } from '../diffParser';
-import type { GitChange } from '../types';
+import type { CommitRef, GitChange } from '../types';
+
+export type DiffTarget =
+  | { kind: 'change'; change: GitChange }
+  | { kind: 'commit'; commit: CommitRef };
 
 export type DiffPaneProps = {
   projectPath: string;
   wordWrap: boolean;
-  change: GitChange;
+  target: DiffTarget;
   active: boolean;
   onClose: () => void;
   onOpenFile: (relPath: string) => void;
@@ -17,7 +22,7 @@ export type DiffPaneProps = {
 export function DiffPane({
   projectPath,
   wordWrap,
-  change,
+  target,
   active,
   onClose,
   onOpenFile,
@@ -25,14 +30,29 @@ export function DiffPane({
 }: DiffPaneProps) {
   const [patch, setPatch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [selectedPath, setSelectedPath] = useState('');
+
+  // target 对象每次渲染都是新的，依赖必须落在原始值上，否则会无限重取
+  const commitHash = target.kind === 'commit' ? target.commit.hash : '';
+  const changePath = target.kind === 'change' ? target.change.path : '';
+  const changeStatus =
+    target.kind === 'change'
+      ? target.change.worktreeStatus ?? target.change.indexStatus ?? 'modified'
+      : '';
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    void window.api.git
-      .fileDiff(projectPath, change.path, change.worktreeStatus ?? change.indexStatus ?? 'modified')
-      .then((result) => {
-        if (!cancelled) setPatch(result.patch);
+    setSelectedPath('');
+    const load = async () => {
+      const result = commitHash
+        ? await window.api.git.commitDiff(projectPath, commitHash)
+        : await window.api.git.fileDiff(projectPath, changePath, changeStatus);
+      return result.patch;
+    };
+    void load()
+      .then((next) => {
+        if (!cancelled) setPatch(next);
       })
       .catch((error) => {
         if (!cancelled) onToast(toErrorMessage(error), 'error');
@@ -43,15 +63,33 @@ export function DiffPane({
     return () => {
       cancelled = true;
     };
-  }, [projectPath, change.path, change.worktreeStatus, change.indexStatus, onToast]);
+  }, [projectPath, commitHash, changePath, changeStatus, onToast]);
 
-  const parsed = parsePatch(patch);
+  const files = useMemo(
+    () => (commitHash ? splitCommitPatch(patch) : []),
+    [commitHash, patch],
+  );
+  const activeFile = files.find((file) => file.path === selectedPath) ?? files[0] ?? null;
+  const parsed = parsePatch(commitHash ? activeFile?.patch || '' : patch);
+
+  const title = commitHash
+    ? `${target.kind === 'commit' ? target.commit.short : ''} · ${
+        target.kind === 'commit' ? target.commit.subject : ''
+      }`
+    : target.kind === 'change' && target.change.origPath
+      ? `${target.change.origPath} → ${target.change.path}`
+      : changePath;
+
+  const openPath = commitHash ? activeFile?.path || '' : changePath;
+  const openDisabled = commitHash
+    ? !activeFile || activeFile.status === 'deleted'
+    : false;
 
   return (
     <section className={`terminal-pane diff-pane${active ? '' : ' is-hidden'}`}>
       <header className="pane-header">
-        <span className="pane-path" title={change.origPath ? `${change.origPath} → ${change.path}` : change.path}>
-          {change.origPath ? `${change.origPath} → ${change.path}` : change.path}
+        <span className="pane-path" title={title}>
+          {title}
         </span>
         {!parsed.isEmpty ? (
           <span className="diff-stats">
@@ -63,7 +101,10 @@ export function DiffPane({
           type="button"
           className="btn btn-secondary btn-sm diff-open-file"
           title="打开文件编辑"
-          onClick={() => onOpenFile(change.path)}
+          disabled={openDisabled}
+          onClick={() => {
+            if (openPath) onOpenFile(openPath);
+          }}
         >
           打开文件
         </button>
@@ -71,6 +112,25 @@ export function DiffPane({
           <X size={14} />
         </button>
       </header>
+
+      {commitHash ? (
+        <div className="diff-file-bar">
+          <span className="diff-file-label">文件 {files.length}</span>
+          <select
+            className="diff-file-select"
+            value={activeFile?.path || ''}
+            onChange={(event) => setSelectedPath(event.target.value)}
+          >
+            {files.map((file) => (
+              <option key={file.path} value={file.path}>
+                {file.status === 'renamed' && file.origPath
+                  ? `${file.origPath} → ${file.path}`
+                  : file.path}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
 
       <div className={`diff-body${wordWrap ? ' is-wrapped' : ''}`}>
         {loading ? (
