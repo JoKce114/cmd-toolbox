@@ -858,6 +858,31 @@ async function stashDrop(projectPath, ref) {
   return { ok: true };
 }
 
+async function commitDiff(projectPath, hash) {
+  const target = assertCommitHash(hash);
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+
+  // 默认的 git show 对 merge commit 不输出 diff；-m --first-parent 让它相对第一父输出
+  const result = await runGit(projectPath, [
+    '--no-pager',
+    'show',
+    '--no-color',
+    '--no-ext-diff',
+    '-U3',
+    '-m',
+    '--first-parent',
+    '--format=',
+    target,
+  ]);
+  if (!result.ok) {
+    if (/unknown revision|bad object|invalid object name|bad revision/i.test(result.stderr)) {
+      throw new Error('该提交已不在本地历史中');
+    }
+    throw new Error(cleanError(result.error, result.stderr));
+  }
+  return { patch: result.stdout };
+}
+
 module.exports = {
   log,
   status,
@@ -887,4 +912,5 @@ module.exports = {
   stashSave,
   stashPop,
   stashDrop,
+  commitDiff,
 };

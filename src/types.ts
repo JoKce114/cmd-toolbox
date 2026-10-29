@@ -83,6 +83,21 @@ export type StashEntry = {
   when: string;
 };
 
+export type CommitRef = {
+  hash: string;
+  short: string;
+  subject: string;
+};
+
+export type CommitFile = {
+  path: string;
+  origPath?: string;
+  status: GitChangeStatus;
+  added: number;
+  removed: number;
+  patch: string;
+};
+
 export type GitStatus =
   | {
       ok: false;

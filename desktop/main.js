@@ -368,6 +368,10 @@ function registerIpc() {
     git.stashDrop(assertProjectPath(projectPath), ref),
   );
 
+  ipcMain.handle('git:commit-diff', (_event, projectPath, hash) =>
+    git.commitDiff(assertProjectPath(projectPath), hash),
+  );
+
   ipcMain.handle('fs:list', (_event, projectPath, relDir) =>
     fileApi.list(assertProjectPath(projectPath), relDir),
   );
