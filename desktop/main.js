@@ -340,6 +340,18 @@ function registerIpc() {
     git.mergeInto(assertProjectPath(projectPath), source, target),
   );
 
+  ipcMain.handle('git:head-commit', (_event, projectPath) =>
+    git.headCommit(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:undo-commit', (_event, projectPath) =>
+    git.undoCommit(assertProjectPath(projectPath)),
+  );
+
+  ipcMain.handle('git:amend', (_event, projectPath, message) =>
+    git.amend(assertProjectPath(projectPath), message),
+  );
+
   ipcMain.handle('fs:list', (_event, projectPath, relDir) =>
     fileApi.list(assertProjectPath(projectPath), relDir),
   );

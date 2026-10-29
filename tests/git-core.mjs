@@ -260,4 +260,70 @@ try {
 }
 assert(dashName.length > 0, '以 - 开头的分支名被拒绝');
 
+console.log('16. 撤销提交');
+const undoRepo = makeRepo();
+writeFileSync(join(undoRepo, 'one.txt'), 'a\n');
+await git.stageAll(undoRepo);
+await git.commit(undoRepo, '第一次');
+writeFileSync(join(undoRepo, 'two.txt'), 'b\n');
+await git.stageAll(undoRepo);
+await git.commit(undoRepo, '第二次');
+
+const undone = await git.undoCommit(undoRepo);
+assert(undone.message === '第二次', '返回被撤销提交的完整信息');
+assert(undone.wasPushed === false, '无远端时标记为未推送');
+const afterUndo = await git.status(undoRepo);
+assert(afterUndo.ok && afterUndo.stagedCount === 1, '改动回到暂存区');
+assert(
+  execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: undoRepo, encoding: 'utf8' }).trim() ===
+    '第一次',
+  'HEAD 回退到上一个提交',
+);
+
+const firstUndo = await git.undoCommit(undoRepo);
+assert(firstUndo.message === '第一次', '可继续撤销到首次提交');
+assert((await git.headCommit(undoRepo)) === null, '撤销首次提交后没有 HEAD');
+const unbornStatus = await git.status(undoRepo);
+assert(unbornStatus.ok && unbornStatus.stagedCount === 2, '首次提交撤销后文件全部暂存');
+
+console.log('17. 修改提交');
+const amendRepo = makeRepo();
+writeFileSync(join(amendRepo, 'a.txt'), 'a\n');
+await git.stageAll(amendRepo);
+await git.commit(amendRepo, '原始信息');
+writeFileSync(join(amendRepo, 'b.txt'), 'b\n');
+await git.stageAll(amendRepo);
+const amended = await git.amend(amendRepo, '修改后的信息');
+assert(amended.summary === '修改后的信息', '返回新的提交信息');
+assert(
+  execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: amendRepo, encoding: 'utf8' }).trim() ===
+    '修改后的信息',
+  '提交信息已更新',
+);
+assert(
+  execFileSync('git', ['rev-list', '--count', 'HEAD'], {
+    cwd: amendRepo,
+    encoding: 'utf8',
+  }).trim() === '1',
+  '仍然只有一条提交',
+);
+assert(
+  execFileSync('git', ['show', '--name-only', '--pretty=format:', 'HEAD'], {
+    cwd: amendRepo,
+    encoding: 'utf8',
+  }).includes('b.txt'),
+  '暂存改动并入提交',
+);
+
+let amendError = '';
+try {
+  await git.amend(amendRepo, '修改后的信息');
+} catch (error) {
+  amendError = error.message;
+}
+assert(amendError.includes('未修改'), '无变更时拒绝 amend');
+
+const headRepo = makeRepo();
+assert((await git.headCommit(headRepo)) === null, '空仓库 headCommit 返回 null');
+
 console.log(`\n全部通过：${passed} 项`);

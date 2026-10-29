@@ -6,6 +6,7 @@ import type {
   GitPullStrategy,
   GitPushResult,
   GitStatus,
+  HeadCommit,
   OpenedFile,
   Project,
   UpdateCheckResult,
@@ -160,6 +161,14 @@ declare global {
           switchedFrom: string;
           returnedTo: string;
         }>;
+        headCommit: (projectPath: string) => Promise<HeadCommit | null>;
+        undoCommit: (
+          projectPath: string,
+        ) => Promise<{ message: string; wasPushed: boolean }>;
+        amend: (
+          projectPath: string,
+          message: string,
+        ) => Promise<{ commit: string; summary: string }>;
       };
       files: {
         list: (projectPath: string, relDir: string) => Promise<{ entries: FileEntry[] }>;

@@ -91,6 +91,9 @@ contextBridge.exposeInMainWorld('api', {
     merge: (projectPath, branch) => invoke('git:merge', projectPath, branch),
     mergeInto: (projectPath, source, target) =>
       invoke('git:merge-into', projectPath, source, target),
+    headCommit: (projectPath) => invoke('git:head-commit', projectPath),
+    undoCommit: (projectPath) => invoke('git:undo-commit', projectPath),
+    amend: (projectPath, message) => invoke('git:amend', projectPath, message),
   },
 
   files: {

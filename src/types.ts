@@ -69,6 +69,14 @@ export type GitChange = {
   worktreeStatus: GitChangeStatus | null;
 };
 
+export type HeadCommit = {
+  hash: string;
+  short: string;
+  subject: string;
+  message: string;
+  pushed: boolean;
+};
+
 export type GitStatus =
   | {
       ok: false;

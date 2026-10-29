@@ -706,6 +706,88 @@ async function mergeInto(projectPath, source, target) {
   };
 }
 
+// 字段分隔符用不可见字符，避免提交信息里的空格干扰 split
+const UNIT = String.fromCharCode(31);
+const COMMIT_HASH = /^[0-9a-f]{4,40}$/;
+
+function assertCommitHash(hash) {
+  const value = String(hash || '').trim().toLowerCase();
+  if (!COMMIT_HASH.test(value)) throw new Error('提交标识不合法');
+  return value;
+}
+
+// 空仓库返回 null，调用方据此禁用「撤销 / 修改提交」
+async function headCommit(projectPath) {
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+  const result = await runGit(projectPath, [
+    'log',
+    '-1',
+    `--pretty=%H${UNIT}%h${UNIT}%s${UNIT}%B`,
+  ]);
+  if (!result.ok) {
+    if (/does not have any commits|unknown revision|bad default revision/i.test(result.stderr)) {
+      return null;
+    }
+    throw new Error(cleanError(result.error, result.stderr));
+  }
+  const parts = result.stdout.split(UNIT);
+  const hash = (parts[0] || '').trim();
+  const short = (parts[1] || '').trim();
+  const subject = (parts[2] || '').trim();
+  const message = (parts.slice(3).join(UNIT) || subject).trim();
+
+  // 无远端仓库时输出为空，pushed 为 false 是正确的
+  const remote = await runGit(projectPath, ['branch', '-r', '--contains', hash]);
+  return {
+    hash,
+    short,
+    subject: subject || '(无提交信息)',
+    message,
+    pushed: Boolean(remote.ok && remote.stdout.trim()),
+  };
+}
+
+async function undoCommit(projectPath) {
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+  const head = await headCommit(projectPath);
+  if (!head) throw new Error('还没有任何提交可以撤销');
+
+  // 首次提交没有 HEAD~1，只能删掉引用；此时索引保留，文件仍处于已暂存状态
+  const parent = await runGit(projectPath, ['rev-parse', '--verify', '--quiet', 'HEAD~1']);
+  const args = parent.ok ? ['reset', '--soft', 'HEAD~1'] : ['update-ref', '-d', 'HEAD'];
+  const result = await runGit(projectPath, args);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+
+  return { message: head.message, wasPushed: head.pushed };
+}
+
+async function amend(projectPath, message) {
+  const text = String(message || '').trim();
+  if (!text) throw new Error('请填写提交信息');
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+
+  const head = await headCommit(projectPath);
+  if (!head) throw new Error('还没有提交可以修改');
+
+  const current = await status(projectPath);
+  const stagedCount = current.ok ? current.stagedCount : 0;
+  // git commit --amend 在无改动时会静默改掉提交时间，这里先拦住
+  if (text === head.message && stagedCount === 0) {
+    throw new Error('提交信息未修改，也没有暂存改动');
+  }
+
+  const result = await runGit(
+    projectPath,
+    text === head.message
+      ? ['commit', '--amend', '--no-edit']
+      : ['commit', '--amend', '-m', text],
+  );
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+
+  const head2 = await runGit(projectPath, ['rev-parse', '--short', 'HEAD']);
+  return { commit: head2.stdout.trim(), summary: text.split('\n')[0] };
+}
+
 module.exports = {
   log,
   status,
@@ -728,4 +810,7 @@ module.exports = {
   createBranch,
   merge,
   mergeInto,
+  headCommit,
+  undoCommit,
+  amend,
 };
