@@ -1,6 +1,7 @@
 // 发布仓库只在这里写一次，渲染层和其它模块都不要重复硬编码
 const REPO = 'JoKce114/cmd-toolbox';
-const API_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
+// 端到端测试用本地假接口时覆盖这个地址
+const API_URL = process.env.CMDTOOLBOX_UPDATE_API || `https://api.github.com/repos/${REPO}/releases/latest`;
 const RELEASE_PAGE = `https://github.com/${REPO}/releases`;
 const TIMEOUT_MS = 8000;
 const CACHE_TTL = 5 * 60 * 1000;

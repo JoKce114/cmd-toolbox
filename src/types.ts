@@ -121,6 +121,17 @@ export type UpdateCheckResult =
     }
   | { ok: false; message: string };
 
+export type UpdaterPhase = 'idle' | 'downloading' | 'downloaded' | 'error' | 'unsupported';
+
+export type UpdaterState = {
+  phase: UpdaterPhase;
+  percent: number;
+  version: string;
+  message: string;
+};
+
+export type UpdaterResult = { ok: true } | { ok: false; message: string };
+
 export function isBrowserTab(tab: { shellId: string }): boolean {
   return tab.shellId === 'browser';
 }

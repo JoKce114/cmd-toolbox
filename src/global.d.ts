@@ -9,6 +9,8 @@ import type {
   OpenedFile,
   Project,
   UpdateCheckResult,
+  UpdaterResult,
+  UpdaterState,
 } from './types';
 
 export interface ProjectSaveResult {
@@ -59,6 +61,12 @@ declare global {
       getInfo: () => Promise<AppInfo>;
       updates: {
         check: (seenVersion?: string | null) => Promise<UpdateCheckResult>;
+      };
+      updater: {
+        download: () => Promise<UpdaterResult>;
+        install: () => Promise<UpdaterResult>;
+        state: () => Promise<UpdaterState>;
+        onEvent: (handler: (state: UpdaterState) => void) => () => void;
       };
       session: {
         load: () => Promise<SessionSnapshot>;

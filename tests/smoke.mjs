@@ -118,7 +118,8 @@ try {
   await page.waitForTimeout(700);
   assert((await page.locator('.tab').count()) === 2, 'Ctrl+T 新建第二个终端页签');
   let titles = await tabTitles(page);
-  assert(titles.some((title) => title.includes('命令提示符 2')), '序号自动递增，页签可区分');
+  // 两个页签靠 #序号 区分，名称本身不再追加「2」
+  assert(new Set(titles.map((title) => title.split(' ')[0])).size === 2, '每个页签有独立的 #序号');
 
   await click(page, page.locator('.tab').first());
   await page.locator('.tab').first().dblclick();

@@ -1,7 +1,7 @@
 {
   "name": "cmd-toolbox",
   "productName": "Cmd Toolbox",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "本地项目终端工作台",
   "main": "desktop/main.js",
@@ -15,15 +15,18 @@
     "dev": "concurrently -k -n VITE,APP \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env CMDTOOLBOX_DEV=1 electron .\"",
     "typecheck": "tsc --noEmit",
     "helper": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-coninject.ps1",
-    "launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-launcher.ps1",
-    "build": "tsc --noEmit && vite build && npm run helper && npm run launcher",
+    "build": "tsc --noEmit && vite build && npm run helper",
     "start": "npm run build && electron .",
     "icon": "node scripts/make-icon.mjs",
-    "dist": "npm run build && node scripts/clean-release.mjs && electron-builder --win dir",
-    "dist:portable": "npm run build && node scripts/clean-release.mjs && electron-builder --win portable",
+    "dist": "npm run build && node scripts/clean-release.mjs && electron-builder --win nsis --publish never && node scripts/prepare-release.mjs",
+    "dist:portable": "npm run build && node scripts/clean-release.mjs && electron-builder --win portable --publish never && node scripts/prepare-release.mjs",
+    "dist:dir": "npm run build && node scripts/clean-release.mjs && electron-builder --win dir --publish never && node scripts/prepare-release.mjs",
+    "notes": "node scripts/prepare-release.mjs",
     "test:ui": "npm run build && node tests/smoke.mjs"
   },
   "dependencies": {
+    "electron-updater": "^6.8.11",
+    "iconv-lite": "^0.6.3",
     "node-pty": "1.1.0"
   },
   "devDependencies": {
@@ -51,7 +54,6 @@
     "cross-env": "^7.0.3",
     "electron": "33.4.11",
     "electron-builder": "25.1.8",
-    "iconv-lite": "^0.6.3",
     "lucide-react": "^1.61.0",
     "playwright-core": "^1.64.1",
     "react": "^19.0.0",
@@ -88,21 +90,36 @@
       }
     ],
     "npmRebuild": false,
+    "publish": {
+      "provider": "github",
+      "owner": "JoKce114",
+      "repo": "cmd-toolbox"
+    },
     "win": {
       "icon": "build/icon.ico",
       "executableName": "CmdToolbox",
       "target": [
         {
-          "target": "dir",
+          "target": "nsis",
           "arch": [
             "x64"
           ]
         }
       ],
-      "artifactName": "CmdToolbox.exe"
+      "artifactName": "CmdToolbox-${version}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Cmd Toolbox",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
     },
     "portable": {
-      "artifactName": "CmdToolbox.exe",
+      "artifactName": "CmdToolbox-portable-${version}.${ext}",
       "unpackDirName": "CmdToolbox"
     }
   }

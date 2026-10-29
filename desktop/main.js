@@ -11,6 +11,7 @@ const mcpConfig = require('./mcp-config');
 const git = require('./git');
 const fileApi = require('./file-api');
 const updates = require('./updates');
+const updater = require('./updater');
 const { listShells, listTools, resolveShell } = require('./shells');
 
 const APP_NAME = 'Cmd Toolbox';
@@ -31,6 +32,7 @@ if (dataDirArgument) {
 }
 
 let mainWindow = null;
+let quittingForUpdate = false;
 
 function send(...args) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -186,6 +188,10 @@ function registerIpc() {
   ipcMain.handle('updates:check', (_event, seenVersion) =>
     updates.checkForUpdate(app.getVersion(), seenVersion),
   );
+
+  ipcMain.handle('updater:download', () => updater.startDownload());
+  ipcMain.handle('updater:install', () => updater.install());
+  ipcMain.handle('updater:state', () => updater.getState());
 
   ipcMain.handle('session:load', () => sessionStore.load());
 
@@ -485,6 +491,12 @@ if (!hasLock) {
     mcpConfig.installGlobal(mcp);
     registerIpc();
     createWindow();
+    updater.init(send, () => {
+      // 装包时 Electron 会马上退出，跳过 before-quit 里 600ms 的缓冲，否则 NSIS 删不掉被占用的 exe
+      quittingForUpdate = true;
+      ptyHost.interruptCliSessions();
+      ptyHost.closeAll();
+    });
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -498,6 +510,7 @@ if (!hasLock) {
   });
 
   app.on('before-quit', (event) => {
+    if (quittingForUpdate) return;
     if (quitStarted) {
       ptyHost.closeAll();
       return;

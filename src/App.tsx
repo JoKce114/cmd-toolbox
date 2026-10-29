@@ -45,6 +45,7 @@ import type {
   SyncPrompt,
   Tab,
   UpdateCheckResult,
+  UpdaterState,
 } from './types';
 import { discardSession, startPtyBus, subscribeAllData, subscribeExit } from './ptyBus';
 import {
@@ -77,6 +78,8 @@ import type { Announcement } from './components/AnnouncementModal';
 
 const ACTIVE_GROUP_STORAGE = 'cmd-toolbox.active-group';
 const TERMINAL_THEME_STORAGE = 'cmd-toolbox.terminal-theme';
+// 主进程侧有 5 分钟缓存，这里只是决定多久回填一次红点
+const UPDATE_POLL_INTERVAL = 30 * 60 * 1000;
 
 function readTerminalTheme(): TerminalThemeMode {
   return window.localStorage.getItem(TERMINAL_THEME_STORAGE) === 'light' ? 'light' : 'dark';
@@ -536,21 +539,27 @@ export default function App() {
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
   const updateInitRef = useRef(false);
 
-  const checkForUpdate = useCallback(async () => {
+  // startup 弹公告，manual 只回填设置面板，background 只刷新红点，都不打扰用户
+  const runUpdateCheck = useCallback(async (mode: 'startup' | 'manual' | 'background') => {
     // 浏览器里打开的预览没有 preload 桥，直接跳过
-    if (!window.api?.updates) return;
+    const bridge = window.api?.updates;
+    if (!bridge) return;
     const seen = readSeenVersion();
-    setUpdateBusy(true);
+    if (mode !== 'background') setUpdateBusy(true);
     try {
-      const result = await window.api.updates.check(seen);
+      const result = await bridge.check(seen);
+      if (!result.ok) {
+        // 后台轮询失败时保留上一次结果，否则红点会莫名其妙消失
+        if (mode !== 'background') setUpdateCheck(result);
+        return;
+      }
       setUpdateCheck(result);
-      if (!result.ok) return;
       // 首次启用这个功能：只记下当前版本，不打扰用户
       if (seen === null) {
         writeSeenVersion(result.current);
         return;
       }
-      if (!result.announce) return;
+      if (mode !== 'startup' || !result.announce) return;
       setAnnouncement({
         kind: result.announce,
         version: result.announce === 'available' ? result.latest || result.current : result.current,
@@ -558,9 +567,11 @@ export default function App() {
         url: result.url,
       });
     } catch (error) {
-      setUpdateCheck({ ok: false, message: toErrorMessage(error) });
+      if (mode !== 'background') {
+        setUpdateCheck({ ok: false, message: toErrorMessage(error) });
+      }
     } finally {
-      setUpdateBusy(false);
+      if (mode !== 'background') setUpdateBusy(false);
     }
   }, []);
 
@@ -568,8 +579,55 @@ export default function App() {
     // 只自动检查一次：会话恢复完成后再请求，避免和首屏抢网络
     if (updateInitRef.current || !info) return;
     updateInitRef.current = true;
-    void checkForUpdate();
-  }, [info, checkForUpdate]);
+    void runUpdateCheck('startup');
+  }, [info, runUpdateCheck]);
+
+  useEffect(() => {
+    // 长时间开着也能发现新版本；命中主进程 5 分钟缓存，不会真的频繁打 GitHub
+    if (!info) return;
+    const timer = window.setInterval(() => {
+      void runUpdateCheck('background');
+    }, UPDATE_POLL_INTERVAL);
+    return () => window.clearInterval(timer);
+  }, [info, runUpdateCheck]);
+
+  const [updater, setUpdater] = useState<UpdaterState>({
+    phase: 'idle',
+    percent: 0,
+    version: '',
+    message: '',
+  });
+
+  useEffect(() => {
+    const bridge = window.api?.updater;
+    if (!bridge) return;
+    const unsubscribe = bridge.onEvent(setUpdater);
+    // 重挂载时补一次当前状态，否则下载进度会丢
+    void bridge.state().then(setUpdater).catch(() => {});
+    return unsubscribe;
+  }, []);
+
+  const startUpdate = useCallback(async () => {
+    const bridge = window.api?.updater;
+    if (!bridge) return;
+    try {
+      const result = await bridge.download();
+      if (!result.ok) pushToast(result.message, 'error');
+    } catch (error) {
+      pushToast(toErrorMessage(error), 'error');
+    }
+  }, [pushToast]);
+
+  const installUpdate = useCallback(async () => {
+    const bridge = window.api?.updater;
+    if (!bridge) return;
+    try {
+      const result = await bridge.install();
+      if (!result.ok) pushToast(result.message, 'error');
+    } catch (error) {
+      pushToast(toErrorMessage(error), 'error');
+    }
+  }, [pushToast]);
 
   const groups = useMemo<Group[]>(() => {
     if (!info) return [];
@@ -2463,7 +2521,10 @@ export default function App() {
           version={info.version}
           update={updateCheck}
           updateBusy={updateBusy}
-          onCheckUpdate={() => void checkForUpdate()}
+          updater={updater}
+          onCheckUpdate={() => void runUpdateCheck('manual')}
+          onStartUpdate={() => void startUpdate()}
+          onInstallUpdate={() => void installUpdate()}
           onClose={() => setSettingsOpen(false)}
           onSave={(next) => {
             writePrefs(next);
@@ -2476,6 +2537,9 @@ export default function App() {
       {announcement ? (
         <AnnouncementModal
           announcement={announcement}
+          updater={updater}
+          onStartUpdate={() => void startUpdate()}
+          onInstallUpdate={() => void installUpdate()}
           onDismiss={() => {
             writeSeenVersion(announcement.version);
             setAnnouncement(null);

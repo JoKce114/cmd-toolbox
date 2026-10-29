@@ -26,6 +26,13 @@ contextBridge.exposeInMainWorld('api', {
     check: (seenVersion) => invoke('updates:check', seenVersion),
   },
 
+  updater: {
+    download: () => invoke('updater:download'),
+    install: () => invoke('updater:install'),
+    state: () => invoke('updater:state'),
+    onEvent: (handler) => subscribe('updater:event', handler),
+  },
+
   session: {
     load: () => invoke('session:load'),
     save: (payload) => invoke('session:save', payload),

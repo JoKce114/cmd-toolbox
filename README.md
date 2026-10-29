@@ -29,12 +29,15 @@ npm run typecheck
 ## 构建
 
 ```bash
-npm run build            # tsc + vite + 编译 coninject.exe 与本地启动器
-npm run dist             # 打包到 release/win-unpacked
-npm run dist:portable    # 打包单文件便携版 release/CmdToolbox.exe
+npm run build            # tsc + vite + 编译 coninject.exe
+npm run dist             # 打包 Windows 安装包 release/CmdToolbox-<version>-setup.exe
+npm run dist:portable    # 打包便携版 release/CmdToolbox-portable-<version>.exe
+npm run dist:dir         # 只解包到 release/win-unpacked，方便排查
 ```
 
-`npm run build` 会用系统自带的 .NET Framework 编译器（`csc.exe`）编译 `native/` 下的两个 C# 辅助程序，需要 Windows 自带的 .NET Framework 4.x。
+`npm run build` 会用系统自带的 .NET Framework 编译器（`csc.exe`）编译 `native/` 下的 C# 辅助程序，需要 Windows 自带的 .NET Framework 4.x。
+
+安装包装到 `%LOCALAPPDATA%\Programs\cmd-toolbox`，不需要管理员权限。卸载不会删除 `%APPDATA%\Cmd Toolbox` 里的项目列表和会话。
 
 ## 测试
 
@@ -58,18 +61,37 @@ UI 测试会启动真实的 Electron 实例并占用固定端口 17382，运行�
 
 ## 发版
 
-1. 修改 `package.json` 的 `version`
-2. `npm run dist:portable`，产物为 `release/CmdToolbox.exe`
-3. 在 GitHub 上创建 Release，tag 使用 `v` 前缀（例如 `v1.1.0`），上传该 exe，并在说明里写更新内容
+更新说明写在仓库根目录的 `CHANGELOG.md`，按 `## [版本号] - 日期` 分节。
+`npm run dist` 会把当前版本那一节抽成 `release/更新说明-v<版本>.md`，
+直接粘到 GitHub Release 说明里即可（应用内的更新公告就是这段文字）。
 
-应用启动时会读取仓库最新的 Release 与本地版本比较：有新版本时弹一次公告，设置页里也可以手动检查更新。公告正文直接取自 Release 说明。
+1. 修改 `package.json` 的 `version`
+2. 在 `CHANGELOG.md` 顶部补上对应版本的小节
+3. `npm run dist`，产物在 `release/`：
+   - `upload/` —— **要上传的附件都在这里，打开后全选直接拖进 GitHub 的 Attach binaries**
+   - `CmdToolbox-<version>-setup.exe` 安装包
+   - `latest.yml` 自动更新的版本清单
+   - `CmdToolbox-<version>-setup.exe.blockmap` 差分更新用的校验文件
+   - `更新说明-v<version>.md` 本次更新内容，粘到 Release 说明栏
+4. 在 GitHub 上创建 Release，tag 用 `v<version>`（例如 `v1.1.0`），
+   把 `release/upload/` 里的文件全部拖到附件区，说明栏粘贴更新说明
+
+只改说明不重新打包时，运行 `npm run notes` 重新生成并整理。
+
+`latest.yml` 是自动更新的入口：漏传它，应用只能退化成「前往下载」手动安装。
+`version` 必须比线上版本高，否则装了新版也收不到更新提示。
+
+应用启动时会读取仓库最新的 Release 与本地版本比较：有新版本时弹一次公告，
+之后每 30 分钟在后台刷新设置按钮旁的红点；设置页里也可以手动检查更新。
+公告正文直接取自 Release 说明。
 
 ## 目录
 
 ```
-desktop/     Electron 主进程、preload、Git/文件/PTY 等本地能力
+CHANGELOG.md 按版本记录的更新说明，发版时抽成 Release 说明
+desktop/     Electron 主进程、preload、Git/文件/PTY/更新等本地能力
 src/         React 渲染层
-native/      终端输入注入与本地启动器的 C# 源码
+native/      终端输入注入的 C# 源码
 scripts/     构建、图标、打包辅助脚本
 tests/       自动化测试
 ```
