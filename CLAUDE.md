@@ -121,7 +121,17 @@ node tests/updates.mjs       # 版本比较、Release 解析、公告判定
 node tests/git-core.mjs      # Git 后端逻辑
 node tests/git-pull.mjs      # 拉取/推送/上游修复
 node tests/commit-diff.mjs   # 提交 patch 切分
+node tests/login-item.mjs     # 开机自启动（假 app，不碰注册表）
 ```
+
+- `tests/login-item.mjs` 用假 `app` 对象，**不会**读写真实注册表。
+  开机启动在开发模式（`app.isPackaged === false`）下永久不可用，
+  所以 UI 测试只能断言开关置灰与原因文案。
+
+### 改了 `src/` 之后先重建再跑 GUI 测试
+
+- UI 测试加载的是 `dist/index.html`，而 `dist/` 在 `.gitignore` 里。**改了 `src/` 之后必须先重建再跑测试**，否则测的是上一次构建的旧代码，表现为「测试全绿但功能没生效」或「先跑测试确认失败」这一步莫名通过。
+- 重建用 `npx tsc --noEmit && npx vite build`。**不要用 `npm run build`** —— 它还会跑 `scripts/build-coninject.ps1`，把被跟踪的 `build/coninject.exe` 改脏，混进功能提交里。
 
 ### UI 测试（Playwright 驱动真实 Electron）
 
@@ -144,7 +154,7 @@ node tests/smoke.mjs
 
 设置面板、公告弹窗的断言大量依赖中文文案。改文案前先 grep 一下 `tests/`。
 「关于」页签必须排在设置面板第一位，`tests/update-notify.mjs` 有断言。
-设置项按页签分组（关于 / 终端 / 编辑器 / 快捷键），新增设置项放进对应页签，
+设置项按页签分组（关于 / 常规 / 终端 / 编辑器 / 快捷键），新增设置项放进对应页签，
 不要恢复成单页长列表。
 
 ## 已知的坑
@@ -161,6 +171,14 @@ node tests/smoke.mjs
   下载 Electron 慢时先导出这两个变量。
 - **winCodeSign 解压失败**（`Cannot create symbolic link ... darwin\...`）：
   是 macOS 符号链接需要管理员权限。用 `7za` 解包时排除 `darwin` 目录即可。
+- **编辑器字号/行高/字体只能由主题扩展设置**：`src/editorTheme.ts` 的
+  `editorAppearanceExtension()` 负责，`src/styles.css` 不得再给 `.cm-editor`
+  写 `font-size`、给 `.cm-scroller` 写 `font-family` / `line-height`。
+  静态 CSS 优先级更高，写了会静默盖掉设置，表现为「改了没反应」且无报错。
+- **行距是 0.05 步长的浮点**：写盘和读取都要 `Math.round(v * 100) / 100`，
+  否则会存进 `1.2000000000000002` 这种值，设置里显示成一长串小数。
+- **便携版的开机启动必须用 `PORTABLE_EXECUTABLE_FILE`**，不能用
+  `process.execPath`——后者在便携版里指向解包后的临时目录，写进注册表后随即失效。
 
 ## 界面约定
 
@@ -175,6 +193,11 @@ node tests/smoke.mjs
   折叠区标题都是 `<button>`，带 `aria-expanded` 和 `.section-caret.is-open` 箭头
 - 侧栏项目行只显示项目名，完整路径放在 `title` 里。不要再加回第二行路径——
   它是左栏变拥挤的主要原因
+- 设置页签顺序固定为 **关于 / 常规 / 终端 / 编辑器 / 快捷键**，「关于」必须第一位
+  （`tests/update-notify.mjs` 有断言）。编辑器页签内部按 字体 / 显示 / 缩进 三组排列，
+  组标题是 `.settings-group-title`
+- 设置面板里凡是需要写系统状态的操作（如开机启动），一律在点「保存」时执行，
+  不能切开关就立即生效，否则「取消」会名不副实
 
 ## IPC 约定
 
