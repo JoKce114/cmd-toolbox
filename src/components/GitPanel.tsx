@@ -61,6 +61,7 @@ export type GitPanelProps = {
   onInit: () => Promise<boolean>;
   onOpenDiff: (change: GitChange) => void;
   onOpenInEditor: (change: GitChange) => void;
+  onBrowseFiles: () => void;
   onStage: (paths: string[]) => Promise<boolean>;
   onUnstage: (paths: string[]) => Promise<boolean>;
   onDiscard: (payload: { tracked: string[]; untracked: string[] }) => Promise<boolean>;
@@ -107,6 +108,7 @@ export function GitPanel({
   onInit,
   onOpenDiff,
   onOpenInEditor,
+  onBrowseFiles,
   onStage,
   onUnstage,
   onDiscard,
@@ -561,7 +563,17 @@ export function GitPanel({
           </div>
         </>
       ) : (
-        <p className="git-panel-hint">没有变更</p>
+        <p className="git-panel-hint git-no-changes">
+          没有变更
+          <button
+            type="button"
+            className="git-browse-files"
+            title="在编辑器中浏览项目文件"
+            onClick={onBrowseFiles}
+          >
+            浏览文件
+          </button>
+        </p>
       )}
 
       {stagedChanges.length > 0 ? (

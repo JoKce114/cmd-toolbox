@@ -1531,6 +1531,25 @@ p {
   color: var(--muted);
 }
 
+.git-no-changes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.git-browse-files {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.git-browse-files:hover {
+  text-decoration: underline;
+}
+
 .git-init-btn {
   margin: 0 8px 8px;
 }

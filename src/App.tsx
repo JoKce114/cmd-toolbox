@@ -2544,6 +2544,9 @@ export default function App() {
                   if (gitGroup) openDiffTab(gitGroup, change);
                 }}
                 onOpenInEditor={(change) => openEditorFile(gitGroup, change.path)}
+                onBrowseFiles={() => {
+                  if (gitGroup) createEditor(gitGroup);
+                }}
                 onStage={gitStage}
                 onUnstage={gitUnstage}
                 onDiscard={gitDiscard}
@@ -2615,6 +2618,7 @@ export default function App() {
                     onShellMenu={(event) => openShellMenu(event, activeGroup)}
                     onReveal={() => revealPath(activeGroup.path)}
                     onEditProject={() => editGroupProject(activeGroup)}
+                    onOpenEditor={() => createEditor(activeGroup)}
                   />
                 ) : null}
                 {allTabs.map((tab) => renderWorkbenchPane(tab))}

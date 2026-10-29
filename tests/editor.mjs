@@ -476,6 +476,32 @@ assert(
   '改过的文件仍留在内页签里',
 );
 
+console.log('19. 未修改的文件按 Ctrl+S 也算占住页签');
+await page.locator('.group-item').filter({ hasText: 'edit-proj' }).click({ button: 'right' });
+await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+await click(page.getByRole('menuitem', { name: '打开编辑器', exact: true }));
+await page.waitForTimeout(600);
+const freshPane = page.locator('.editor-pane:not(.is-hidden)');
+
+await click(freshPane.locator('.file-row').filter({ hasText: 'index.php' }));
+await waitFor(
+  async () => (await freshPane.locator('.editor-tab-name').count()) === 1,
+  '打开第一个文件',
+);
+// 不改内容，只按 Ctrl+S：这是「我要留着它」的信号
+await freshPane.locator('.cm-content').click();
+await page.keyboard.press('Control+S');
+await page.waitForTimeout(600);
+await click(freshPane.locator('.file-row').filter({ hasText: 'gbk.txt' }));
+await waitFor(
+  async () => (await freshPane.locator('.editor-tab-name').count()) === 2,
+  '按过 Ctrl+S 的文件没有被顶替',
+);
+assert(
+  (await freshPane.locator('.editor-tab-name').filter({ hasText: 'index.php' }).count()) === 1,
+  'index.php 仍在内页签里',
+);
+
 await app.close();
 rmSync(dataDir, { recursive: true, force: true });
 console.log(`\n全部通过：${passed} 项`);

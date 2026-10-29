@@ -149,7 +149,12 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   const save = useCallback(
     async (relPath: string) => {
       const current = filesRef.current[relPath];
-      if (!current || current.loading || current.readOnly || !current.dirty) return false;
+      if (!current || current.loading || current.readOnly) return false;
+
+      // 主动按 Ctrl+S 等于声明「这个文件我要留着」，哪怕内容没改过，
+      // 也不该在打开别的文件时被顶替。
+      touchedRef.current.add(relPath);
+      if (!current.dirty) return false;
 
       const written = current.content;
       // CodeMirror 输出 LF；原文件是 CRLF 时写回要保持原样，否则整个文件的行尾会被改写
