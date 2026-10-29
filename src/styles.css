@@ -2520,6 +2520,42 @@ p {
   overflow: hidden;
 }
 
+.tab-strip-new {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.new-editor-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid #e2e2e7;
+  border-radius: 8px;
+  background: var(--surface);
+  color: #43464d;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: var(--shadow-sm);
+}
+
+.new-editor-btn:hover:not(:disabled) {
+  background: #f6f6f8;
+}
+
+.new-editor-btn:active:not(:disabled) {
+  background: #f0f0f3;
+}
+
+.new-editor-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .new-terminal-main {
   display: flex;
   align-items: center;

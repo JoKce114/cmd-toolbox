@@ -2596,6 +2596,7 @@ export default function App() {
                   setRenameTarget({ groupKey: tab.groupKey, tabId: tab.id })
                 }
                 onNewTab={() => spawnOnSide('left')}
+                onNewEditor={() => createEditor(activeGroup)}
                 onShellMenu={(event) => openShellMenu(event, activeGroup)}
                 onReorderTabs={(fromId, toId, position) =>
                   reorderTabs(activeGroup.key, fromId, toId, position)
@@ -2644,6 +2645,7 @@ export default function App() {
                     setRenameTarget({ groupKey: tab.groupKey, tabId: tab.id })
                   }
                   onNewTab={() => spawnOnSide('left')}
+                  onNewEditor={() => createEditor(activeGroup)}
                   onShellMenu={(event) => openShellMenu(event, activeGroup)}
                   onReorderTabs={(fromId, toId, position) =>
                     reorderTabs(activeGroup.key, fromId, toId, position)
@@ -2693,6 +2695,7 @@ export default function App() {
                     setRenameTarget({ groupKey: tab.groupKey, tabId: tab.id })
                   }
                   onNewTab={() => spawnOnSide('right')}
+                  onNewEditor={() => createEditor(activeGroup)}
                   onShellMenu={(event) => openShellMenu(event, activeGroup)}
                   onReorderTabs={(fromId, toId, position) =>
                     reorderTabs(activeGroup.key, fromId, toId, position)
