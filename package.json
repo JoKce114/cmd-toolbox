@@ -1,7 +1,7 @@
 {
   "name": "cmd-toolbox",
   "productName": "Cmd Toolbox",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "本地项目终端工作台",
   "main": "desktop/main.js",
