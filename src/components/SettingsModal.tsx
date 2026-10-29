@@ -18,7 +18,13 @@ import {
   normalizeCombo,
 } from '../editorKeymap';
 import type { EditorActionId, KeyBindingMap } from '../editorKeymap';
-import type { AppPrefs } from '../prefs';
+import {
+  EDITOR_FONT_SIZE_MAX,
+  EDITOR_FONT_SIZE_MIN,
+  EDITOR_LINE_HEIGHT_MAX,
+  EDITOR_LINE_HEIGHT_MIN,
+} from '../prefs';
+import type { AppPrefs, EditorFontFamily } from '../prefs';
 import type { UpdateCheckResult, UpdaterState } from '../types';
 
 type SettingsModalProps = {
@@ -125,6 +131,21 @@ export function SettingsModal({
   const [tab, setTab] = useState<TabId>('about');
   const [terminalFontSize, setTerminalFontSize] = useState(prefs.terminalFontSize);
   const [copyOnSelect, setCopyOnSelect] = useState(prefs.copyOnSelect);
+  const [editorFontSize, setEditorFontSize] = useState(prefs.editorFontSize);
+  const [editorLineHeight, setEditorLineHeight] = useState(prefs.editorLineHeight);
+  const [editorFontFamily, setEditorFontFamily] = useState<EditorFontFamily>(
+    prefs.editorFontFamily,
+  );
+  const [editorLineNumbers, setEditorLineNumbers] = useState(prefs.editorLineNumbers);
+  const [editorHighlightActiveLine, setEditorHighlightActiveLine] = useState(
+    prefs.editorHighlightActiveLine,
+  );
+  const [editorBracketMatching, setEditorBracketMatching] = useState(
+    prefs.editorBracketMatching,
+  );
+  const [editorShowWhitespace, setEditorShowWhitespace] = useState(
+    prefs.editorShowWhitespace,
+  );
   const [editorWordWrap, setEditorWordWrap] = useState(prefs.editorWordWrap);
   const [editorTabSize, setEditorTabSize] = useState(prefs.editorTabSize);
   const [editorIndentWithSpaces, setEditorIndentWithSpaces] = useState(
@@ -319,47 +340,153 @@ export function SettingsModal({
         ) : null}
 
         {tab === 'editor' ? (
-          <section className="settings-group">
-            <div className="settings-item">
-              <div className="settings-item-text">
-                <span className="settings-item-label">自动换行</span>
-                <span className="settings-item-desc">长行超出宽度时折到下一行显示</span>
-              </div>
-              <Toggle checked={editorWordWrap} onChange={setEditorWordWrap} />
-            </div>
+          <>
+            <section className="settings-group">
+              <h4 className="settings-group-title">字体</h4>
 
-            <div className="settings-item">
-              <div className="settings-item-text">
-                <span className="settings-item-label">缩进方式</span>
-                <span className="settings-item-desc">
-                  当前为 {editorIndentWithSpaces ? `${editorTabSize} 个空格` : '制表符'}
-                </span>
+              <div className="settings-item">
+                <div className="settings-item-text">
+                  <span className="settings-item-label">字号</span>
+                  <span className="settings-item-desc">Ctrl + 滚轮也可以在编辑区直接缩放</span>
+                </div>
+                <div className="settings-slider">
+                  <input
+                    type="range"
+                    min={EDITOR_FONT_SIZE_MIN}
+                    max={EDITOR_FONT_SIZE_MAX}
+                    step={1}
+                    value={editorFontSize}
+                    onChange={(event) => setEditorFontSize(Number(event.target.value))}
+                  />
+                  <em>{editorFontSize}px</em>
+                </div>
               </div>
-              <Toggle
-                checked={editorIndentWithSpaces}
-                onChange={setEditorIndentWithSpaces}
-              />
-            </div>
 
-            <div className="settings-item">
-              <div className="settings-item-text">
-                <span className="settings-item-label">缩进宽度</span>
-                <span className="settings-item-desc">Tab 键一次缩进的空格数</span>
+              <div className="settings-item">
+                <div className="settings-item-text">
+                  <span className="settings-item-label">行距</span>
+                  <span className="settings-item-desc">
+                    行高倍数，1.0 时选区高亮可能与相邻行视觉重叠
+                  </span>
+                </div>
+                <div className="settings-slider">
+                  <input
+                    type="range"
+                    min={EDITOR_LINE_HEIGHT_MIN}
+                    max={EDITOR_LINE_HEIGHT_MAX}
+                    step={0.05}
+                    value={editorLineHeight}
+                    onChange={(event) => setEditorLineHeight(Number(event.target.value))}
+                  />
+                  <em>
+                    {editorLineHeight.toFixed(2)} · {(editorLineHeight * editorFontSize).toFixed(1)}
+                    px
+                  </em>
+                </div>
               </div>
-              <select
-                className="settings-select"
-                value={editorTabSize}
-                disabled={!editorIndentWithSpaces}
-                onChange={(event) => setEditorTabSize(Number(event.target.value))}
-              >
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((size) => (
-                  <option key={size} value={size}>
-                    {size}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </section>
+
+              <div className="settings-item">
+                <div className="settings-item-text">
+                  <span className="settings-item-label">字体系列</span>
+                  <span className="settings-item-desc">只列出 Windows 自带字体，中文回落到微软雅黑</span>
+                </div>
+                <select
+                  className="settings-select"
+                  value={editorFontFamily}
+                  onChange={(event) =>
+                    setEditorFontFamily(event.target.value as EditorFontFamily)
+                  }
+                >
+                  <option value="consolas">Consolas</option>
+                  <option value="courier">Courier New</option>
+                  <option value="lucida">Lucida Console</option>
+                </select>
+              </div>
+            </section>
+
+            <section className="settings-group">
+              <h4 className="settings-group-title">显示</h4>
+
+              <div className="settings-item">
+                <div className="settings-item-text">
+                  <span className="settings-item-label">自动换行</span>
+                  <span className="settings-item-desc">长行超出宽度时折到下一行显示</span>
+                </div>
+                <Toggle checked={editorWordWrap} onChange={setEditorWordWrap} />
+              </div>
+
+              <div className="settings-item">
+                <div className="settings-item-text">
+                  <span className="settings-item-label">显示行号</span>
+                  <span className="settings-item-desc">关闭后编辑区左侧不再占一列</span>
+                </div>
+                <Toggle checked={editorLineNumbers} onChange={setEditorLineNumbers} />
+              </div>
+
+              <div className="settings-item">
+                <div className="settings-item-text">
+                  <span className="settings-item-label">高亮当前行</span>
+                  <span className="settings-item-desc">光标所在行加浅色底</span>
+                </div>
+                <Toggle
+                  checked={editorHighlightActiveLine}
+                  onChange={setEditorHighlightActiveLine}
+                />
+              </div>
+
+              <div className="settings-item">
+                <div className="settings-item-text">
+                  <span className="settings-item-label">括号匹配</span>
+                  <span className="settings-item-desc">光标贴着括号时高亮配对的另一半</span>
+                </div>
+                <Toggle checked={editorBracketMatching} onChange={setEditorBracketMatching} />
+              </div>
+
+              <div className="settings-item">
+                <div className="settings-item-text">
+                  <span className="settings-item-label">显示空白字符</span>
+                  <span className="settings-item-desc">把空格和 Tab 显示成标记，排查缩进用</span>
+                </div>
+                <Toggle checked={editorShowWhitespace} onChange={setEditorShowWhitespace} />
+              </div>
+            </section>
+
+            <section className="settings-group">
+              <h4 className="settings-group-title">缩进</h4>
+
+              <div className="settings-item">
+                <div className="settings-item-text">
+                  <span className="settings-item-label">缩进方式</span>
+                  <span className="settings-item-desc">
+                    当前为 {editorIndentWithSpaces ? `${editorTabSize} 个空格` : '制表符'}
+                  </span>
+                </div>
+                <Toggle
+                  checked={editorIndentWithSpaces}
+                  onChange={setEditorIndentWithSpaces}
+                />
+              </div>
+
+              <div className="settings-item">
+                <div className="settings-item-text">
+                  <span className="settings-item-label">缩进宽度</span>
+                  <span className="settings-item-desc">Tab 键一次缩进的空格数</span>
+                </div>
+                <select
+                  className="settings-select"
+                  value={editorTabSize}
+                  disabled={!editorIndentWithSpaces}
+                  onChange={(event) => setEditorTabSize(Number(event.target.value))}
+                >
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </section>
+          </>
         ) : null}
 
         {tab === 'keys' ? (
@@ -434,6 +561,13 @@ export function SettingsModal({
               ...prefs,
               terminalFontSize,
               copyOnSelect,
+              editorFontSize,
+              editorLineHeight: Math.round(editorLineHeight * 100) / 100,
+              editorFontFamily,
+              editorLineNumbers,
+              editorHighlightActiveLine,
+              editorBracketMatching,
+              editorShowWhitespace,
               editorWordWrap,
               editorTabSize,
               editorIndentWithSpaces,

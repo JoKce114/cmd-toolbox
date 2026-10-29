@@ -168,5 +168,62 @@ ok(
 await aboutItem.scrollIntoViewIfNeeded();
 await page.screenshot({ path: join(shots, 'settings-about.png') });
 
+console.log('5. 编辑器页签分三组');
+// 上一节结束时设置面板还开着，先关掉再重新打开，避免遮罩挡住标题栏按钮
+if ((await page.locator('.settings-body').count()) > 0) {
+  await click(page.getByRole('button', { name: '取消', exact: true }));
+  await page.waitForTimeout(400);
+}
+await click(page.locator('.titlebar-settings'));
+await waitFor(async () => (await page.locator('.settings-body').count()) > 0, '设置面板');
+await click(page.getByRole('tab', { name: '编辑器' }));
+await page.waitForTimeout(300);
+const groupTitles = await page.locator('.settings-group-title').allInnerTexts();
+ok(
+  ['字体', '显示', '缩进'].every((title) => groupTitles.some((text) => text.includes(title))),
+  '包含字体、显示、缩进三组',
+);
+
+console.log('6. 字号与行距滑块');
+const fontItem = page.locator('.settings-item').filter({ hasText: '字号' }).first();
+await fontItem.locator('input[type="range"]').fill('20');
+await page.waitForTimeout(200);
+ok((await fontItem.locator('em').innerText()).trim() === '20px', '字号滑块显示 20px');
+
+const lineItem = page.locator('.settings-item').filter({ hasText: '行距' }).first();
+await lineItem.locator('input[type="range"]').fill('2');
+await page.waitForTimeout(200);
+const lineLabel = await lineItem.locator('em').innerText();
+ok(lineLabel.includes('2.00'), '行距显示两位小数，实际 ' + lineLabel);
+ok(lineLabel.includes('40.0px'), '括号内显示折算像素，实际 ' + lineLabel);
+
+console.log('7. 保存后编辑器外观生效');
+await click(page.getByRole('button', { name: '保存', exact: true }));
+await page.waitForTimeout(900);
+const applied = await page.evaluate(() => {
+  const editor = document.querySelector('.cm-editor');
+  const scroller = document.querySelector('.cm-scroller');
+  return editor && scroller
+    ? { fontSize: getComputedStyle(editor).fontSize, lineHeight: getComputedStyle(scroller).lineHeight }
+    : null;
+});
+ok(applied !== null, '编辑器仍在页面上');
+ok(applied.fontSize === '20px', '编辑器字号变为 20px，实际 ' + (applied && applied.fontSize));
+ok(applied.lineHeight === '40px', '编辑器行高变为 40px，实际 ' + (applied && applied.lineHeight));
+
+console.log('8. 显示开关生效');
+await click(page.locator('.titlebar-settings'));
+await waitFor(async () => (await page.locator('.settings-body').count()) > 0, '设置面板');
+await click(page.getByRole('tab', { name: '编辑器' }));
+await page.waitForTimeout(300);
+await click(page.locator('.settings-item').filter({ hasText: '显示行号' }).locator('.settings-switch'));
+await page.waitForTimeout(300);
+await click(page.getByRole('button', { name: '保存', exact: true }));
+await page.waitForTimeout(900);
+ok(
+  (await page.evaluate(() => Boolean(document.querySelector('.cm-gutters')))) === false,
+  '关闭后行号槽消失',
+);
+
 console.log(`\n全部通过：${passed} 项`);
 await app.close();
