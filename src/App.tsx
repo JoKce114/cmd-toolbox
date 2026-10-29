@@ -70,6 +70,7 @@ import {
   writePrefs,
   writeSeenVersion,
 } from './prefs';
+import { STARTUP_SETTING_ENABLED } from './features';
 import { Sidebar } from './components/Sidebar';
 import { TAB_DRAG_TYPE, TabStrip } from './components/TabStrip';
 import { EmptyState } from './components/EmptyState';
@@ -629,9 +630,11 @@ export default function App() {
     return unsubscribe;
   }, []);
 
-  // 每次打开设置都重读注册表，显示的永远是系统里的真实状态
+  // 每次打开设置都重读注册表，显示的永远是系统里的真实状态。
+  // 页签隐藏期间不必读：打包版里这会同步 spawnSync 一次 reg query，
+  // 白白拖慢每次打开设置的速度。
   useEffect(() => {
-    if (!settingsOpen) return;
+    if (!settingsOpen || !STARTUP_SETTING_ENABLED) return;
     let cancelled = false;
     // 与 updater 的写法一致：桥缺失时不能直接抛错，否则整个设置面板渲染失败
     const bridge = window.api?.loginItem;

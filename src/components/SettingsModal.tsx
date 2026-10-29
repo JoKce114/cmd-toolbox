@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { Modal } from './Modal';
+import { STARTUP_SETTING_ENABLED } from '../features';
 import {
   DEFAULT_KEYBINDINGS,
   EDITOR_ACTION_LABEL,
@@ -47,13 +48,18 @@ type SettingsModalProps = {
 
 type TabId = 'about' | 'regular' | 'terminal' | 'editor' | 'keys';
 
-const TABS: { id: TabId; label: string; icon: typeof Info }[] = [
+const ALL_TABS: { id: TabId; label: string; icon: typeof Info }[] = [
   { id: 'about', label: '关于', icon: Info },
   { id: 'regular', label: '常规', icon: Power },
   { id: 'terminal', label: '终端', icon: Terminal },
   { id: 'editor', label: '编辑器', icon: FileCode2 },
   { id: 'keys', label: '快捷键', icon: Keyboard },
 ];
+
+// 「常规」页签只放开机启动一项，真机验证通过前先不显示（见 features.ts）
+const TABS = ALL_TABS.filter(
+  (item) => item.id !== 'regular' || STARTUP_SETTING_ENABLED,
+);
 
 function Toggle({
   checked,
