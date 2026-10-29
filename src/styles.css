@@ -2097,6 +2097,14 @@ p {
   opacity: 1;
 }
 
+.git-stash-item:hover .git-row-action {
+  opacity: 1;
+}
+
+.git-row-action:focus-visible {
+  opacity: 1;
+}
+
 .git-row-action:hover {
   background: #ebebef;
   color: var(--text);
@@ -4163,18 +4171,6 @@ p {
   }
 }
 
-.modal-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.modal-label {
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
 .modal-textarea {
   width: 100%;
   padding: 8px 10px;
@@ -4188,14 +4184,7 @@ p {
   resize: vertical;
 }
 
-.modal-note {
-  margin: 4px 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
 .modal-warning {
-  margin: 4px 0;
   color: #b45309;
   font-size: 12px;
 }
