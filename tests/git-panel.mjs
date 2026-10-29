@@ -356,7 +356,7 @@ assert(
   '冲突后不再保留弹窗',
 );
 await waitFor(
-  async () => (await page.locator('.git-conflict-hint').count()) > 0,
+  async () => (await page.locator('.git-resolve-btn').count()) > 0,
   '左侧列表标出冲突文件',
 );
 
@@ -741,6 +741,33 @@ const saveAllDisabledSeen = await page.evaluate(() => {
 });
 assert(saveAllDisabledSeen === true, '收起改动进行中所有行的操作按钮同时禁用');
 assert(!existsSync(join(repo, 'stash-saving.txt')), '收起后文件已进 stash');
+
+console.log('18. 冲突行可直接进入编辑器');
+// 上一步恢复的未跟踪文件会干扰 checkout，先清干净
+rmSync(join(repo, 'stash-ui.txt'), { force: true });
+execFileSync('git', ['reset', '--hard', 'HEAD'], { cwd: repo, stdio: 'ignore' });
+execFileSync('git', ['checkout', '-b', 'conflict-a'], { cwd: repo, stdio: 'ignore' });
+writeFileSync(join(repo, 'index.php'), '<?php echo "a";\n');
+execFileSync('git', ['commit', '-am', 'a 改'], { cwd: repo, stdio: 'ignore' });
+execFileSync('git', ['checkout', 'main'], { cwd: repo, stdio: 'ignore' });
+writeFileSync(join(repo, 'index.php'), '<?php echo "b";\n');
+execFileSync('git', ['commit', '-am', 'b 改'], { cwd: repo, stdio: 'ignore' });
+try {
+  execFileSync('git', ['merge', 'conflict-a'], { cwd: repo, stdio: 'ignore' });
+} catch {
+  // 冲突时 git merge 退出码非零，属预期
+}
+await page.waitForTimeout(1200);
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-resolve-btn').count()) > 0,
+  '出现解决冲突按钮',
+);
+await click(page.locator('.git-resolve-btn').first());
+await waitFor(
+  async () => (await page.locator('.conflict-bar').count()) > 0,
+  '编辑器打开冲突文件并显示工具栏',
+);
 
 await page.screenshot({ path: join(shotDir, 'git-panel.png') });
 await app.close();

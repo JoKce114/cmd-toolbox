@@ -336,9 +336,14 @@ export function GitPanel({
         </button>
 
         {conflicted ? (
-          <span className="git-conflict-hint" title="冲突需要先在终端解决">
-            需在终端解决
-          </span>
+          <button
+            type="button"
+            className="git-resolve-btn"
+            title="在编辑器中解决冲突"
+            onClick={() => onOpenInEditor(change)}
+          >
+            解决冲突
+          </button>
         ) : staged ? (
           <button
             type="button"
