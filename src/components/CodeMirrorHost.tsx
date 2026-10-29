@@ -326,6 +326,8 @@ export function CodeMirrorHost({
       if (!event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
       event.stopPropagation();
+      // 纯横向的 Ctrl+手势（触控板横扫）deltaY 为 0，不能当成缩小
+      if (event.deltaY === 0) return;
       onFontDeltaRef.current?.(event.deltaY < 0 ? 1 : -1);
     };
     host.addEventListener('wheel', onWheel, { capture: true, passive: false });

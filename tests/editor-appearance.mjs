@@ -113,6 +113,7 @@ const readStyle = () =>
       gutters: Boolean(document.querySelector('.cm-gutters')),
       whitespace: Boolean(document.querySelector('.cm-highlightSpace')),
       matching: Boolean(document.querySelector('.cm-matchingBracket')),
+      activeLine: document.querySelectorAll('.cm-activeLine').length,
     };
   });
 
@@ -136,13 +137,35 @@ await openEditor();
 style = await readStyle();
 ok(style.gutters === false, '行号槽消失');
 
-console.log('3. 显示空白字符');
+console.log('3. 高亮当前行开关');
+await seedPrefs({ editorHighlightActiveLine: false });
+await openEditor();
+style = await readStyle();
+ok(style.activeLine === 0, '关闭时没有当前行高亮，实际 ' + style.activeLine);
+
+await seedPrefs({ editorHighlightActiveLine: true });
+await openEditor();
+await click(page.locator('.cm-content'));
+await page.waitForTimeout(400);
+style = await readStyle();
+ok(style.activeLine >= 1, '开启时当前行有高亮，实际 ' + style.activeLine);
+
+console.log('4. 显示空白字符');
 await seedPrefs({ editorShowWhitespace: true });
 await openEditor();
 style = await readStyle();
 ok(style.whitespace === true, '空白字符标记出现');
 
-console.log('4. 括号匹配');
+console.log('5. 括号匹配开关');
+await seedPrefs({ editorBracketMatching: false });
+await openEditor();
+await click(page.locator('.cm-content'));
+await page.keyboard.press('Control+Home');
+for (let i = 0; i < 14; i += 1) await page.keyboard.press('ArrowRight');
+await page.waitForTimeout(600);
+style = await readStyle();
+ok(style.matching === false, '关闭时没有括号匹配高亮');
+
 await seedPrefs({ editorBracketMatching: true });
 await openEditor();
 await click(page.locator('.cm-content'));
@@ -152,25 +175,48 @@ await waitFor(
   async () => (await readStyle()).matching === true,
   '光标在左括号后应出现匹配高亮',
 );
-ok(true, '括号匹配高亮出现');
+ok(true, '开启时括号匹配高亮出现');
 
-console.log('5. Ctrl+滚轮调整字号且不缩放页面');
+console.log('6. Ctrl+滚轮调整字号且阻止默认行为');
 await seedPrefs({ editorFontSize: 13 });
 await openEditor();
 const before = (await readStyle()).fontSize;
-await page.locator('.cm-content').hover();
-await page.evaluate(() => {
+// 合成的 WheelEvent 不会触发 Chromium 的默认缩放，所以只能断言
+// dispatchEvent 的返回值：false 表示处理器调用了 preventDefault。
+// 这是阻止页面缩放的唯一手段，但无法证明浏览器「本来会缩放」。
+const defaultPrevented = await page.evaluate(() => {
   const target = document.querySelector('.cm-content');
-  target.dispatchEvent(
-    new WheelEvent('wheel', { deltaY: -120, ctrlKey: true, bubbles: true, cancelable: true }),
-  );
+  const event = new WheelEvent('wheel', {
+    deltaY: -120,
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  const notCancelled = target.dispatchEvent(event);
+  return !notCancelled;
 });
 await page.waitForTimeout(600);
 const after = (await readStyle()).fontSize;
 ok(before === '13px', '缩放前 13px，实际 ' + before);
 ok(after === '14px', '缩放后 14px，实际 ' + after);
-const zoom = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomFactor());
-ok(zoom === 1, '页面缩放因子仍为 1，实际 ' + zoom);
+ok(defaultPrevented === true, 'Ctrl+滚轮阻止了默认行为（页面不会缩放）');
+
+// 触控板横向手势 deltaY 为 0：同样要拦下默认行为，但不能改字号
+const horizontalPrevented = await page.evaluate(() => {
+  const target = document.querySelector('.cm-content');
+  const event = new WheelEvent('wheel', {
+    deltaY: 0,
+    deltaX: 120,
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  const notCancelled = target.dispatchEvent(event);
+  return !notCancelled;
+});
+await page.waitForTimeout(400);
+ok(horizontalPrevented === true, '横向 Ctrl+滚轮同样阻止默认行为');
+ok((await readStyle()).fontSize === '14px', '横向 Ctrl+滚轮不改字号');
 
 console.log(`\n全部通过：${passed} 项`);
 await app.close();
