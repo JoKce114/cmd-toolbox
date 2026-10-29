@@ -70,12 +70,18 @@ Electron + React + TypeScript 的本地项目终端工作台，只面向 Windows
 
 ### 构建失败：`UNKNOWN: unknown error, open ...CmdToolbox.exe`
 
-**这不是代码问题，重试即可。** 本机装着 360 安全卫士（Windows Defender 实时保护是关的），
-会扫描刚落地的 188MB exe，短暂锁住文件，`electron-builder` 写 asar 完整性信息时失败。
+**这不是代码问题，重试即可。** 原因是 **Windows 搜索索引器（SearchIndexer.exe）**
+在扫描刚落地的 188MB exe 以提取元数据，短暂锁住文件，
+`electron-builder` 在 `addWinAsarIntegrity` 写 asar 完整性信息时失败。
 
-处理方式：直接重试打包，或把 `release/` 加进 360 白名单。不要为此改打包配置。
+实测确认（2026-10-29）：本机**没有装 360 / 火绒 / 金山 / 腾讯管家**，
+Windows Defender 实时保护也是关闭的（`RealTimeProtectionEnabled: False`），
+唯一相关的常驻进程是 `SearchIndexer.exe`（自动启动）。不要再去查杀软白名单。
 
-同类现象：`EPERM: operation not permitted, unlink` 也是 360 占用，等几秒重试。
+处理方式：直接重试打包。想根治可以把 `release/` 从 Windows 搜索索引里排除
+（设置 → 搜索 → 搜索索引器 → 排除该目录），不要为此改打包配置。
+
+同类现象：`EPERM: operation not permitted, unlink` 也是索引器占用，等几秒重试。
 
 ### 依赖必须放对位置
 
@@ -214,7 +220,7 @@ node tests/smoke.mjs
 - 不要把 `electron-updater` / `iconv-lite` / `node-pty` 挪进 devDependencies
 - 不要打开 `npmRebuild`
 - 不要在 `dist` 脚本里去掉 `--publish never`（防止环境里有 `GH_TOKEN` 时误上传）
-- 不要为了绕过 360 的文件锁去改打包配置或加 `--no-verify` 之类的开关
+- 不要为了绕过索引器的文件锁去改打包配置或加 `--no-verify` 之类的开关
 - 不要把构建调试产物（`builder-debug.yml`）当成 Release 附件
 - **不要在提交信息里加任何 AI 署名**（`Co-Authored-By: Claude ...`、`Generated with ...`
   之类一律不加）。提交信息只写改动本身和原因。
