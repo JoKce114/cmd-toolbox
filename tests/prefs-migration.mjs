@@ -54,9 +54,11 @@ const click = async (loc) => {
 };
 
 // 写旧值 → 重新加载 → 打开设置 → （可选）切页签
+// stored 传 null 表示清掉这条记录，走 defaultPrefs() 分支
 const seedAndOpenSettings = async (stored, tabName) => {
   await page.evaluate((value) => {
-    localStorage.setItem('cmd-toolbox.prefs', JSON.stringify(value));
+    if (value === null) localStorage.removeItem('cmd-toolbox.prefs');
+    else localStorage.setItem('cmd-toolbox.prefs', JSON.stringify(value));
   }, stored);
   await page.reload();
   await page.locator('.app').waitFor({ timeout: 30000 });
@@ -117,6 +119,8 @@ await seedAndOpenSettings(
     editorFontFamily: 'bogus',
     editorLineNumbers: false,
     editorShowWhitespace: true,
+    editorHighlightActiveLine: false,
+    editorBracketMatching: false,
   },
   '编辑器',
 );
@@ -125,6 +129,11 @@ ok(explicit.editorLineHeight === 1.2, '行高 1.2000000000000002 舍入为 1.2�
 ok(explicit.editorFontFamily === 'consolas', '非法字体族兜底为 consolas，实际 ' + explicit.editorFontFamily);
 ok(explicit.editorLineNumbers === false, 'editorLineNumbers 显式 false 保持 false');
 ok(explicit.editorShowWhitespace === true, 'editorShowWhitespace 显式 true 保持 true');
+ok(
+  explicit.editorHighlightActiveLine === false,
+  'editorHighlightActiveLine 显式 false 保持 false',
+);
+ok(explicit.editorBracketMatching === false, 'editorBracketMatching 显式 false 保持 false');
 
 console.log('5. 未存过的字段使用默认值');
 await seedAndOpenSettings({}, '编辑器');
@@ -133,8 +142,38 @@ ok(defaults.editorLineHeight === 1.5, '行高默认 1.5，实际 ' + defaults.ed
 ok(defaults.editorFontFamily === 'consolas', '字体族默认 consolas');
 ok(defaults.editorLineNumbers === true, 'editorLineNumbers 默认 true');
 ok(defaults.editorShowWhitespace === false, 'editorShowWhitespace 默认 false');
+ok(
+  defaults.editorHighlightActiveLine === true,
+  'editorHighlightActiveLine 默认 true，实际 ' + defaults.editorHighlightActiveLine,
+);
+ok(
+  defaults.editorBracketMatching === true,
+  'editorBracketMatching 默认 true，实际 ' + defaults.editorBracketMatching,
+);
 ok(defaults.editorFontSize === 13, '编辑器字号默认 13');
 ok(defaults.terminalFontSize === 13, '终端字号默认 13');
+
+console.log('6. 完全没有存过 prefs 时走 defaultPrefs()');
+await seedAndOpenSettings(null, '编辑器');
+const fresh = await saveAndReadPrefs();
+ok(fresh.terminalFontSize === 13, 'defaultPrefs 终端字号 13');
+ok(fresh.editorFontSize === 13, 'defaultPrefs 编辑器字号 13');
+ok(fresh.editorLineHeight === 1.5, 'defaultPrefs 行高 1.5');
+ok(fresh.editorFontFamily === 'consolas', 'defaultPrefs 字体族 consolas');
+ok(fresh.copyOnSelect === true, 'defaultPrefs 选中即复制 true');
+ok(fresh.editorWordWrap === true, 'defaultPrefs 自动换行 true');
+ok(fresh.editorLineNumbers === true, 'defaultPrefs 行号 true');
+ok(
+  fresh.editorHighlightActiveLine === true,
+  'defaultPrefs 高亮当前行 true，实际 ' + fresh.editorHighlightActiveLine,
+);
+ok(
+  fresh.editorBracketMatching === true,
+  'defaultPrefs 括号匹配 true，实际 ' + fresh.editorBracketMatching,
+);
+ok(fresh.editorShowWhitespace === false, 'defaultPrefs 显示空白字符 false');
+ok(fresh.editorTabSize === 4, 'defaultPrefs 缩进宽度 4');
+ok(fresh.editorIndentWithSpaces === false, 'defaultPrefs 用制表符');
 
 console.log(`\n全部通过：${passed} 项`);
 await app.close();
