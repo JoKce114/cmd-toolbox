@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -395,6 +396,42 @@ assert(detachedError === '当前处于游离 HEAD 状态，无法撤销提交', 
 const detachedStatus = await git.status(detachedRepo);
 assert(detachedStatus.ok === true, '拒绝后仓库仍然可用');
 assert((await git.headCommit(detachedRepo)) !== null, '拒绝后 HEAD 未被删除');
+
+console.log('21b. 浅克隆下撤销提交');
+// depth 1 的克隆里 HEAD~1 不存在，但不能误判成「首个提交」而删掉分支引用
+const shallowSource = makeRepo();
+writeFileSync(join(shallowSource, 'a.txt'), 'a\n');
+await git.stageAll(shallowSource);
+await git.commit(shallowSource, '源仓库第一次');
+writeFileSync(join(shallowSource, 'b.txt'), 'b\n');
+await git.stageAll(shallowSource);
+await git.commit(shallowSource, '源仓库第二次');
+const shallowDir = join(mkdtempSync(join(tmpdir(), 'cmdtb-shallow-')), 'clone');
+execFileSync(
+  'git',
+  ['clone', '--depth', '1', pathToFileURL(shallowSource).href, shallowDir],
+  { stdio: 'ignore' },
+);
+let shallowError = '';
+try {
+  await git.undoCommit(shallowDir);
+} catch (error) {
+  shallowError = error.message;
+}
+assert(
+  shallowError === '浅克隆仓库无法判断首个提交历史，未执行撤销',
+  '浅克隆仓库拒绝撤销提交',
+);
+const shallowBranch = execFileSync('git', ['branch', '--show-current'], {
+  cwd: shallowDir,
+  encoding: 'utf8',
+}).trim();
+assert(shallowBranch === 'main', '拒绝后分支引用仍在');
+const shallowHead = execFileSync('git', ['rev-parse', '--verify', 'HEAD'], {
+  cwd: shallowDir,
+  encoding: 'utf8',
+}).trim();
+assert(/^[0-9a-f]{40}$/.test(shallowHead), '拒绝后 HEAD 仍然存在');
 
 console.log('22. 提交历史');
 const logRepo = makeRepo();

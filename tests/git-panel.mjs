@@ -593,6 +593,20 @@ assert(
   '改动回到暂存区',
 );
 
+console.log('15b. 撤销后修改提交读取真实 HEAD');
+// 撤销后 head 缓存可能仍是刚被撤销的提交，弹窗必须重新拉取真实 HEAD 做预填
+await click(page.locator('.git-ops-button[data-action="amend"]'));
+await page.locator('#amend-message').waitFor({ timeout: 8000 });
+const freshAmendValue = await page.locator('#amend-message').inputValue();
+const realHeadMessage = execFileSync('git', ['log', '-1', '--pretty=%B'], {
+  cwd: repo,
+  encoding: 'utf8',
+}).trim();
+assert(freshAmendValue !== '历史多文件', '修改提交没有复用刚撤销的提交信息');
+assert(freshAmendValue === realHeadMessage, '修改提交预填真实 HEAD 信息');
+await click(page.getByRole('button', { name: '取消', exact: true }));
+await page.locator('#amend-message').waitFor({ state: 'detached', timeout: 8000 });
+
 console.log('16. 修改提交');
 // 先重新提交，让 HEAD 恢复存在
 await click(page.getByRole('button', { name: '提交', exact: true }));

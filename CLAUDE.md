@@ -120,6 +120,7 @@ Electron + React + TypeScript 的本地项目终端工作台，只面向 Windows
 node tests/updates.mjs       # 版本比较、Release 解析、公告判定
 node tests/git-core.mjs      # Git 后端逻辑
 node tests/git-pull.mjs      # 拉取/推送/上游修复
+node tests/commit-diff.mjs   # 提交 patch 切分
 ```
 
 ### UI 测试（Playwright 驱动真实 Electron）
@@ -170,7 +171,7 @@ node tests/smoke.mjs
 - 弹窗统一用 `src/components/Modal.tsx`。注意设置面板本身也是 `.modal-card`，
   Playwright 里定位公告弹窗要加 `.announcement-actions` 过滤
 - 侧栏折叠区统一用 `src/useCollapsedSection.ts`，状态存
-  `cmd-toolbox.sidebar.collapsed.<id>`（`projects` / `git` / `git-history`）。
+  `cmd-toolbox.sidebar.collapsed.<id>`（`projects` / `git` / `git-history` / `git-stash`）。
   折叠区标题都是 `<button>`，带 `aria-expanded` 和 `.section-caret.is-open` 箭头
 - 侧栏项目行只显示项目名，完整路径放在 `title` 里。不要再加回第二行路径——
   它是左栏变拥挤的主要原因

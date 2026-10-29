@@ -711,6 +711,12 @@ export default function App() {
 
   const [headCommit, setHeadCommit] = useState<HeadCommit | null>(null);
 
+  // 切项目时先清空，避免新项目的面板在 head 刷新前沿用上一个项目的提交信息
+  const gitGroupKey = gitGroup?.key ?? null;
+  useEffect(() => {
+    setHeadCommit(null);
+  }, [gitGroupKey]);
+
   useEffect(() => {
     const group = gitGroupRef.current;
     if (!group) {
@@ -821,6 +827,22 @@ export default function App() {
     },
     [pushToast, refreshGit],
   );
+
+  // 撤销 / 修改提交打开弹窗前强制拉一次真实 HEAD，不用可能滞后的缓存
+  const gitRefreshHead = useCallback(async (): Promise<HeadCommit | null> => {
+    const group = gitGroupRef.current;
+    if (!group) return null;
+    try {
+      const fresh = await window.api.git.headCommit(group.path);
+      setHeadCommit(fresh);
+      if (!fresh) pushToast('还没有提交可以操作', 'error');
+      return fresh;
+    } catch (error) {
+      setHeadCommit(null);
+      pushToast(toErrorMessage(error), 'error');
+      return null;
+    }
+  }, [pushToast]);
 
   const gitStashSave = useCallback(async () => {
     const group = gitGroupRef.current;
@@ -1113,7 +1135,7 @@ export default function App() {
       try {
         const result = await window.api.git.merge(group.path, branch);
         if (result.conflicted.length > 0) {
-          pushToast(`合并 ${branch} 时发生冲突，请到终端处理`, 'error');
+          pushToast(`合并 ${branch} 时发生冲突，请在更改列表中解决冲突`, 'error');
         } else {
           pushToast(`已合并 ${branch}`, 'success');
         }
@@ -1136,7 +1158,7 @@ export default function App() {
         const result = await window.api.git.mergeInto(group.path, source, target);
         if (result.conflicted.length > 0) {
           pushToast(
-            `合并 ${source} 到 ${target} 时发生冲突，请到终端处理`,
+            `合并 ${source} 到 ${target} 时发生冲突，请在更改列表中解决冲突`,
             'error',
           );
         } else if (result.returnedTo) {
@@ -2505,6 +2527,7 @@ export default function App() {
                   if (gitGroup) openCommitDiffTab(gitGroup, commit);
                 }}
                 head={headCommit}
+                onRefreshHead={gitRefreshHead}
                 onUndoCommit={gitUndoCommit}
                 onAmend={gitAmend}
                 onStashSave={gitStashSave}

@@ -72,6 +72,7 @@ export type GitPanelProps = {
     subject: string;
   }) => void;
   head: HeadCommit | null;
+  onRefreshHead: () => Promise<HeadCommit | null>;
   onUndoCommit: () => Promise<string | null>;
   onAmend: (message: string) => Promise<boolean>;
   onStashSave: () => Promise<boolean>;
@@ -111,6 +112,7 @@ export function GitPanel({
   commits,
   onOpenCommit,
   head,
+  onRefreshHead,
   onUndoCommit,
   onAmend,
   onStashSave,
@@ -141,10 +143,11 @@ export function GitPanel({
     true,
   );
   const [confirmDropStash, setConfirmDropStash] = useState<string | null>(null);
-  const [confirmUndo, setConfirmUndo] = useState(false);
+  const [confirmUndo, setConfirmUndo] = useState<HeadCommit | null>(null);
   const [undoBusy, setUndoBusy] = useState(false);
-  const [amendOpen, setAmendOpen] = useState(false);
+  const [amendHead, setAmendHead] = useState<HeadCommit | null>(null);
   const [amendBusy, setAmendBusy] = useState(false);
+  const [headBusy, setHeadBusy] = useState(false);
   const [stashSaving, setStashSaving] = useState(false);
 
   const runPathAction = async (key: string, action: () => Promise<boolean>) => {
@@ -173,7 +176,7 @@ export function GitPanel({
   const messageFilled = message.trim().length > 0;
 
   const changes = status?.ok ? status.changes : [];
-  // 冲突项没有可用的暂存/取消暂存语义，只能到终端解决
+  // 冲突项没有可用的暂存/取消暂存语义，只能点「解决冲突」进编辑器处理
   const stagedChanges = changes.filter(
     (change) => change.indexStatus !== null && change.indexStatus !== 'conflicted',
   );
@@ -507,8 +510,16 @@ export function GitPanel({
             className="btn btn-secondary btn-sm git-ops-button"
             data-action="undo"
             title="撤销最后一次提交，改动回到暂存区"
-            disabled={!head || undoBusy || busy}
-            onClick={() => setConfirmUndo(true)}
+            disabled={!head || undoBusy || headBusy || busy}
+            onClick={async () => {
+              setHeadBusy(true);
+              try {
+                const fresh = await onRefreshHead();
+                if (fresh) setConfirmUndo(fresh);
+              } finally {
+                setHeadBusy(false);
+              }
+            }}
           >
             <RotateCcw size={13} />
             {undoBusy ? '撤销中…' : '撤销提交'}
@@ -518,8 +529,16 @@ export function GitPanel({
             className="btn btn-secondary btn-sm git-ops-button"
             data-action="amend"
             title="修改最后一次提交的信息"
-            disabled={!head || amendBusy || busy}
-            onClick={() => setAmendOpen(true)}
+            disabled={!head || amendBusy || headBusy || busy}
+            onClick={async () => {
+              setHeadBusy(true);
+              try {
+                const fresh = await onRefreshHead();
+                if (fresh) setAmendHead(fresh);
+              } finally {
+                setHeadBusy(false);
+              }
+            }}
           >
             <Pencil size={13} />
             修改提交
@@ -602,7 +621,7 @@ export function GitPanel({
             <button
               type="button"
               className="git-group-action"
-              title={hasConflicts ? '请先在终端解决冲突' : '全部放弃'}
+              title={hasConflicts ? '有冲突需要先解决' : '全部放弃'}
               disabled={groupBusy || hasConflicts}
               onClick={() => setConfirmDiscard({ kind: 'all' })}
             >
@@ -611,7 +630,7 @@ export function GitPanel({
             <button
               type="button"
               className="git-group-action"
-              title={hasConflicts ? '请先在终端解决冲突' : '全部暂存'}
+              title={hasConflicts ? '有冲突需要先解决' : '全部暂存'}
               disabled={groupBusy || hasConflicts}
               onClick={() => void runGroupAction(() => onStageAll())}
             >
@@ -701,16 +720,16 @@ export function GitPanel({
           message={
             <>
               <p>撤销最后一次提交？改动会回到暂存区。</p>
-              {head?.pushed ? (
+              {confirmUndo.pushed ? (
                 <p className="confirm-note">
                   这个提交已经推送过，撤销后需要强推才能同步远端。
                 </p>
               ) : null}
             </>
           }
-          onClose={() => setConfirmUndo(false)}
+          onClose={() => setConfirmUndo(null)}
           onConfirm={async () => {
-            setConfirmUndo(false);
+            setConfirmUndo(null);
             setUndoBusy(true);
             try {
               const restored = await onUndoCommit();
@@ -725,18 +744,18 @@ export function GitPanel({
         />
       ) : null}
 
-      {amendOpen && head ? (
+      {amendHead ? (
         <AmendModal
-          current={head.message}
+          current={amendHead.message}
           stagedCount={status.stagedCount}
-          pushed={head.pushed}
+          pushed={amendHead.pushed}
           busy={amendBusy}
-          onClose={() => setAmendOpen(false)}
+          onClose={() => setAmendHead(null)}
           onConfirm={async (next) => {
             setAmendBusy(true);
             try {
               if (await onAmend(next)) {
-                setAmendOpen(false);
+                setAmendHead(null);
                 setPhase('idle');
                 setMessage(next);
                 setCommittedMessage('');

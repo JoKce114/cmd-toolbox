@@ -760,6 +760,11 @@ async function undoCommit(projectPath) {
   // .git/HEAD 文件本身，直接损坏仓库，因此先拒绝。
   const parent = await runGit(projectPath, ['rev-parse', '--verify', '--quiet', 'HEAD~1']);
   if (!parent.ok) {
+    // 浅克隆的边界提交同样取不到 HEAD~1，不能当成「首次提交」去删分支引用
+    const shallow = await runGit(projectPath, ['rev-parse', '--is-shallow-repository']);
+    if (shallow.ok && shallow.stdout.trim() === 'true') {
+      throw new Error('浅克隆仓库无法判断首个提交历史，未执行撤销');
+    }
     const symbolic = await runGit(projectPath, ['symbolic-ref', '-q', 'HEAD']);
     if (!symbolic.ok) throw new Error('当前处于游离 HEAD 状态，无法撤销提交');
   }
