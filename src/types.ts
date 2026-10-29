@@ -139,6 +139,12 @@ export type SyncPrompt = {
 
 export type UpdateAnnounce = 'available' | 'updated' | null;
 
+export type ReleaseNote = {
+  version: string;
+  url: string;
+  notes: string;
+};
+
 export type UpdateCheckResult =
   | {
       ok: true;
@@ -147,6 +153,7 @@ export type UpdateCheckResult =
       hasUpdate: boolean;
       url: string;
       notes: string;
+      releases: ReleaseNote[];
       announce: UpdateAnnounce;
     }
   | { ok: false; message: string };

@@ -24,7 +24,8 @@ const waitFor = async (fn, message, timeout = 20000) => {
   }
 };
 
-// 假 GitHub Release 接口：应用侧走的是和线上完全一样的解析与公告判定
+// 假 GitHub Release 接口：应用侧走的是和线上完全一样的解析与公告判定。
+// 真实接口 /releases 返回数组，已按发布时间倒序。
 const release = {
   tag_name: 'v9.9.0',
   html_url: 'https://github.com/JoKce114/cmd-toolbox/releases/tag/v9.9.0',
@@ -34,10 +35,10 @@ let hits = 0;
 const server = createServer((req, res) => {
   hits += 1;
   res.writeHead(200, { 'content-type': 'application/json' });
-  res.end(JSON.stringify(release));
+  res.end(JSON.stringify([release]));
 });
 await new Promise((done) => server.listen(0, '127.0.0.1', done));
-const apiUrl = `http://127.0.0.1:${server.address().port}/releases/latest`;
+const apiUrl = `http://127.0.0.1:${server.address().port}/releases`;
 
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -84,6 +85,24 @@ ok(
 await modal.waitFor({ timeout: 20000 });
 ok((await modal.innerText()).includes('发现新版本'), '启动时弹出了更新公告');
 ok((await modal.innerText()).includes('v9.9.0'), '公告标题带版本号');
+ok(
+  (await modal.locator('.announcement-release-version').allInnerTexts()).includes('v9.9.0'),
+  '公告正文按版本分块列出',
+);
+ok(
+  (await modal.locator('.announcement-release-link').count()) === 1,
+  '每个版本带 GitHub 链接',
+);
+ok(
+  (await modal.locator('.announcement-body').innerText()).includes('第一项改动'),
+  '显示该版本自己的更新说明',
+);
+ok(
+  (await modal
+    .locator('.announcement-body')
+    .evaluate((el) => getComputedStyle(el).overflowY)) === 'auto',
+  '版本列表区域可滚动',
+);
 await page.screenshot({ path: join(shots, 'update-announce.png') });
 
 console.log('2. 关闭公告后红点保留');

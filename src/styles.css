@@ -3932,7 +3932,8 @@ p {
 /* ---------- 更新公告 ---------- */
 
 .modal-card > .announcement-body {
-  max-height: 320px;
+  /* 跳版本时可能列出十几个版本，用视口高度兜底，别把底部按钮挤出去 */
+  max-height: min(320px, 50vh);
   overflow-y: auto;
   margin: 0;
   padding: 12px 20px;
@@ -3944,6 +3945,48 @@ p {
 }
 
 .modal-card > .announcement-body.is-empty {
+  color: var(--faint);
+}
+
+.announcement-release + .announcement-release {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.announcement-release-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.announcement-release-version {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.announcement-release-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.announcement-release-link:hover {
+  text-decoration: underline;
+}
+
+.announcement-release-notes {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.announcement-release-notes.is-empty {
   color: var(--faint);
 }
 

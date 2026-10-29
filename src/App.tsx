@@ -573,7 +573,7 @@ export default function App() {
       setAnnouncement({
         kind: result.announce,
         version: result.announce === 'available' ? result.latest || result.current : result.current,
-        notes: result.notes,
+        releases: result.releases,
         url: result.url,
       });
     } catch (error) {

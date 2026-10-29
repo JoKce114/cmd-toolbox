@@ -1,11 +1,11 @@
 import { Download, RefreshCw, RotateCcw, Sparkles } from 'lucide-react';
 import { Modal } from './Modal';
-import type { UpdaterState } from '../types';
+import type { ReleaseNote, UpdaterState } from '../types';
 
 export type Announcement = {
   kind: 'available' | 'updated';
   version: string;
-  notes: string;
+  releases: ReleaseNote[];
   url: string;
 };
 
@@ -27,17 +27,49 @@ export function AnnouncementModal({
   const available = announcement.kind === 'available';
   const phase = updater?.phase || 'idle';
   const canAutoUpdate = Boolean(onStartUpdate) && phase !== 'unsupported';
+  const count = announcement.releases.length;
 
   return (
     <Modal
       title={available ? `发现新版本 ${announcement.version}` : `已更新到 ${announcement.version}`}
-      subtitle={available ? '可以直接在应用内更新，也可以去 GitHub 手动下载' : '以下是本次更新的内容'}
+      subtitle={
+        available
+          ? count > 1
+            ? `共 ${count} 个版本的更新，可以直接在应用内更新`
+            : '可以直接在应用内更新，也可以去 GitHub 手动下载'
+          : count > 1
+            ? `本次跨过了 ${count} 个版本`
+            : '以下是本次更新的内容'
+      }
       icon={available ? <Download size={17} /> : <Sparkles size={17} />}
       width={520}
       onClose={onDismiss}
     >
-      {announcement.notes ? (
-        <p className="announcement-body">{announcement.notes}</p>
+      {count > 0 ? (
+        <div className="announcement-body">
+          {announcement.releases.map((release) => (
+            <section className="announcement-release" key={release.version}>
+              <div className="announcement-release-head">
+                <span className="announcement-release-version">{release.version}</span>
+                <button
+                  type="button"
+                  className="announcement-release-link"
+                  title={`在浏览器查看 ${release.version} 的 Release`}
+                  onClick={() => {
+                    void window.api.shell.openExternal(release.url);
+                  }}
+                >
+                  GitHub
+                </button>
+              </div>
+              {release.notes ? (
+                <p className="announcement-release-notes">{release.notes}</p>
+              ) : (
+                <p className="announcement-release-notes is-empty">这个版本没有填写更新说明。</p>
+              )}
+            </section>
+          ))}
+        </div>
       ) : (
         <p className="announcement-body is-empty">这个版本没有填写更新说明。</p>
       )}
