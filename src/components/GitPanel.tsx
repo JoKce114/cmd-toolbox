@@ -274,16 +274,33 @@ export function GitPanel({
         />
         <span className="git-panel-title">源代码管理</span>
       </button>
-      <button
-        type="button"
-        className="git-icon-btn"
-        title="刷新"
-        aria-label="刷新 Git 状态"
-        disabled={refreshing}
-        onClick={onRefresh}
-      >
-        <RefreshCw size={13} className={refreshing ? 'is-spinning' : undefined} />
-      </button>
+      <div className="git-panel-head-actions">
+        <button
+          type="button"
+          className="git-icon-btn"
+          title="刷新"
+          aria-label="刷新 Git 状态"
+          disabled={refreshing}
+          onClick={onRefresh}
+        >
+          <RefreshCw size={13} className={refreshing ? 'is-spinning' : undefined} />
+        </button>
+        <button
+          type="button"
+          className="git-ops-more"
+          aria-label="更多提交操作"
+          aria-haspopup="menu"
+          aria-expanded={opsMenu !== null}
+          title={head ? '更多提交操作' : '还没有提交可以操作'}
+          disabled={!head}
+          onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            setOpsMenu({ x: rect.right - 176, y: rect.bottom + 6 });
+          }}
+        >
+          <MoreHorizontal size={13} />
+        </button>
+      </div>
     </header>
   );
 
@@ -501,41 +518,6 @@ export function GitPanel({
       ) : null}
 
       <div className={cn('git-panel-body', panelCollapsed && 'is-hidden')}>
-        <div className="git-ops-row">
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm git-ops-button git-ops-stash"
-            data-action="stash"
-            title={head ? '把全部未提交改动收进 stash' : '还没有提交，无法收起改动'}
-            disabled={!status.hasChanges || !head || stashSaving || stashBusy !== null}
-            onClick={async () => {
-              setStashSaving(true);
-              try {
-                if (await onStashSave()) setStashCollapsed(false);
-              } finally {
-                setStashSaving(false);
-              }
-            }}
-          >
-            <Archive size={13} />
-            {stashSaving ? '收起中…' : '收起改动'}
-          </button>
-          <button
-            type="button"
-            className="git-ops-more"
-            aria-label="更多提交操作"
-            aria-haspopup="menu"
-            aria-expanded={opsMenu !== null}
-            title={head ? '更多提交操作' : '还没有提交可以操作'}
-            disabled={!head}
-            onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              setOpsMenu({ x: rect.right - 176, y: rect.bottom + 6 });
-            }}
-          >
-            <MoreHorizontal size={15} />
-          </button>
-        </div>
       {status.hasChanges || phase === 'committed' ? (
         <>
           <textarea
@@ -693,6 +675,23 @@ export function GitPanel({
             x: opsMenu.x,
             y: opsMenu.y,
             items: [
+              {
+                type: 'item',
+                id: 'git-stash-save',
+                label: stashSaving ? '收起中…' : '收起改动',
+                icon: <Archive size={14} />,
+                title: head ? '把全部未提交改动收进 stash' : '还没有提交，无法收起改动',
+                disabled: !status.hasChanges || !head || stashSaving || stashBusy !== null,
+                onSelect: async () => {
+                  setStashSaving(true);
+                  try {
+                    if (await onStashSave()) setStashCollapsed(false);
+                  } finally {
+                    setStashSaving(false);
+                  }
+                },
+              },
+              { type: 'separator', id: 'git-ops-sep' },
               {
                 type: 'item',
                 id: 'git-undo-commit',

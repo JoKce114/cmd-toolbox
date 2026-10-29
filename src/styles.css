@@ -1471,6 +1471,12 @@ p {
   padding: 10px 6px 6px 8px;
 }
 
+.git-panel-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .git-panel-toggle {
   display: flex;
   align-items: center;
@@ -1969,52 +1975,30 @@ p {
   background: #f5f5f8;
 }
 
-.git-ops-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px 8px;
-}
-
-.git-ops-button {
-  gap: 4px;
-  font-size: 11.5px;
-}
-
-.git-ops-stash {
-  flex: 1;
-  justify-content: center;
-}
-
 .git-ops-more {
-  flex: 0 0 30px;
-  width: 30px;
-  height: 30px;
+  width: 23px;
+  height: 23px;
+  padding: 0;
   display: grid;
   place-items: center;
-  border: 1px solid #e2e2e7;
-  border-radius: 7px;
-  background: var(--surface);
-  color: #6b6f76;
-  box-shadow: var(--shadow-sm);
-  cursor: pointer;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
 }
 
 .git-ops-more:hover:not(:disabled) {
-  background: #f8f8fa;
-  border-color: #d6d6dd;
+  background: #ebebef;
   color: var(--text);
 }
 
 .git-ops-more[aria-expanded='true'] {
-  background: #ececf1;
-  border-color: #d6d6dd;
+  background: #e2e2e8;
   color: var(--text);
 }
 
 .git-ops-more:disabled {
-  opacity: 0.45;
-  cursor: default;
+  opacity: 0.5;
 }
 
 .git-actions {

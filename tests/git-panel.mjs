@@ -647,7 +647,7 @@ await waitFor(
   async () => (await page.locator('.git-change-row').count()) > 0,
   '出现待收起的改动',
 );
-await click(page.locator('.git-ops-button[data-action="stash"]'));
+await chooseOpsMenu('收起改动');
 await waitFor(
   async () => (await page.locator('.git-stash-item').count()) === 1,
   '出现第一条 stash 记录',
@@ -661,7 +661,7 @@ await waitFor(
   async () => (await page.locator('.git-change-row').count()) > 0,
   '再次出现待收起的改动',
 );
-await click(page.locator('.git-ops-button[data-action="stash"]'));
+await chooseOpsMenu('收起改动');
 await waitFor(
   async () => (await page.locator('.git-stash-item').count()) === 2,
   '出现第二条 stash 记录',
@@ -714,13 +714,11 @@ await waitFor(
 
 // 17b. 收起改动进行中同样禁用行操作
 // 恢复出来的两个文件还在工作区，先收成一条 stash，让行按钮渲染出来
-await page.waitForFunction(
-  () =>
-    !document.querySelector('.git-ops-button[data-action="stash"]')?.hasAttribute('disabled'),
-  null,
-  { timeout: 15000 },
+await waitFor(
+  async () => (await page.locator('.git-change-row').count()) > 0,
+  '恢复后工作区仍有改动',
 );
-await click(page.locator('.git-ops-button[data-action="stash"]'));
+await chooseOpsMenu('收起改动');
 await waitFor(
   async () => (await page.locator('.git-stash-item').count()) === 1,
   '再次出现 stash 记录',
@@ -751,7 +749,7 @@ await page.evaluate(() => {
   window.__stashSaveObserver = observer;
   check();
 });
-await click(page.locator('.git-ops-button[data-action="stash"]'));
+await chooseOpsMenu('收起改动');
 await waitFor(
   async () => (await page.locator('.git-stash-item').count()) === 2,
   '收起后出现第二条 stash',
