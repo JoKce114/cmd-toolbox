@@ -68,6 +68,22 @@ function resetCache() {
   inflight = null;
 }
 
+// 限流响应带 X-RateLimit-Reset（Unix 秒）。剩余时间太短或头缺失时退回笼统提示，
+// 免得算出「0 分钟后」这种没意义的文案。
+function rateLimitMessage(response) {
+  const raw = response.headers && response.headers.get
+    ? response.headers.get('x-ratelimit-reset')
+    : null;
+  const resetAt = Number(raw) * 1000;
+  if (!Number.isFinite(resetAt) || resetAt <= 0) {
+    return 'GitHub 接口请求过于频繁，请稍后再试';
+  }
+  const waitMinutes = Math.ceil((resetAt - Date.now()) / 60000);
+  if (waitMinutes <= 0) return 'GitHub 接口请求过于频繁，请稍后再试';
+  if (waitMinutes > 60) return 'GitHub 接口请求过于频繁，请稍后再试';
+  return `GitHub 接口请求过于频繁，约 ${waitMinutes} 分钟后自动恢复`;
+}
+
 async function fetchLatest(fetchImpl) {
   const response = await fetchImpl(API_URL, {
     headers: {
@@ -83,7 +99,7 @@ async function fetchLatest(fetchImpl) {
     return null;
   }
   if (response.status === 403 || response.status === 429) {
-    throw new Error('GitHub 接口请求过于频繁，请稍后再试');
+    throw new Error(rateLimitMessage(response));
   }
   if (!response.ok) throw new Error(`GitHub 返回 ${response.status}`);
   return response.json();

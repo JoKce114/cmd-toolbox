@@ -10,10 +10,11 @@ function assert(condition, message) {
   console.log(`  ok  ${message}`);
 }
 
-function makeFetch(payload, status = 200) {
+function makeFetch(payload, status = 200, headers = {}) {
   return async () => ({
     ok: status >= 200 && status < 300,
     status,
+    headers: { get: (name) => headers[name.toLowerCase()] ?? null },
     json: async () => payload,
   });
 }
@@ -83,6 +84,47 @@ const limited = await updates.checkForUpdate(
   makeFetch({}, 403),
 );
 assert(limited.ok === false && limited.message.includes('频繁'), '403 给出限流提示');
+
+updates.resetCache();
+const resetAt = Math.floor((Date.now() + 20 * 60 * 1000) / 1000);
+const limitedWithReset = await updates.checkForUpdate(
+  '1.0.0',
+  '1.0.0',
+  makeFetch({}, 403, { 'x-ratelimit-reset': String(resetAt) }),
+);
+assert(
+  limitedWithReset.ok === false && /\d+ 分钟后自动恢复/.test(limitedWithReset.message),
+  '403 带 X-RateLimit-Reset 时给出恢复时间',
+);
+assert(
+  limitedWithReset.message.includes('频繁') &&
+    !limitedWithReset.message.includes('请稍后再试'),
+  '能算出恢复时间时不再用笼统文案',
+);
+
+updates.resetCache();
+// 已经过了重置时间时不显示「0 分钟后」
+const pastReset = await updates.checkForUpdate(
+  '1.0.0',
+  '1.0.0',
+  makeFetch({}, 429, { 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) - 60) }),
+);
+assert(
+  pastReset.ok === false && pastReset.message.includes('请稍后再试'),
+  '重置时间已过时回退到笼统提示',
+);
+
+updates.resetCache();
+// 超过一小时按笼统提示，不给出「87 分钟后」
+const farReset = await updates.checkForUpdate(
+  '1.0.0',
+  '1.0.0',
+  makeFetch({}, 403, { 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 3 * 3600) }),
+);
+assert(
+  farReset.ok === false && farReset.message.includes('请稍后再试'),
+  '重置时间超过一小时时回退到笼统提示',
+);
 
 updates.resetCache();
 const broken = await updates.checkForUpdate('1.0.0', '1.0.0', async () => {
