@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const dataDir = mkdtempSync(join(tmpdir(), 'st-'));
 const repo = mkdtempSync(join(tmpdir(), 'str-'));
-const shots = resolve(appDir, 'shots');
+const shots = resolve(root, 'test-shots');
 mkdirSync(shots, { recursive: true });
 
 const longLine = 'const value = "' + 'x'.repeat(220) + '";\n';
@@ -29,6 +29,8 @@ const waitFor = async (fn, msg, timeout = 20000) => {
 
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
+// 测试环境不发真实的 GitHub 更新请求
+env.CMDTOOLBOX_NO_UPDATE = '1';
 const app = await electron.launch({
   executablePath: resolve(root, 'node_modules/electron/dist/electron.exe'),
   cwd: root,
@@ -69,7 +71,18 @@ console.log('1. 打开设置');
 await click(page.getByRole('button', { name: '设置', exact: true }).or(page.locator('.titlebar-settings')));
 await waitFor(async () => (await page.locator('.settings-body').count()) > 0, '设置面板');
 ok(true, '设置面板打开');
-ok((await page.locator('.settings-group').count()) === 2, '分为终端和编辑器两组');
+ok(
+  (await page.locator('.settings-group-title').allInnerTexts()).some((text) =>
+    text.includes('终端'),
+  ) &&
+    (await page.locator('.settings-group-title').allInnerTexts()).some((text) =>
+      text.includes('编辑器'),
+    ) &&
+    (await page.locator('.settings-group-title').allInnerTexts()).some((text) =>
+      text.includes('关于'),
+    ),
+  '包含终端、编辑器与关于分组',
+);
 await page.screenshot({ path: join(shots, 'settings.png') });
 
 console.log('2. 自动换行开关');
@@ -132,5 +145,25 @@ console.log('   换行关:', JSON.stringify(wrapOff));
 ok(wrapOff.scrollW > wrapOff.clientW, '关闭后长行横向溢出');
 
 await page.screenshot({ path: join(shots, 'nowrap.png') });
+
+console.log('4. 关于分组显示版本与检查更新结果');
+await click(page.locator('.titlebar-settings'));
+await waitFor(async () => (await page.locator('.settings-body').count()) > 0, '设置面板');
+const aboutItem = page.locator('.settings-item').filter({ hasText: 'Cmd Toolbox' });
+await waitFor(async () => (await aboutItem.count()) > 0, '关于行出现');
+const aboutText = await aboutItem.innerText();
+ok(/Cmd Toolbox v\d+\.\d+\.\d+/.test(aboutText), '显示版本号');
+// 测试启动时带了 CMDTOOLBOX_NO_UPDATE=1，能显示这条文案说明 IPC 往返正常
+await waitFor(
+  async () => (await aboutItem.innerText()).includes('环境变量'),
+  '启动时自动检查的结果已回填到设置里',
+);
+ok(
+  (await page.getByRole('button', { name: '检查更新', exact: true }).count()) > 0,
+  '有手动检查按钮',
+);
+await aboutItem.scrollIntoViewIfNeeded();
+await page.screenshot({ path: join(shots, 'settings-about.png') });
+
 console.log(`\n全部通过：${passed} 项`);
 await app.close();

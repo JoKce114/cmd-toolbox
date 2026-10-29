@@ -59,3 +59,24 @@ export function readPrefs(): AppPrefs {
 export function writePrefs(prefs: AppPrefs): void {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
 }
+
+// 记录用户「已经看过」的版本，决定下次启动弹不弹更新公告。
+// 单独一个 key，不放进 AppPrefs，避免设置页保存时把它一起覆盖掉。
+const SEEN_UPDATE_KEY = 'cmd-toolbox.seen-update';
+
+export function readSeenVersion(): string | null {
+  try {
+    const raw = window.localStorage.getItem(SEEN_UPDATE_KEY);
+    return raw && raw.trim() ? raw.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeSeenVersion(version: string): void {
+  try {
+    window.localStorage.setItem(SEEN_UPDATE_KEY, version);
+  } catch {
+    // 存不进去只会导致下次多弹一次公告，不值得打断调用方
+  }
+}

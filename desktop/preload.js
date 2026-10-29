@@ -22,6 +22,10 @@ function subscribe(channel, handler) {
 contextBridge.exposeInMainWorld('api', {
   getInfo: () => invoke('app:info'),
 
+  updates: {
+    check: (seenVersion) => invoke('updates:check', seenVersion),
+  },
+
   session: {
     load: () => invoke('session:load'),
     save: (payload) => invoke('session:save', payload),
@@ -58,12 +62,13 @@ contextBridge.exposeInMainWorld('api', {
   git: {
     status: (projectPath) => invoke('git:status', projectPath),
     commit: (projectPath, message) => invoke('git:commit', projectPath, message),
-    push: (projectPath) => invoke('git:push', projectPath),
+    push: (projectPath, options) => invoke('git:push', projectPath, options),
     fileDiff: (projectPath, filePath, changeStatus) =>
       invoke('git:file-diff', projectPath, filePath, changeStatus),
     log: (projectPath, limit) => invoke('git:log', projectPath, limit),
     fetch: (projectPath) => invoke('git:fetch', projectPath),
-    pull: (projectPath) => invoke('git:pull', projectPath),
+    pull: (projectPath, options) => invoke('git:pull', projectPath, options),
+    repairUpstream: (projectPath) => invoke('git:repair-upstream', projectPath),
     init: (projectPath) => invoke('git:init', projectPath),
     diff: (projectPath, filePath, changeStatus) =>
       invoke('git:diff', projectPath, filePath, changeStatus),

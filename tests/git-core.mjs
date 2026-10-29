@@ -168,14 +168,10 @@ try {
 assert(rejected, '空提交信息抛错');
 
 console.log('7. 推送无上游');
-let noUpstream = '';
-try {
-  await git.push(repo);
-} catch (error) {
-  noUpstream = error.message;
-}
-assert(noUpstream.includes('上游'), '无上游时提示中包含「上游」');
-assert(noUpstream.includes('main'), '提示中包含分支名');
+const noUpstreamResult = await git.push(repo);
+assert(noUpstreamResult.ok === false && noUpstreamResult.reason === 'no-upstream', '无上游时返回 no-upstream');
+assert(noUpstreamResult.message.includes('上游'), '提示中包含「上游」');
+assert(noUpstreamResult.message.includes('main'), '提示中包含分支名');
 
 console.log('8. diff 命令生成');
 const trackedDiff = await git.diffCommand(repo, 'index.php', 'modified');

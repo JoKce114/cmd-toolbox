@@ -30,9 +30,52 @@ async function removePath(projectPath, item) {
   await fsp.rm(target, { force: true, recursive });
 }
 
+// OpenSSH 9 之后的每次连接都会往 stderr 打「抗量子」提示，与操作结果无关；
+// 直接拼进 toast 会盖住真正的失败原因，这里按行过滤掉
+const NOISE_LINES = [
+  /post-quantum/i,
+  /store now, decrypt later/i,
+  /openssh\.com\/pq/i,
+  /^hint:/i,
+];
+
 function cleanError(error, stderr) {
-  const text = String(stderr || '').trim() || (error && error.message) || 'git 执行失败';
-  return text.split('\n').filter(Boolean).slice(-3).join('\n').slice(0, 300);
+  if (error && error.killed) return 'Git 操作超时，请检查网络或稍后重试';
+
+  const raw = String(stderr || '').trim() || (error && error.message) || '';
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const meaningful = lines.filter((line) => !NOISE_LINES.some((pattern) => pattern.test(line)));
+  const pool = meaningful.length ? meaningful : lines;
+
+  // git 的结论行在最后，且只有 fatal / error 行是用户需要看的
+  const verdict = [...pool].reverse().find((line) => /^(fatal|error)\s*:/.test(line));
+  const text = (verdict || pool.slice(-2).join(' '))
+    .replace(/^(fatal|error)\s*:\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!text || /^Command failed:/i.test(text)) {
+    return 'git 执行失败，请确认 Git 已正确安装并重试';
+  }
+  return text.slice(0, 300);
+}
+
+async function currentBranch(projectPath) {
+  const result = await runGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  return result.ok ? result.stdout.trim() : '';
+}
+
+async function upstreamOf(projectPath) {
+  const result = await runGit(projectPath, [
+    'rev-parse',
+    '--abbrev-ref',
+    '--symbolic-full-name',
+    '@{u}',
+  ]);
+  return result.ok ? result.stdout.trim() : '';
 }
 
 function runGit(cwd, args, options = {}) {
@@ -368,30 +411,31 @@ async function merge(projectPath, branch) {
   throw new Error(cleanError(result.error, result.stderr));
 }
 
-async function push(projectPath) {
-  const pre = await runGit(projectPath, [
-    'rev-parse',
-    '--abbrev-ref',
-    '--symbolic-full-name',
-    '@{u}',
-  ]);
-  const upstream = pre.ok ? pre.stdout.trim() : '';
+async function push(projectPath, options = {}) {
+  const upstream = await upstreamOf(projectPath);
   if (!upstream) {
-    const branchResult = await runGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
-    const branch = branchResult.stdout.trim() || '当前分支';
-    throw new Error(`当前分支没有上游，请先在终端执行 git push -u origin ${branch}`);
+    const branch = (await currentBranch(projectPath)) || '当前分支';
+    return {
+      ok: false,
+      reason: 'no-upstream',
+      message: `当前分支没有上游，请先在终端执行 git push -u origin ${branch}`,
+    };
   }
 
-  const result = await runGit(projectPath, ['push'], { timeout: PUSH_TIMEOUT });
-  if (!result.ok) {
-    const text = `${result.stdout}\n${result.stderr}`;
-    // 线上有新提交导致非快进拒绝，这是最常见的情况，给出可操作的引导
-    if (/non-fast-forward|fetch first|rejected/i.test(text)) {
-      throw new Error('线上分支有新的提交，请先拉取再推送');
-    }
-    throw new Error(cleanError(result.error, result.stderr));
+  const args = options.force ? ['push', '--force-with-lease'] : ['push'];
+  const result = await runGit(projectPath, args, { timeout: PUSH_TIMEOUT });
+  if (result.ok) return { ok: true, upstream };
+
+  const text = `${result.stdout}\n${result.stderr}`;
+  // 非快进是分叉场景，交给上层弹出「拉取合并 / 拉取变基 / 强制推送」的选择
+  if (/non-fast-forward|fetch first|\[rejected\]|rejected/i.test(text)) {
+    return {
+      ok: false,
+      reason: 'rejected',
+      message: '线上分支有本地没有的提交，推送被拒绝',
+    };
   }
-  return { upstream };
+  throw new Error(cleanError(result.error, result.stderr));
 }
 
 async function init(projectPath) {
@@ -411,33 +455,96 @@ async function fetchRemote(projectPath) {
   return { ok: true };
 }
 
-// 只做快进；需要合并或变基时让用户去终端，避免在面板里产生意料外的合并
-async function pull(projectPath) {
-  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+// ff：只允许快进；merge / rebase：分叉时按 VSCode 的两种拉取方式处理
+const PULL_FLAGS = {
+  ff: ['--ff-only'],
+  merge: ['--no-rebase', '--no-edit'],
+  rebase: ['--rebase'],
+};
 
-  const upstream = await runGit(projectPath, [
-    'rev-parse',
-    '--abbrev-ref',
-    '--symbolic-full-name',
-    '@{u}',
-  ]);
-  if (!upstream.ok || !upstream.stdout.trim()) {
-    const branchResult = await runGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
-    const branch = branchResult.stdout.trim() || '当前分支';
-    throw new Error(`当前分支没有上游，无法拉取。请先在终端执行 git push -u origin ${branch}`);
+async function pull(projectPath, options = {}) {
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+  const strategy = PULL_FLAGS[options.strategy] ? options.strategy : 'ff';
+  const branch = (await currentBranch(projectPath)) || '当前分支';
+
+  const upstream = await upstreamOf(projectPath);
+  if (!upstream) {
+    return {
+      ok: false,
+      reason: 'no-upstream',
+      message: `当前分支没有上游，无法拉取。请先在终端执行 git push -u origin ${branch}`,
+    };
   }
 
-  const result = await runGit(projectPath, ['pull', '--ff-only'], {
+  const result = await runGit(projectPath, ['pull', ...PULL_FLAGS[strategy]], {
     timeout: NETWORK_TIMEOUT,
   });
-  if (!result.ok) {
-    const text = `${result.stdout}\n${result.stderr}`;
-    if (/not possible to fast-forward|divergent|have diverged/i.test(text)) {
-      throw new Error('本地和线上分支已分叉，无法快进。请到终端执行 git pull 后处理');
-    }
-    throw new Error(cleanError(result.error, result.stderr));
+  if (result.ok) return { ok: true, strategy, branch, upstream };
+
+  const text = `${result.stdout}\n${result.stderr}`;
+  // .git/config 里 branch.X.merge 有重复项时 git 会拒绝任何形式的拉取
+  if (/multiple branches/i.test(text)) {
+    return {
+      ok: false,
+      reason: 'multiple-branches',
+      message: `分支「${branch}」配置了多个上游合并目标（.git/config 中 branch.${branch}.merge 重复），Git 无法判断该拉取哪个分支`,
+    };
   }
-  return { ok: true };
+
+  const conflicted = await collectConflicts(projectPath, result);
+  if (conflicted.length) {
+    // 变基冲突时仓库会停在 rebase 中间态，应用里没有 continue/abort 入口，直接放弃
+    if (strategy === 'rebase') await runGit(projectPath, ['rebase', '--abort']);
+    return {
+      ok: false,
+      reason: 'conflict',
+      conflicted,
+      message:
+        strategy === 'rebase'
+          ? '变基拉取产生冲突，已放弃本次变基。可改用合并方式拉取，或在终端手动处理'
+          : '拉取产生冲突，请在左侧列表中逐个解决',
+    };
+  }
+
+  if (strategy === 'ff' && /not possible to fast-forward|diverged|have diverged/i.test(text)) {
+    return {
+      ok: false,
+      reason: 'diverged',
+      message: '本地和线上分支已分叉，需要选择合并或变基后才能继续',
+    };
+  }
+
+  throw new Error(cleanError(result.error, result.stderr));
+}
+
+// 修复 branch.X.merge 重复项：保留指向本地分支的那条，其余删除
+async function repairUpstream(projectPath) {
+  if (!isDirectory(projectPath)) throw new Error('项目目录不存在');
+  const branch = await currentBranch(projectPath);
+  if (!branch) throw new Error('当前不在任何分支上，无法修复上游配置');
+
+  const merge = await runGit(projectPath, ['config', '--get-all', `branch.${branch}.merge`]);
+  const entries = merge.ok
+    ? merge.stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+    : [];
+  if (entries.length <= 1) return { ok: true, branch, changed: false };
+
+  const preferred = entries.find((entry) => entry === `refs/heads/${branch}`) || entries[0];
+  await runGit(projectPath, ['config', '--unset-all', `branch.${branch}.merge`]);
+  const added = await runGit(projectPath, ['config', '--add', `branch.${branch}.merge`, preferred]);
+  if (!added.ok) throw new Error(cleanError(added.error, added.stderr));
+
+  const remote = await runGit(projectPath, ['config', '--get', `branch.${branch}.remote`]);
+  if (!remote.ok || !remote.stdout.trim()) {
+    const remotes = await runGit(projectPath, ['remote']);
+    const first = remotes.ok ? remotes.stdout.split(/\r?\n/)[0]?.trim() : '';
+    if (first) await runGit(projectPath, ['config', `branch.${branch}.remote`, first]);
+  }
+
+  return { ok: true, branch, changed: true, kept: preferred };
 }
 
 async function diffCommand(projectPath, filePath, changeStatus) {
@@ -606,6 +713,8 @@ module.exports = {
   push,
   fetchRemote,
   pull,
+  repairUpstream,
+  cleanError,
   init,
   diffCommand,
   fileDiff,

@@ -9,6 +9,8 @@ rmSync(dataDir, { recursive: true, force: true });
 
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
+// 测试环境不发真实的 GitHub 更新请求
+env.CMDTOOLBOX_NO_UPDATE = '1';
 
 let app;
 let passed = 0;

@@ -10,6 +10,7 @@ const paneApi = require('./pane-api');
 const mcpConfig = require('./mcp-config');
 const git = require('./git');
 const fileApi = require('./file-api');
+const updates = require('./updates');
 const { listShells, listTools, resolveShell } = require('./shells');
 
 const APP_NAME = 'Cmd Toolbox';
@@ -182,6 +183,10 @@ function registerIpc() {
     defaultShellId: listShells()[0]?.id || 'cmd',
   }));
 
+  ipcMain.handle('updates:check', (_event, seenVersion) =>
+    updates.checkForUpdate(app.getVersion(), seenVersion),
+  );
+
   ipcMain.handle('session:load', () => sessionStore.load());
 
   ipcMain.handle('session:save', (_event, payload) => sessionStore.save(payload));
@@ -257,8 +262,8 @@ function registerIpc() {
     git.commit(assertProjectPath(projectPath), message),
   );
 
-  ipcMain.handle('git:push', (_event, projectPath) =>
-    git.push(assertProjectPath(projectPath)),
+  ipcMain.handle('git:push', (_event, projectPath, options) =>
+    git.push(assertProjectPath(projectPath), options),
   );
 
   ipcMain.handle('git:file-diff', (_event, projectPath, filePath, changeStatus) =>
@@ -273,8 +278,12 @@ function registerIpc() {
     git.fetchRemote(assertProjectPath(projectPath)),
   );
 
-  ipcMain.handle('git:pull', (_event, projectPath) =>
-    git.pull(assertProjectPath(projectPath)),
+  ipcMain.handle('git:pull', (_event, projectPath, options) =>
+    git.pull(assertProjectPath(projectPath), options),
+  );
+
+  ipcMain.handle('git:repair-upstream', (_event, projectPath) =>
+    git.repairUpstream(assertProjectPath(projectPath)),
   );
 
   ipcMain.handle('git:init', (_event, projectPath) =>

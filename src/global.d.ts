@@ -1,4 +1,15 @@
-import type { AppInfo, FileEntry, GitChange, GitStatus, OpenedFile, Project } from './types';
+import type {
+  AppInfo,
+  FileEntry,
+  GitChange,
+  GitPullResult,
+  GitPullStrategy,
+  GitPushResult,
+  GitStatus,
+  OpenedFile,
+  Project,
+  UpdateCheckResult,
+} from './types';
 
 export interface ProjectSaveResult {
   projects: Project[];
@@ -46,6 +57,9 @@ declare global {
   interface Window {
     api: {
       getInfo: () => Promise<AppInfo>;
+      updates: {
+        check: (seenVersion?: string | null) => Promise<UpdateCheckResult>;
+      };
       session: {
         load: () => Promise<SessionSnapshot>;
         save: (payload: SessionSnapshot) => Promise<SessionSnapshot>;
@@ -81,7 +95,7 @@ declare global {
           projectPath: string,
           message: string,
         ) => Promise<{ commit: string; summary: string }>;
-        push: (projectPath: string) => Promise<{ upstream: string }>;
+        push: (projectPath: string, options?: { force?: boolean }) => Promise<GitPushResult>;
         fileDiff: (
           projectPath: string,
           filePath: string,
@@ -94,7 +108,13 @@ declare global {
           commits: Array<{ hash: string; short: string; author: string; when: string; subject: string }>;
         }>;
         fetch: (projectPath: string) => Promise<{ ok: true }>;
-        pull: (projectPath: string) => Promise<{ ok: true }>;
+        pull: (
+          projectPath: string,
+          options?: { strategy?: GitPullStrategy },
+        ) => Promise<GitPullResult>;
+        repairUpstream: (
+          projectPath: string,
+        ) => Promise<{ ok: true; branch: string; changed: boolean }>;
         init: (projectPath: string) => Promise<{ ok: true }>;
         diff: (
           projectPath: string,

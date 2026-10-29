@@ -6,10 +6,16 @@ import type { TerminalThemeMode } from '../theme';
 type TitleBarProps = {
   themeMode: TerminalThemeMode;
   onThemeChange: (mode: TerminalThemeMode) => void;
+  updateAvailable?: boolean;
   onOpenSettings: () => void;
 };
 
-export function TitleBar({ themeMode, onThemeChange, onOpenSettings }: TitleBarProps) {
+export function TitleBar({
+  themeMode,
+  onThemeChange,
+  updateAvailable = false,
+  onOpenSettings,
+}: TitleBarProps) {
   return (
     <header className="titlebar">
       <LogoMark size={20} />
@@ -20,10 +26,11 @@ export function TitleBar({ themeMode, onThemeChange, onOpenSettings }: TitleBarP
         <button
           type="button"
           className="titlebar-settings"
-          title="设置"
+          title={updateAvailable ? '设置 · 有新版本' : '设置'}
           onClick={onOpenSettings}
         >
           <Settings size={14} />
+          {updateAvailable ? <span className="titlebar-update-dot" aria-hidden="true" /> : null}
         </button>
         <div className="theme-switch" role="group" aria-label="终端配色">
           <button

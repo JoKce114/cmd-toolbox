@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Settings, X } from 'lucide-react';
+import { Download, Settings, X } from 'lucide-react';
 import { Modal } from './Modal';
 import {
   DEFAULT_KEYBINDINGS,
@@ -9,9 +9,14 @@ import {
 } from '../editorKeymap';
 import type { EditorActionId, KeyBindingMap } from '../editorKeymap';
 import type { AppPrefs } from '../prefs';
+import type { UpdateCheckResult } from '../types';
 
 type SettingsModalProps = {
   prefs: AppPrefs;
+  version?: string;
+  update?: UpdateCheckResult | null;
+  updateBusy?: boolean;
+  onCheckUpdate?: () => void;
   onClose: () => void;
   onSave: (prefs: AppPrefs) => void;
 };
@@ -41,7 +46,8 @@ function Toggle({
 
 // 把事件转成 CodeMirror 的键位写法，例如 Ctrl-Shift-k
 function comboFromEvent(event: React.KeyboardEvent): string | null {
-  const key = event.key;
+  // Ctrl+Shift+/ 在美式键盘上 event.key 是 "?"，统一成 "/" 才能和 CodeMirror 的键位匹配
+  const key = event.code === 'Slash' || event.key === '?' ? '/' : event.key;
   if (key === 'Control' || key === 'Alt' || key === 'Shift' || key === 'Meta') return null;
   if (!event.ctrlKey && !event.altKey && !event.metaKey) return null;
 
@@ -54,7 +60,27 @@ function comboFromEvent(event: React.KeyboardEvent): string | null {
   return normalizeCombo(parts.join('-'));
 }
 
-export function SettingsModal({ prefs, onClose, onSave }: SettingsModalProps) {
+function updateStatusText(
+  update: UpdateCheckResult | null | undefined,
+  busy: boolean,
+): string {
+  if (busy) return '正在检查…';
+  if (!update) return '点击右侧按钮检查是否有新版本';
+  if (!update.ok) return update.message;
+  if (update.hasUpdate) return '有新版本可用，见下方';
+  if (!update.latest) return '还没有发布任何版本';
+  return `已是最新版本（${update.current}）`;
+}
+
+export function SettingsModal({
+  prefs,
+  version,
+  update,
+  updateBusy = false,
+  onCheckUpdate,
+  onClose,
+  onSave,
+}: SettingsModalProps) {
   const [fontSize, setFontSize] = useState(prefs.fontSize);
   const [copyOnSelect, setCopyOnSelect] = useState(prefs.copyOnSelect);
   const [editorWordWrap, setEditorWordWrap] = useState(prefs.editorWordWrap);
@@ -224,6 +250,48 @@ export function SettingsModal({ prefs, onClose, onSave }: SettingsModalProps) {
           <p className="settings-hint">
             点击右侧按键框后按下想要的组合键即可修改。保存、关闭页签等应用级快捷键不可改。
           </p>
+        </section>
+
+        <section className="settings-group">
+          <h3 className="settings-group-title">关于</h3>
+
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <span className="settings-item-label">Cmd Toolbox {version ? `v${version}` : ''}</span>
+              <span className="settings-item-desc">{updateStatusText(update, updateBusy)}</span>
+            </div>
+            {onCheckUpdate ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={updateBusy}
+                onClick={onCheckUpdate}
+              >
+                {updateBusy ? '检查中…' : '检查更新'}
+              </button>
+            ) : null}
+          </div>
+
+          {update?.ok && update.hasUpdate ? (
+            <div className="settings-item">
+              <div className="settings-item-text">
+                <span className="settings-item-label">
+                  发现新版本 {update.latest}
+                </span>
+                <span className="settings-item-desc">
+                  在浏览器打开 Release 页面，下载新的便携版覆盖即可
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => void window.api.shell.openExternal(update.url)}
+              >
+                <Download size={13} />
+                前往下载
+              </button>
+            </div>
+          ) : null}
         </section>
 
         <p className="settings-hint">Ctrl + F 在终端或浏览器里查找，Ctrl + Shift + F 在项目里搜索。</p>

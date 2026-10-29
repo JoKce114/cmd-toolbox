@@ -28,6 +28,8 @@ function assert(condition, message) {
 
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
+// 测试环境不发真实的 GitHub 更新请求
+env.CMDTOOLBOX_NO_UPDATE = '1';
 
 const app = await electron.launch({
   executablePath: resolve(root, 'node_modules/electron/dist/electron.exe'),
@@ -197,6 +199,176 @@ assert(
   '失败后仍停留在「推送」',
 );
 
+console.log('5b. 分支栏推送按钮按 ahead 常驻');
+const remote = mkdtempSync(join(tmpdir(), 'cmdtb-remote-'));
+execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: remote, stdio: 'ignore' });
+execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: repo });
+execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: repo, stdio: 'ignore' });
+
+writeFileSync(join(repo, 'pending.txt'), 'p\n');
+execFileSync('git', ['add', 'pending.txt'], { cwd: repo });
+execFileSync('git', ['commit', '-m', '待推送提交'], { cwd: repo });
+const pendingHash = execFileSync('git', ['rev-parse', 'HEAD'], {
+  cwd: repo,
+  encoding: 'utf8',
+}).trim();
+
+// 上一节停在提交后的推送态，先回到 idle 才会走分支栏入口
+await click(page.getByRole('button', { name: '继续编辑', exact: true }));
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-push-button').count()) > 0,
+  '有本地提交待推送时出现推送按钮',
+);
+
+// 复现问题 1：切换项目会重建面板，推送按钮不能因此消失
+await selectProject('plain-proj');
+await selectProject('git-proj');
+await waitFor(
+  async () => (await page.locator('.git-branch-name').innerText()) === 'main',
+  '回到 git-proj',
+);
+assert(
+  await page.locator('.git-push-button').isVisible(),
+  '切换项目后推送按钮仍在',
+);
+assert(
+  (await page.locator('.git-pull-button').count()) === 0,
+  '没有落后提交时不显示拉取按钮',
+);
+
+await click(page.locator('.git-push-button'));
+await waitFor(
+  async () =>
+    (await page.locator('.toast').allInnerTexts()).some((text) => text.includes('已推送')),
+  '分支栏推送成功',
+);
+assert(
+  execFileSync('git', ['rev-parse', 'main'], { cwd: remote, encoding: 'utf8' }).trim() ===
+    pendingHash,
+  '远端已收到该提交',
+);
+await waitFor(
+  async () => (await page.locator('.git-push-button').count()) === 0,
+  '推送完成后按钮消失',
+);
+
+console.log('5c. 推送被拒 → 取消 → 切项目 → 拉取合并 → 自动推送');
+const other = mkdtempSync(join(tmpdir(), 'cmdtb-other-'));
+execFileSync('git', ['clone', '--quiet', remote, other], { cwd: tmpdir(), stdio: 'ignore' });
+execFileSync('git', ['config', 'user.email', 'other@example.com'], { cwd: other });
+execFileSync('git', ['config', 'user.name', 'Other'], { cwd: other });
+execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: other });
+writeFileSync(join(other, 'remote-side.txt'), 'r\n');
+execFileSync('git', ['add', 'remote-side.txt'], { cwd: other });
+execFileSync('git', ['commit', '-m', '同事提交'], { cwd: other });
+execFileSync('git', ['push', '--quiet', 'origin', 'main'], { cwd: other, stdio: 'ignore' });
+
+writeFileSync(join(repo, 'local-side.txt'), 'l\n');
+execFileSync('git', ['add', 'local-side.txt'], { cwd: repo });
+execFileSync('git', ['commit', '-m', '本地提交'], { cwd: repo });
+
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () =>
+    (await page.locator('.git-push-button').count()) > 0 &&
+    (await page.locator('.git-pull-button').count()) > 0,
+  '分叉后同时出现拉取与推送按钮',
+);
+await click(page.locator('.git-push-button'));
+await page.locator('.modal-card').filter({ hasText: '推送被拒绝' }).waitFor({ timeout: 15000 });
+
+// 问题 1：取消弹窗后切换项目再返回，推送按钮必须还在
+await click(page.getByRole('button', { name: '取消', exact: true }));
+await page.locator('.modal-card').waitFor({ state: 'detached', timeout: 8000 });
+await selectProject('plain-proj');
+await selectProject('git-proj');
+await waitFor(
+  async () => (await page.locator('.git-push-button').count()) > 0,
+  '取消弹窗并切换项目后推送按钮仍在',
+);
+
+// 问题 2 + 3：选择合并拉取后自动推送
+await click(page.locator('.git-push-button'));
+await page.locator('.modal-card').filter({ hasText: '推送被拒绝' }).waitFor({ timeout: 15000 });
+await click(page.getByRole('button', { name: '拉取（合并）', exact: true }));
+await waitFor(
+  async () =>
+    (await page.locator('.toast').allInnerTexts()).some((text) => text.includes('已推送')),
+  '拉取合并后自动推送成功',
+  (20000),
+);
+await waitFor(
+  async () => (await page.locator('.modal-card').count()) === 0,
+  '成功后弹窗自动关闭',
+);
+assert(
+  execFileSync('git', ['rev-parse', 'main'], { cwd: remote, encoding: 'utf8' }).trim() ===
+    execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(),
+  '远端与本地 HEAD 一致',
+);
+const remoteLog = execFileSync('git', ['log', '--pretty=%s', 'main'], {
+  cwd: remote,
+  encoding: 'utf8',
+});
+assert(
+  remoteLog.includes('本地提交') && remoteLog.includes('同事提交'),
+  '远端包含本地与线上两条提交',
+);
+await waitFor(
+  async () =>
+    (await page.locator('.git-push-button').count()) === 0 &&
+    (await page.locator('.git-pull-button').count()) === 0,
+  '同步完成后两个按钮都消失',
+);
+
+console.log('5d. 拉取合并遇到冲突时只提示不弹窗');
+// 上一节是应用自动推送的，模拟同事需要先同步再改同一个文件
+execFileSync('git', ['pull', '--quiet', '--ff-only', 'origin', 'main'], {
+  cwd: other,
+  stdio: 'ignore',
+});
+writeFileSync(join(other, 'a.txt'), 'remote\n');
+execFileSync('git', ['add', 'a.txt'], { cwd: other });
+execFileSync('git', ['commit', '-m', '线上改 a.txt'], { cwd: other });
+execFileSync('git', ['push', '--quiet', 'origin', 'main'], { cwd: other, stdio: 'ignore' });
+
+writeFileSync(join(repo, 'a.txt'), 'local\n');
+execFileSync('git', ['add', 'a.txt'], { cwd: repo });
+execFileSync('git', ['commit', '-m', '本地改 a.txt'], { cwd: repo });
+
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-push-button').count()) > 0,
+  '冲突场景下推送按钮出现',
+);
+await click(page.locator('.git-push-button'));
+await page.locator('.modal-card').filter({ hasText: '推送被拒绝' }).waitFor({ timeout: 15000 });
+await click(page.getByRole('button', { name: '拉取（合并）', exact: true }));
+await waitFor(
+  async () =>
+    (await page.locator('.toast').allInnerTexts()).some((text) => text.includes('冲突')),
+  '冲突以 toast 提示',
+  (20000),
+);
+assert(
+  (await page.locator('.modal-card').count()) === 0,
+  '冲突后不再保留弹窗',
+);
+await waitFor(
+  async () => (await page.locator('.git-conflict-hint').count()) > 0,
+  '左侧列表标出冲突文件',
+);
+
+// 收尾：放弃这次合并，避免影响后续用例
+execFileSync('git', ['merge', '--abort'], { cwd: repo, stdio: 'ignore' });
+execFileSync('git', ['reset', '--hard', 'origin/main'], { cwd: repo, stdio: 'ignore' });
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-push-button').count()) === 0,
+  '放弃合并后回到同步状态',
+);
+
 console.log('6. 点击变更文件打开 diff 页签');
 await selectProject('plain-proj');
 writeFileSync(join(plain, 'b.txt'), 'b\n');
@@ -327,7 +499,7 @@ assert(
   (await page.locator('.branch-picker-name').first().innerText()).includes('main'),
   '当前分支在列表首位',
 );
-await click(page.getByRole('menuitem', { name: '新建分支…' }));
+await click(page.locator('.branch-picker-create').filter({ hasText: '新建分支…' }));
 await page.locator('#new-branch-name').waitFor({ timeout: 8000 });
 await page.locator('#new-branch-name').fill('feature-test');
 await page.locator('#new-branch-start').selectOption('main');
@@ -363,4 +535,6 @@ assert(
 await page.screenshot({ path: join(shotDir, 'git-panel.png') });
 await app.close();
 rmSync(dataDir, { recursive: true, force: true });
+rmSync(remote, { recursive: true, force: true });
+rmSync(other, { recursive: true, force: true });
 console.log(`\n全部通过：${passed} 项`);

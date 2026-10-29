@@ -87,6 +87,40 @@ export type GitStatus =
       unstagedCount: number;
     };
 
+export type GitPullStrategy = 'ff' | 'merge' | 'rebase';
+
+export type GitSyncFailure = {
+  ok: false;
+  reason: 'no-upstream' | 'diverged' | 'conflict' | 'rejected' | 'multiple-branches';
+  message: string;
+  conflicted?: string[];
+};
+
+export type GitPullResult =
+  | { ok: true; strategy: GitPullStrategy; branch: string; upstream: string }
+  | GitSyncFailure;
+
+export type GitPushResult = { ok: true; upstream: string } | GitSyncFailure;
+
+export type SyncPrompt = {
+  kind: 'push-rejected' | 'diverged' | 'multiple-branches';
+  message: string;
+};
+
+export type UpdateAnnounce = 'available' | 'updated' | null;
+
+export type UpdateCheckResult =
+  | {
+      ok: true;
+      current: string;
+      latest: string | null;
+      hasUpdate: boolean;
+      url: string;
+      notes: string;
+      announce: UpdateAnnounce;
+    }
+  | { ok: false; message: string };
+
 export function isBrowserTab(tab: { shellId: string }): boolean {
   return tab.shellId === 'browser';
 }

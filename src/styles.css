@@ -1778,12 +1778,20 @@ p {
   color: #d97706;
 }
 
-.git-pull-button {
+.git-sync-actions {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 4px;
   margin-left: auto;
+}
+
+.git-pull-button,
+.git-push-button {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   padding: 2px 7px;
   border: 1px solid #f0d9a8;
   border-radius: 6px;
@@ -1792,12 +1800,24 @@ p {
   font-size: 11px;
 }
 
+.git-push-button {
+  border-color: #c7d7fe;
+  background: #eef4ff;
+  color: #1d4ed8;
+}
+
 .git-pull-button:hover:not(:disabled) {
   background: #fdf0cf;
   border-color: #e6c477;
 }
 
-.git-pull-button:disabled {
+.git-push-button:hover:not(:disabled) {
+  background: #e0ebff;
+  border-color: #a5bdfb;
+}
+
+.git-pull-button:disabled,
+.git-push-button:disabled {
   opacity: 0.6;
 }
 
@@ -2815,6 +2835,7 @@ p {
 .titlebar-settings {
   width: 28px;
   height: 28px;
+  position: relative;
   display: grid;
   place-items: center;
   margin-right: 8px;
@@ -2822,6 +2843,17 @@ p {
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
+}
+
+.titlebar-update-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e5484d;
+  box-shadow: 0 0 0 2px #fff;
 }
 
 .titlebar-settings:hover {
@@ -3619,6 +3651,59 @@ p {
 
 .confirm-error {
   margin: 12px 20px 0;
+}
+
+.modal-card > .sync-message {
+  padding: 16px 20px 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #4a4d55;
+}
+
+.modal-card > .sync-hint {
+  padding: 8px 20px 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--faint);
+}
+
+.sync-actions {
+  padding: 18px 20px 20px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---------- 更新公告 ---------- */
+
+.modal-card > .announcement-body {
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 12px 20px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.modal-card > .announcement-body.is-empty {
+  color: var(--faint);
+}
+
+.announcement-actions {
+  padding: 16px 20px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.announcement-actions .btn {
+  gap: 5px;
 }
 
 /* ---------- Popup menu ---------- */

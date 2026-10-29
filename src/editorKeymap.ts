@@ -11,10 +11,11 @@ import {
   indentMore,
   moveLineDown,
   moveLineUp,
-  toggleComment,
+  toggleBlockComment,
 } from '@codemirror/commands';
 import { indentUnit } from '@codemirror/language';
 import { gotoLine, openSearchPanel } from '@codemirror/search';
+import { toggleLineComment } from './editorComment';
 
 export type EditorActionId =
   | 'indent'
@@ -25,6 +26,7 @@ export type EditorActionId =
   | 'moveLineDown'
   | 'deleteLine'
   | 'toggleComment'
+  | 'toggleBlockComment'
   | 'gotoLine';
 
 export type KeyBindingMap = Record<EditorActionId, string>;
@@ -39,6 +41,7 @@ export const DEFAULT_KEYBINDINGS: KeyBindingMap = {
   moveLineDown: 'Alt-ArrowDown',
   deleteLine: 'Ctrl-Shift-k',
   toggleComment: 'Ctrl-/',
+  toggleBlockComment: 'Ctrl-Shift-/',
   gotoLine: 'Ctrl-g',
 };
 
@@ -50,7 +53,8 @@ export const EDITOR_ACTION_LABEL: Record<EditorActionId, string> = {
   moveLineUp: '上移当前行',
   moveLineDown: '下移当前行',
   deleteLine: '删除当前行',
-  toggleComment: '切换注释',
+  toggleComment: '切换单行注释',
+  toggleBlockComment: '切换块注释',
   gotoLine: '跳转到行',
 };
 
@@ -71,7 +75,10 @@ const ACTIONS: Record<EditorActionId, (view: EditorView) => boolean> = {
   moveLineUp,
   moveLineDown,
   deleteLine,
-  toggleComment,
+  // 行注释按每行所在的语言区域切换：PHP 用 //，HTML 用 <!-- -->；
+  // 块注释用光标处的语言：PHP 是 /* */，HTML 是 <!-- -->
+  toggleComment: toggleLineComment,
+  toggleBlockComment,
   gotoLine,
 };
 

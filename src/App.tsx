@@ -33,7 +33,19 @@ import { accentFor, defaultTabTitle, GLOBAL_COLOR } from './theme';
 import type { TerminalThemeMode } from './theme';
 import { useGitStatus } from './gitStatus';
 import { GLOBAL_GROUP_KEY, isBrowserTab, isDiffTab, isEditorTab, projectGroupKey } from './types';
-import type { AppInfo, GitChange, Group, MenuEntry, MenuState, Project, Tab } from './types';
+import type {
+  AppInfo,
+  GitChange,
+  GitPullStrategy,
+  GitStatus,
+  Group,
+  MenuEntry,
+  MenuState,
+  Project,
+  SyncPrompt,
+  Tab,
+  UpdateCheckResult,
+} from './types';
 import { discardSession, startPtyBus, subscribeAllData, subscribeExit } from './ptyBus';
 import {
   classifyModelOutput,
@@ -42,7 +54,7 @@ import {
 } from './sessionStatus';
 import { TitleBar } from './components/TitleBar';
 import { SettingsModal } from './components/SettingsModal';
-import { readPrefs, writePrefs } from './prefs';
+import { readPrefs, readSeenVersion, writePrefs, writeSeenVersion } from './prefs';
 import { Sidebar } from './components/Sidebar';
 import { TAB_DRAG_TYPE, TabStrip } from './components/TabStrip';
 import { EmptyState } from './components/EmptyState';
@@ -58,7 +70,10 @@ import { ToastViewport } from './components/Toast';
 import type { ToastItem, ToastKind } from './components/Toast';
 import { LogoMark } from './components/LogoMark';
 import { GitPanel } from './components/GitPanel';
+import type { SyncChoice } from './components/SyncDialog';
 import { DiffPane } from './components/DiffPane';
+import { AnnouncementModal } from './components/AnnouncementModal';
+import type { Announcement } from './components/AnnouncementModal';
 
 const ACTIVE_GROUP_STORAGE = 'cmd-toolbox.active-group';
 const TERMINAL_THEME_STORAGE = 'cmd-toolbox.terminal-theme';
@@ -516,6 +531,46 @@ export default function App() {
     };
   }, []);
 
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [announcement, setAnnouncement] = useState<Announcement | null>(null);
+  const updateInitRef = useRef(false);
+
+  const checkForUpdate = useCallback(async () => {
+    // 浏览器里打开的预览没有 preload 桥，直接跳过
+    if (!window.api?.updates) return;
+    const seen = readSeenVersion();
+    setUpdateBusy(true);
+    try {
+      const result = await window.api.updates.check(seen);
+      setUpdateCheck(result);
+      if (!result.ok) return;
+      // 首次启用这个功能：只记下当前版本，不打扰用户
+      if (seen === null) {
+        writeSeenVersion(result.current);
+        return;
+      }
+      if (!result.announce) return;
+      setAnnouncement({
+        kind: result.announce,
+        version: result.announce === 'available' ? result.latest || result.current : result.current,
+        notes: result.notes,
+        url: result.url,
+      });
+    } catch (error) {
+      setUpdateCheck({ ok: false, message: toErrorMessage(error) });
+    } finally {
+      setUpdateBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // 只自动检查一次：会话恢复完成后再请求，避免和首屏抢网络
+    if (updateInitRef.current || !info) return;
+    updateInitRef.current = true;
+    void checkForUpdate();
+  }, [info, checkForUpdate]);
+
   const groups = useMemo<Group[]>(() => {
     if (!info) return [];
     return [
@@ -625,38 +680,118 @@ export default function App() {
     [pushToast, refreshGit],
   );
 
-  const gitPush = useCallback(async () => {
-    const group = gitGroupRef.current;
-    if (!group) return false;
-    try {
-      const result = await window.api.git.push(group.path);
-      pushToast(`已推送到 ${result.upstream}`, 'success');
-      await refreshGit();
-      return true;
-    } catch (error) {
-      pushToast(toErrorMessage(error), 'error');
-      // 推送失败后刷新，让「拉取」按钮及时出现（线上有新提交时）
-      await refreshGit();
-      return false;
-    }
-  }, [pushToast, refreshGit]);
-
+  const [syncPrompt, setSyncPrompt] = useState<SyncPrompt | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
   const [pullBusy, setPullBusy] = useState(false);
 
-  const gitPull = useCallback(async () => {
-    const group = gitGroupRef.current;
-    if (!group) return;
-    setPullBusy(true);
-    try {
-      await window.api.git.pull(group.path);
-      pushToast('已拉取到最新代码', 'success');
-      await refreshGit();
-    } catch (error) {
-      pushToast(toErrorMessage(error), 'error');
-    } finally {
-      setPullBusy(false);
-    }
-  }, [pushToast, refreshGit]);
+  // 弹窗绑定的是一次性的项目状态，切走项目后必须关掉，避免对着另一个仓库执行拉取
+  useEffect(() => {
+    setSyncPrompt(null);
+  }, [gitGroup?.key]);
+
+  const gitPush = useCallback(
+    async (options: { force?: boolean } = {}) => {
+      const group = gitGroupRef.current;
+      if (!group) return false;
+      try {
+        const result = await window.api.git.push(group.path, options);
+        if (!result.ok) {
+          pushToast(result.message, 'error');
+          // 被拒绝时给出和 VSCode 一样的三种处理方式，而不是让用户自己开终端
+          if (result.reason === 'rejected') {
+            setSyncPrompt({ kind: 'push-rejected', message: result.message });
+          }
+          await refreshGit();
+          return false;
+        }
+        pushToast(`已推送到 ${result.upstream}`, 'success');
+        await refreshGit();
+        return true;
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+        // 推送失败后刷新，让「拉取」按钮及时出现（线上有新提交时）
+        await refreshGit();
+        return false;
+      }
+    },
+    [pushToast, refreshGit],
+  );
+
+  const gitPull = useCallback(
+    async (strategy: GitPullStrategy = 'ff'): Promise<GitStatus | null> => {
+      const group = gitGroupRef.current;
+      if (!group) return null;
+      setPullBusy(true);
+      try {
+        const result = await window.api.git.pull(group.path, { strategy });
+        if (!result.ok) {
+          await refreshGit();
+          if (result.reason === 'diverged' || result.reason === 'multiple-branches') {
+            setSyncPrompt({ kind: result.reason, message: result.message });
+          } else {
+            // 冲突不再弹窗：关掉它，冲突文件由刷新后的左侧列表标出
+            setSyncPrompt(null);
+            pushToast(result.message, 'error');
+          }
+          return null;
+        }
+        pushToast('已拉取到最新代码', 'success');
+        return await refreshGit();
+      } catch (error) {
+        pushToast(toErrorMessage(error), 'error');
+        await refreshGit();
+        return null;
+      } finally {
+        setPullBusy(false);
+      }
+    },
+    [pushToast, refreshGit],
+  );
+
+  // 拉取成功后只有本地确实有提交才继续推送，避免空推和误导性的「已推送」提示
+  const pullThenPush = useCallback(
+    async (strategy: GitPullStrategy) => {
+      const next = await gitPull(strategy);
+      if (!next) return;
+      setSyncPrompt(null);
+      if (next.ok && next.ahead > 0) await gitPush();
+    },
+    [gitPull, gitPush],
+  );
+
+  const runSyncChoice = useCallback(
+    async (choice: SyncChoice) => {
+      const prompt = syncPrompt;
+      const group = gitGroupRef.current;
+      if (!prompt || !group) return;
+      setSyncBusy(true);
+      try {
+        if (choice === 'force') {
+          if (await gitPush({ force: true })) setSyncPrompt(null);
+          return;
+        }
+        if (choice === 'repair') {
+          try {
+            const fixed = await window.api.git.repairUpstream(group.path);
+            pushToast(
+              fixed.changed ? `已修复分支「${fixed.branch}」的上游配置` : '上游配置无需修复',
+              'success',
+            );
+          } catch (error) {
+            pushToast(toErrorMessage(error), 'error');
+            return;
+          }
+          await pullThenPush('ff');
+          return;
+        }
+
+        await pullThenPush(choice);
+      } finally {
+        setSyncBusy(false);
+      }
+    },
+    [gitPush, pullThenPush, pushToast, syncPrompt],
+  );
 
   const gitInit = useCallback(async () => {
     const group = gitGroupRef.current;
@@ -2075,6 +2210,7 @@ export default function App() {
       <TitleBar
         themeMode={terminalThemeMode}
         onThemeChange={setTerminalThemeMode}
+        updateAvailable={updateCheck?.ok === true && updateCheck.hasUpdate}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <div className="app-body">
@@ -2120,6 +2256,10 @@ export default function App() {
                 onCreateBranch={(name, startPoint) => void gitCreateBranch(name, startPoint)}
                 onMerge={(branch) => void gitMerge(branch)}
                 onMergeInto={(source, target) => void gitMergeInto(source, target)}
+                syncPrompt={syncPrompt}
+                syncBusy={syncBusy}
+                onSyncChoice={(choice) => void runSyncChoice(choice)}
+                onSyncClose={() => setSyncPrompt(null)}
                 commits={gitCommits}
               />
             ) : null
@@ -2320,11 +2460,25 @@ export default function App() {
       {settingsOpen ? (
         <SettingsModal
           prefs={prefs}
+          version={info.version}
+          update={updateCheck}
+          updateBusy={updateBusy}
+          onCheckUpdate={() => void checkForUpdate()}
           onClose={() => setSettingsOpen(false)}
           onSave={(next) => {
             writePrefs(next);
             setPrefs(next);
             setSettingsOpen(false);
+          }}
+        />
+      ) : null}
+
+      {announcement ? (
+        <AnnouncementModal
+          announcement={announcement}
+          onDismiss={() => {
+            writeSeenVersion(announcement.version);
+            setAnnouncement(null);
           }}
         />
       ) : null}

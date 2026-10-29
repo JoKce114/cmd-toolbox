@@ -72,12 +72,13 @@ const DEFAULT_KEYBINDINGS = {
   moveLineDown: 'Alt-ArrowDown',
   deleteLine: 'Ctrl-Shift-k',
   toggleComment: 'Ctrl-/',
+  toggleBlockComment: 'Ctrl-Shift-/',
   gotoLine: 'Ctrl-g',
 };
 const values = Object.values(DEFAULT_KEYBINDINGS).map(normalizeCombo);
 ok(new Set(values).size === values.length, '默认键位之间没有重复');
 ok(values.every((v) => !isReserved(v)), '默认键位不占用应用级快捷键');
-ok(Object.keys(DEFAULT_KEYBINDINGS).length === 9, '共 9 个可配置动作');
+ok(Object.keys(DEFAULT_KEYBINDINGS).length === 10, '共 10 个可配置动作');
 
 console.log('4. 祖先路径展开（文件树自动定位）');
 const ancestorsOf = (relPath) => {

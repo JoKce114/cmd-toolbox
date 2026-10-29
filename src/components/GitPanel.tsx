@@ -11,11 +11,13 @@ import {
   Undo2,
 } from 'lucide-react';
 import { cn } from '../lib';
-import type { GitChange, GitChangeStatus, GitStatus } from '../types';
+import type { GitChange, GitChangeStatus, GitStatus, SyncPrompt } from '../types';
 import { BranchPickerModal } from './BranchPickerModal';
 import { MergeModal } from './MergeModal';
 import { ConfirmDialog } from './ConfirmDialog';
 import { NewBranchModal } from './NewBranchModal';
+import { SyncDialog } from './SyncDialog';
+import type { SyncChoice } from './SyncDialog';
 
 type Phase = 'idle' | 'committing' | 'committed' | 'pushing';
 
@@ -51,6 +53,10 @@ export type GitPanelProps = {
   onCreateBranch: (name: string, startPoint: string) => void;
   onMerge: (branch: string) => void;
   onMergeInto: (source: string, target: string) => void;
+  syncPrompt: SyncPrompt | null;
+  syncBusy: boolean;
+  onSyncChoice: (choice: SyncChoice) => void;
+  onSyncClose: () => void;
   commits: Array<{ hash: string; short: string; author: string; when: string; subject: string }>;
 };
 
@@ -77,10 +83,15 @@ export function GitPanel({
   onCreateBranch,
   onMerge,
   onMergeInto,
+  syncPrompt,
+  syncBusy,
+  onSyncChoice,
+  onSyncClose,
   commits,
 }: GitPanelProps) {
   const [message, setMessage] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
+  const [pushBusy, setPushBusy] = useState(false);
   const [committedMessage, setCommittedMessage] = useState('');
   const [initBusy, setInitBusy] = useState(false);
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
@@ -129,6 +140,9 @@ export function GitPanel({
     (change) => change.indexStatus === 'conflicted' || change.worktreeStatus === 'conflicted',
   );
   const canCommit = phase === 'idle' && messageFilled && stagedChanges.length > 0;
+  const aheadCount = status && status.ok ? status.ahead : 0;
+  // 提交块里已经有「推送」时不再重复显示分支栏按钮
+  const showBarPush = aheadCount > 0 && phase !== 'committed' && phase !== 'pushing';
 
   const pathsFor = (change: GitChange) =>
     change.origPath ? [change.origPath, change.path] : [change.path];
@@ -160,6 +174,16 @@ export function GitPanel({
       return;
     }
     resetToIdle();
+  };
+
+  // 分支栏的推送入口不依赖一次性的提交阶段：切换项目重挂载后仍按 ahead 显示
+  const runBarPush = async () => {
+    setPushBusy(true);
+    try {
+      await onPush();
+    } finally {
+      setPushBusy(false);
+    }
   };
 
   const submit = () => {
@@ -318,19 +342,33 @@ export function GitPanel({
           {status.behind > 0 ? <span className="git-behind">↓{status.behind}</span> : null}
         </button>
 
-        {status.behind > 0 ? (
-          <button
-            type="button"
-            className="git-pull-button"
-            title={`线上有 ${status.behind} 个新提交，点击拉取`}
-            disabled={pullBusy}
-            onClick={onPull}
-          >
-            <ArrowDownToLine size={12} className={pullBusy ? 'is-spinning' : undefined} />
-            <span>{pullBusy ? '拉取中…' : '拉取'}</span>
-          </button>
-        ) : null}
+        <div className="git-sync-actions">
+          {status.behind > 0 ? (
+            <button
+              type="button"
+              className="git-pull-button"
+              title={`线上有 ${status.behind} 个新提交，点击拉取`}
+              disabled={pullBusy}
+              onClick={onPull}
+            >
+              <ArrowDownToLine size={12} className={pullBusy ? 'is-spinning' : undefined} />
+              <span>{pullBusy ? '拉取中…' : '拉取'}</span>
+            </button>
+          ) : null}
 
+          {showBarPush ? (
+            <button
+              type="button"
+              className="git-push-button"
+              title={`本地有 ${status.ahead} 个提交待推送`}
+              disabled={pushBusy || pullBusy}
+              onClick={runBarPush}
+            >
+              <ArrowUp size={12} className={pushBusy ? 'is-spinning' : undefined} />
+              <span>{pushBusy ? '推送中…' : '推送'}</span>
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {branchMenuOpen ? (
@@ -369,6 +407,15 @@ export function GitPanel({
             setNewBranchOpen(false);
             onCreateBranch(name, startPoint);
           }}
+        />
+      ) : null}
+
+      {syncPrompt ? (
+        <SyncDialog
+          prompt={syncPrompt}
+          busy={syncBusy}
+          onChoose={onSyncChoice}
+          onClose={onSyncClose}
         />
       ) : null}
 

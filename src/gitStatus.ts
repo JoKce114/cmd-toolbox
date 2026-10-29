@@ -19,7 +19,7 @@ export function useGitStatus(activeGroup: Group | null, options: GitStatusOption
   groupRef.current = activeGroup;
   optionsRef.current = options;
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<GitStatus | null> => {
     const group = groupRef.current;
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
@@ -27,7 +27,7 @@ export function useGitStatus(activeGroup: Group | null, options: GitStatusOption
     if (!group) {
       setStatus(null);
       setRefreshing(false);
-      return;
+      return null;
     }
 
     setRefreshing(true);
@@ -35,11 +35,19 @@ export function useGitStatus(activeGroup: Group | null, options: GitStatusOption
       // 先静默 fetch，让 ahead/behind 反映远端真实状态；无网络或没有上游时忽略即可
       await window.api.git.fetch(group.path).catch(() => {});
       const next = await window.api.git.status(group.path);
-      if (requestId === requestIdRef.current) setStatus(next);
+      // 请求被更新的一次刷新取代时，调用方不该用这份过期数据做判断
+      if (requestId !== requestIdRef.current) return null;
+      setStatus(next);
+      return next;
     } catch (error) {
-      if (requestId === requestIdRef.current) {
-        setStatus({ ok: false, reason: 'error', message: toErrorMessage(error) });
-      }
+      if (requestId !== requestIdRef.current) return null;
+      const failure: GitStatus = {
+        ok: false,
+        reason: 'error',
+        message: toErrorMessage(error),
+      };
+      setStatus(failure);
+      return failure;
     } finally {
       if (requestId === requestIdRef.current) setRefreshing(false);
     }
