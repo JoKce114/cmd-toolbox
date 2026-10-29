@@ -2544,9 +2544,6 @@ export default function App() {
                   if (gitGroup) openDiffTab(gitGroup, change);
                 }}
                 onOpenInEditor={(change) => openEditorFile(gitGroup, change.path)}
-                onBrowseFiles={() => {
-                  if (gitGroup) createEditor(gitGroup);
-                }}
                 onStage={gitStage}
                 onUnstage={gitUnstage}
                 onDiscard={gitDiscard}
