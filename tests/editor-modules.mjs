@@ -271,8 +271,9 @@ try {
   // 直接打主进程的 writeMinified：同一进程内多路并发写同一个 .min.js。
   // 旧实现共用 `${pid}.tmp`，会成批 ENOENT；新实现 temp 名唯一，但 Windows 上
   // 并发 rename 仍可能瞬时 EPERM（索引器/杀软占用），file-api 内部已有退避重试。
-  // 压测下仍有小概率耗尽重试，所以这里不要求每一路都成功，只要求：
-  //   - 失败的都是可重试的占用类错误（不是逻辑错误）
+  // 这条用例守的是「temp 名唯一 + 产物不混合」：
+  //   - 不得出现 ENOENT（那正是共享 temp 被抢走的 signature，且不在重试码里）
+  //   - 其他失败只能是可重试的占用类错误
   //   - 最终产物是某一次完整写入，没有被截断或混合
   //   - 不留临时文件
   const concDir = mkdtempSync(join(tmpdir(), 'cmdtb-conc-'));
@@ -284,14 +285,19 @@ try {
     );
     const succeeded = settled.filter((item) => item.status === 'fulfilled');
     const failed = settled.filter((item) => item.status === 'rejected');
-    const retryable = new Set(['EPERM', 'EBUSY', 'EACCES', 'ENOENT']);
+    const codes = failed.map((item) => item.reason?.code);
+    // ENOENT 不在 renameWithRetry 的重试码里，出现即说明临时文件被并发抢走。
+    assert(!codes.includes('ENOENT'), `并发写没有出现 ENOENT，实际 ${JSON.stringify(codes)}`);
+    // 当前实现实测稳定 10/10；只容忍 1 次极端占用导致的 EPERM 耗尽重试，
+    // 再低就说明并发临时文件机制退化了。
     assert(
-      succeeded.length >= settled.length / 2,
-      `多数并发写成功（${succeeded.length}/${settled.length}）`,
+      succeeded.length >= 9,
+      `并发写基本全部成功（${succeeded.length}/${settled.length}）`,
     );
+    const retryable = new Set(['EPERM', 'EBUSY', 'EACCES']);
     assert(
       failed.every((item) => retryable.has(item.reason?.code)),
-      `失败的都是占用类错误，实际 ${JSON.stringify(failed.map((i) => i.reason?.code))}`,
+      `失败的都是占用类错误，实际 ${JSON.stringify(codes)}`,
     );
     const finalContent = readFileSync(join(concDir, 'out.min.js'), 'utf8');
     assert(
@@ -379,6 +385,10 @@ try {
     );
   } else {
     const queueCases = runEnqueueMinifyCases();
+    // 契约标注：「只写 2 次」和「burst=2 从未落盘」锁的是 enqueueMinify 的内部合并策略
+    // （中间任务被后到者取代并直接 resolve），不是用户可见不变量。
+    // 如果将来改成「串行把每个任务都写一遍」，最终产物仍是 burst=3、行为依然正确，
+    // 这几条断言会变红——改策略时要同步改断言，别把它当成回归。
     assert(
       queueCases.writes.length === 2,
       `3 次入队只写 2 次（第 1 个在跑 + 最后一个），实际 ${queueCases.writes.length}`,
@@ -393,7 +403,7 @@ try {
     );
     assert(
       !queueCases.writes.some((item) => item.includes('burst=2')),
-      '被覆盖的中间任务没有落盘',
+      '被覆盖的中间任务没有落盘（同上：锁的是内部合并策略）',
     );
     assert(
       queueCases.resolved === 3,
