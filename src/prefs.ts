@@ -1,5 +1,6 @@
 import { DEFAULT_KEYBINDINGS, normalizeCombo } from './editorKeymap';
 import type { EditorActionId, KeyBindingMap } from './editorKeymap';
+import { DEFAULT_ENABLED_MODULES, findModule } from './modules/catalog';
 
 export type EditorFontFamily = 'consolas' | 'courier' | 'lucida';
 
@@ -17,6 +18,7 @@ export type AppPrefs = {
   editorTabSize: number;
   editorIndentWithSpaces: boolean;
   editorKeybindings: KeyBindingMap;
+  enabledModules: string[];
 };
 
 export const TERMINAL_FONT_SIZE_MIN = 11;
@@ -51,6 +53,7 @@ export function defaultPrefs(): AppPrefs {
     editorTabSize: 4,
     editorIndentWithSpaces: false,
     editorKeybindings: { ...DEFAULT_KEYBINDINGS },
+    enabledModules: [...DEFAULT_ENABLED_MODULES],
   };
 }
 
@@ -115,6 +118,11 @@ export function readPrefs(): AppPrefs {
       // 默认使用制表符；只有明确存过 true 才用空格
       editorIndentWithSpaces: parsed.editorIndentWithSpaces === true,
       editorKeybindings: normalizeKeybindings(parsed.editorKeybindings),
+      // 未知 id 丢弃，防止降级后残留脏数据
+      enabledModules: (Array.isArray(parsed.enabledModules)
+        ? parsed.enabledModules
+        : DEFAULT_ENABLED_MODULES
+      ).filter((id): id is string => typeof id === 'string' && Boolean(findModule(id))),
     };
   } catch {
     return defaultPrefs();
