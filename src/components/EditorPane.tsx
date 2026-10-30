@@ -250,8 +250,9 @@ export function EditorPane({
         minify: null,
         minifyLabel: '压缩为 .min.js',
       });
-      if (!items.length) return;
+      if (!items.length) return false;
       setMenu({ x: event.clientX, y: event.clientY, items });
+      return true;
     },
     [canFormat, onToast],
   );
