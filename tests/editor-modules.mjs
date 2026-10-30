@@ -1,7 +1,9 @@
 // 编辑器模块的端到端测试。
 // 需要独占 17382 端口，跑之前先关掉正在运行的 Cmd Toolbox。
 import { _electron as electron } from 'playwright-core';
+import { execFileSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -69,6 +71,12 @@ writeFileSync(join(projectDir, 'self.min.js'), 'const kept = 1;\n', 'utf8');
 // 压缩失败路径：源文件本身合法，用户改出语法错误后再保存
 writeFileSync(join(projectDir, 'bad.js'), 'const ok = 1;\n', 'utf8');
 writeFileSync(join(projectDir, 'bad.min.js'), '/*keep-me*/', 'utf8');
+// 并发保存：每次保存不同内容，只有最新的一次能留在产物里
+writeFileSync(join(projectDir, 'burst.js'), 'window.burst = 0;\n', 'utf8');
+writeFileSync(join(projectDir, 'burst.min.js'), '/*old-burst*/', 'utf8');
+// 写入失败路径：保存时把源文件设成只读，用来验证「保存没成功就不压缩」
+writeFileSync(join(projectDir, 'ro.js'), 'const ro = 1;\n', 'utf8');
+writeFileSync(join(projectDir, 'ro.min.js'), '/*OLD*/', 'utf8');
 
 const app = await electron.launch({
   executablePath: resolve(root, 'node_modules/electron/dist/electron.exe'),
@@ -346,9 +354,92 @@ try {
     '保存 .min.js 不会生成 .min.min.js',
   );
 
+  console.log('14. 并发保存：最新内容胜出（每次内容不同）');
+  const burstSource = join(projectDir, 'burst.js');
+  const burstMin = join(projectDir, 'burst.min.js');
+  await openFile(page, 'burst.js');
+  const burstEditor = page.locator('.cm-content').first();
+  // 每次改成不同内容再保存，且不等上一次保存完成——只有「后发覆盖先前」
+  // 才能让最终产物是 3；若旧任务最后落盘，产物会是 1 或 2。
+  for (const value of [1, 2, 3]) {
+    await burstEditor.click();
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type(`window.burst = ${value};`);
+    await page.keyboard.press('Control+s');
+    await page.waitForTimeout(80);
+  }
+  await waitFor(
+    () => readFileSync(burstMin, 'utf8').includes('burst=3'),
+    15000,
+    '产物先达到 burst=3',
+  );
+  // 再等一段时间，确认没有被更早发起的旧任务回写覆盖
+  await page.waitForTimeout(2500);
+  const burstFinal = readFileSync(burstMin, 'utf8');
+  assert(burstFinal.includes('burst=3'), `最终产物是最新内容，实际 ${burstFinal}`);
+  assert(
+    !/burst\s*=\s*[12]\b/.test(burstFinal),
+    `最终产物没有被旧内容覆盖，实际 ${burstFinal}`,
+  );
+  assert(
+    readFileSync(burstSource, 'utf8').includes('window.burst = 3;'),
+    '源文件也是最新内容',
+  );
+
+  console.log('15. 源文件写入失败时不压缩');
+  const roSource = join(projectDir, 'ro.js');
+  const roMin = join(projectDir, 'ro.min.js');
+  await openFile(page, 'ro.js');
+  await page.locator('.cm-content').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\nconst unsaved = 1;');
+  // Windows 下 chmod 0o444 会把文件设成只读，files.write 的 rename 会稳定报 EPERM。
+  // 这样走的是真实主进程失败路径，不需要打桩渲染进程的 window.api。
+  chmodSync(roSource, 0o444);
+  try {
+    await page.keyboard.press('Control+s');
+    await page.locator('.toast-error').last().waitFor({ timeout: 10000 });
+    assert(
+      (await page.locator('.toast-error').count()) > 0,
+      '保存失败弹出错误提示',
+    );
+    await page.waitForTimeout(2000);
+    assert(
+      readFileSync(roMin, 'utf8') === '/*OLD*/',
+      '保存失败时已有的 .min.js 不被改写',
+    );
+    assert(
+      !readFileSync(roSource, 'utf8').includes('const unsaved = 1;'),
+      '源文件确实没有保存成功',
+    );
+  } finally {
+    chmodSync(roSource, 0o666);
+  }
+
+  console.log('16. minifiedName 只看最后一层文件名');
+  const nameCases = runMinifiedNameCases();
+  assert(
+    nameCases['app.test.js'] === 'app.test.min.js',
+    `多段扩展名正常，实际 ${nameCases['app.test.js']}`,
+  );
+  assert(
+    nameCases['dir.v2/README'] === 'dir.v2/README',
+    `目录名带点且文件无扩展名时原样返回，实际 ${nameCases['dir.v2/README']}`,
+  );
+  assert(
+    nameCases['a/b.js'] === 'a/b.min.js',
+    `子目录正常，实际 ${nameCases['a/b.js']}`,
+  );
+
   console.log(`\n全部通过（${passed} 项）`);
 } finally {
   await app.close().catch(() => {});
+  // ro.js 可能还没恢复权限就被中断，失败时删不掉只读文件
+  try {
+    chmodSync(join(projectDir, 'ro.js'), 0o666);
+  } catch {
+    // 文件可能根本没创建成功，忽略
+  }
   rmSync(dataDir, { recursive: true, force: true });
   rmSync(projectDir, { recursive: true, force: true });
 }
@@ -361,6 +452,23 @@ async function openFile(page, name) {
   await entry.click();
   await page.locator('.cm-content').first().waitFor({ timeout: 10000 });
   await page.waitForTimeout(600);
+}
+
+// 直接断言 minifiedName 的边界：测试本身是 .mjs，不能直接 import .ts，
+// 用 Node 22 的类型剥离在子进程里跑一次，把结果以 JSON 传回来。
+function runMinifiedNameCases() {
+  const moduleUrl = new URL('../src/modules/minify.ts', import.meta.url).href;
+  const script = `
+    const { minifiedName } = await import(${JSON.stringify(moduleUrl)});
+    const inputs = ['app.test.js', 'dir.v2/README', 'a/b.js'];
+    console.log(JSON.stringify(Object.fromEntries(inputs.map((i) => [i, minifiedName(i)]))));
+  `;
+  const output = execFileSync(
+    process.execPath,
+    ['--experimental-strip-types', '--no-warnings', '--input-type=module', '-e', script],
+    { encoding: 'utf8' },
+  );
+  return JSON.parse(output.trim().split('\n').pop());
 }
 
 // 读编辑器全文：CodeMirror 的内容不在 textarea 里，只能从 DOM 取
