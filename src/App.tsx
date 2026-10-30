@@ -56,9 +56,12 @@ import type {
 import { discardSession, startPtyBus, subscribeAllData, subscribeExit } from './ptyBus';
 import {
   classifyModelOutput,
+  endsWithTurnDone,
   IDLE_RESET_MS,
   rollupModelStatus,
   transitionUnread,
+  TURN_DONE_IDLE_MS,
+  visibleSignature,
   type ModelStatus,
 } from './sessionStatus';
 import { TitleBar } from './components/TitleBar';
@@ -244,6 +247,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [loginItem, setLoginItem] = useState<LoginItemState | null>(null);
   const outputBySessionRef = useRef<Record<string, string>>({});
+  const signatureBySessionRef = useRef<Record<string, string>>({});
   const idleTimersRef = useRef(new Map<string, number>());
   const toastIdRef = useRef(0);
   const toastTimersRef = useRef(new Map<number, number>());
@@ -280,7 +284,14 @@ export default function App() {
       const combined = (outputBySessionRef.current[sessionId] || '') + data;
       outputBySessionRef.current[sessionId] =
         combined.length > 8000 ? combined.slice(-8000) : combined;
-      const status = classifyModelOutput(outputBySessionRef.current[sessionId]);
+
+      // 只看尾部：比较成本被压在这些字节里，TUI 的重绘也只影响这里
+      const tail = outputBySessionRef.current[sessionId].slice(-2000);
+      const signature = visibleSignature(tail);
+      if (signature === signatureBySessionRef.current[sessionId]) return;
+      signatureBySessionRef.current[sessionId] = signature;
+
+      const status = classifyModelOutput(combined);
       setModelStatusBySession((previous) =>
         previous[sessionId] === status ? previous : { ...previous, [sessionId]: status },
       );
@@ -290,11 +301,14 @@ export default function App() {
       if (status === 'waiting' || status === 'error') return;
       timers.set(
         sessionId,
-        window.setTimeout(() => {
-          setModelStatusBySession((previous) =>
-            previous[sessionId] === 'idle' ? previous : { ...previous, [sessionId]: 'idle' },
-          );
-        }, IDLE_RESET_MS),
+        window.setTimeout(
+          () => {
+            setModelStatusBySession((previous) =>
+              previous[sessionId] === 'idle' ? previous : { ...previous, [sessionId]: 'idle' },
+            );
+          },
+          endsWithTurnDone(tail) ? TURN_DONE_IDLE_MS : IDLE_RESET_MS,
+        ),
       );
     });
     return () => {
@@ -317,6 +331,7 @@ export default function App() {
         if (live.has(sessionId)) continue;
         delete next[sessionId];
         delete outputBySessionRef.current[sessionId];
+        delete signatureBySessionRef.current[sessionId];
         const timer = idleTimersRef.current.get(sessionId);
         if (timer) window.clearTimeout(timer);
         idleTimersRef.current.delete(sessionId);

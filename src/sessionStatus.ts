@@ -3,6 +3,9 @@ export type ModelStatus = 'idle' | 'waiting' | 'running' | 'error';
 // AI 在等一个慢命令时可能十几秒不出一个字节，阈值太短会把「还在跑」误判成「已完成」。
 export const IDLE_RESET_MS = 15000;
 
+// CLI 自己打出「Worked for …s」并把提示符交回来时，这一轮确实结束了，不必再等满 15 秒。
+export const TURN_DONE_IDLE_MS = 3000;
+
 export type StatusTransition = 'set-unread' | 'clear-unread' | 'none';
 
 // 任务从忙碌落到空闲或报错、且用户当时没在看这个页签 → 标记未读。
@@ -57,6 +60,36 @@ export function classifyModelOutput(value: string): ModelStatus {
   if (WAITING_PATTERNS.some((pattern) => pattern.test(tail))) return 'waiting';
   if (ERROR_PATTERNS.some((pattern) => pattern.test(tail))) return 'error';
   return 'running';
+}
+
+const SPINNER_FRAMES = /[⠁⠂⠄⡀⢀⠠⠐⠈⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/g;
+const ELAPSED_TOKEN = /\b\d+(?:\.\d+)?s\b/g;
+
+// TUI 会重绘出纯控制序列、spinner 转帧和耗时计数，这些不是新内容，不该触发状态重算。
+export function visibleSignature(value: string): string {
+  return stripAnsi(value)
+    .replace(/\r\n?/g, '\n')
+    .replace(SPINNER_FRAMES, '')
+    .replace(ELAPSED_TOKEN, '#s')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0)
+    .join('\n');
+}
+
+const PROMPT_LINE = /^(?:>|❯|›|»)\s*$/;
+// Grok 收尾打「Worked for 42s」，Claude Code 打「✻ Baked for 1s · done 11:41」。
+// 不认「Thought for …s」——那是思考中的计时，认了会在思考阶段误判结束。
+const TURN_DONE_LINE = /Worked for\b|·\s*done\b/i;
+
+// 提示符和完成标记之间通常还夹着一条分隔线，所以往回多看几行。
+// 只有末尾是提示符（或标记本身）时才算数，用户刚发出去的消息不会命中。
+export function endsWithTurnDone(value: string): boolean {
+  const lines = visibleSignature(value).split('\n');
+  const last = lines.length - 1;
+  if (TURN_DONE_LINE.test(lines[last])) return true;
+  if (!PROMPT_LINE.test(lines[last])) return false;
+  return lines.slice(Math.max(0, last - 3), last).some((line) => TURN_DONE_LINE.test(line));
 }
 
 export function rollupModelStatus(values: ModelStatus[]): ModelStatus {
