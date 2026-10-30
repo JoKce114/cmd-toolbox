@@ -5,7 +5,7 @@ import { useEditorFiles } from '../useEditorFiles';
 import { FileTree } from './FileTree';
 import { SearchPanel } from './SearchPanel';
 import { CodeMirrorHost } from './CodeMirrorHost';
-import { findModule, modulesFor } from '../modules/catalog';
+import { findModule } from '../modules/catalog';
 import type { EditorModule } from '../modules/catalog';
 import { enqueueMinify, isMinifiable, minifiedName } from '../modules/minify';
 import type { Group, Tab } from '../types';
@@ -69,10 +69,6 @@ export function EditorPane({
   enabledModules,
   onFontSizeDelta,
 }: EditorPaneProps) {
-  // 压缩开关只管文件树「生成压缩版」；保存时的自动更新不看这个开关。
-  const minifyEnabled = modulesFor('minify', 'js').some((module) =>
-    enabledModules.includes(module.id),
-  );
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const {
     files,
@@ -214,10 +210,7 @@ export function EditorPane({
 
   // 文件树的「生成 xxx.min.js」：读磁盘上的源文件、压缩、写出产物。
   // 用磁盘内容而不是编辑器内容——从文件树压缩的文件可能根本没打开过。
-  const canMinify = (relPath: string) => {
-    if (!minifyEnabled) return false;
-    return isMinifiable(relPath) && !relPath.endsWith('.min.js');
-  };
+  const canMinify = (relPath: string) => isMinifiable(relPath);
 
   const runMinify = useCallback(
     async (relPath: string) => {

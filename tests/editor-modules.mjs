@@ -415,12 +415,12 @@ try {
     '默认关闭 JS 诊断时语法错误不标波浪线',
   );
 
-  // 设置 → 模块 → 打开「JS / TS 语法检查」→ 保存（开关点保存才生效）
+  // 设置 → 模块 → 打开「JS / JSX 语法检查」→ 保存（开关点保存才生效）
   await page.locator('.titlebar-settings').click();
   await page.locator('.settings-body').waitFor({ timeout: 8000 });
   await page.getByRole('tab', { name: '模块' }).click();
   await page.waitForTimeout(200);
-  const jsDiagRow = page.locator('.settings-item').filter({ hasText: 'JS / TS 语法检查' });
+  const jsDiagRow = page.locator('.settings-item').filter({ hasText: "JS / JSX 语法检查" });
   await jsDiagRow.locator('.settings-switch').click();
   await page
     .locator('.modal-footer')

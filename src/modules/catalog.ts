@@ -1,4 +1,4 @@
-export type ModuleKind = 'minify' | 'diagnostics';
+export type ModuleKind = 'diagnostics';
 
 export type EditorModule = {
   id: string;
@@ -10,20 +10,15 @@ export type EditorModule = {
   requires?: 'download';
 };
 
+// 只有诊断需要开关：压缩在保存时总是自动执行（同名 .min.js 存在才更新），
+// 文件树右键也能随时生成，没有「关掉」的意义，所以不列在这里。
 export const EDITOR_MODULES: EditorModule[] = [
   {
-    id: 'minify',
-    name: '代码压缩',
-    description: '支持 JS；已有同名 .min.js 时保存自动更新',
-    kind: 'minify',
-    languages: ['js'],
-  },
-  {
     id: 'diag-js',
-    name: 'JS / TS 语法检查',
-    description: '在编辑器里用波浪线标出语法错误',
+    name: 'JS / JSX 语法检查',
+    description: '在编辑器里用波浪线标出语法错误。TS / TSX 暂不支持',
     kind: 'diagnostics',
-    languages: ['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx'],
+    languages: ['js', 'mjs', 'cjs', 'jsx'],
   },
   {
     id: 'diag-php',
@@ -34,7 +29,7 @@ export const EDITOR_MODULES: EditorModule[] = [
   },
 ];
 
-export const DEFAULT_ENABLED_MODULES = ['minify', 'diag-php'];
+export const DEFAULT_ENABLED_MODULES = ['diag-php'];
 
 export function findModule(id: string): EditorModule | undefined {
   return EDITOR_MODULES.find((item) => item.id === id);

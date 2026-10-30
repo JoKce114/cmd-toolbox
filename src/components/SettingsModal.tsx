@@ -616,7 +616,7 @@ export function SettingsModal({
                   已启用 {modules.length} / {EDITOR_MODULES.length}
                 </span>
                 <span className="settings-item-desc">
-                  关闭保存时自动压缩后，已存在的 .min.js 仍会更新；开关只管文件树的「生成压缩版」
+                  JS 压缩不需要开关：保存时自动更新已存在的 .min.js，文件树右键也能随时生成
                 </span>
               </div>
             </div>
