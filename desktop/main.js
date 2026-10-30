@@ -497,10 +497,14 @@ function registerIpc() {
     paneApi.attachBrowser(tabId, webContentsId);
   });
 
-  ipcMain.handle('clipboard:has-image', () => {
+  // Electron 45 移除了同步的 clipboard.readImage()，只剩异步的 read()/write()。
+  // 旧写法会抛 TypeError 并被下面的 catch 吞成 false，表现为「剪贴板里有图也贴不进去」。
+  ipcMain.handle('clipboard:has-image', async () => {
     try {
-      const image = clipboard.readImage();
-      return Boolean(image && !image.isEmpty());
+      const items = await clipboard.read();
+      return items.some((item) =>
+        item.types.some((type) => type.startsWith('image/')),
+      );
     } catch {
       return false;
     }
