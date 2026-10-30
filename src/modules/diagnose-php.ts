@@ -12,36 +12,54 @@ type PhpEngine = { parseCode(code: string, filename: string): PhpAst };
 
 type PhpEngineCtor = new (options: unknown) => PhpEngine;
 
-// php-parser 的打包产物会读 Node 的 process（判断自己跑在哪、读 env）。
-// 浏览器环境没有这个全局，直接访问会抛 ReferenceError 把整个渲染进程带崩。
-// 补一个最小 shim：只提供它真正会碰到的字段，用不着完整 polyfill。
-// 放在这里而不是 vite define，是因为 define 会全局文本替换所有依赖里的
-// process.*，可能影响 xterm 之类按平台分支的库。
-function ensureProcessShim() {
-  const scope = globalThis as { process?: Record<string, unknown> };
-  if (scope.process) return;
-  scope.process = {
-    env: { NODE_ENV: 'production' },
-    platform: 'browser',
-    arch: 'x64',
-    versions: { node: '' },
-  };
+type PhpProcess = { arch?: string };
+
+// php-parser 的 src/lexer/numbers.js 在模块加载时读 process.arch。
+// 渲染进程没有 Node 的 process 全局，直接访问会抛 ReferenceError 把整个
+// 渲染进程带崩（表现为 PHP 诊断永远没有标记）。只补它真正需要的 arch ——
+// 多给 env/platform 会让后续依赖误判自己跑在 Node 里。
+// 用运行时临时挂载而不是 vite define：define 会全局替换所有依赖的 process.*，
+// 可能影响 xterm 之类按平台分支的库。
+function installProcessShim(): { installed: boolean; previous?: PhpProcess } {
+  const scope = globalThis as { process?: PhpProcess };
+  // 已经有 arch 说明环境自带可用的 process，不要覆盖。
+  // 只有缺 arch 时才补，否则 php-parser 会静默走错误分支。
+  if (scope.process?.arch) return { installed: false };
+  const previous = scope.process;
+  scope.process = { ...(previous || {}), arch: 'x64' };
+  return { installed: true, previous };
+}
+
+function uninstallProcessShim(state: { installed: boolean; previous?: PhpProcess }) {
+  if (!state.installed) return;
+  const scope = globalThis as { process?: PhpProcess };
+  if (state.previous) {
+    scope.process = state.previous;
+  } else {
+    delete scope.process;
+  }
 }
 
 // php-parser 是 CommonJS 包。Node 里 require 到的对象同时带 Engine、parser、
 // default（default === Engine）；Vite 的 CJS 互操作会让 default 变成 module.exports
 // 本体。两种形态都兜住，避免取不到构造函数。
 async function loadEngine(): Promise<PhpEngineCtor> {
-  ensureProcessShim();
-  const mod = (await import('php-parser')) as unknown as {
-    Engine?: PhpEngineCtor;
-    default?: PhpEngineCtor | { Engine?: PhpEngineCtor };
-  };
-  const fallback = mod.default;
-  const Engine =
-    mod.Engine ?? (typeof fallback === 'function' ? fallback : fallback?.Engine);
-  if (!Engine) throw new Error('php-parser 缺少 Engine 导出');
-  return Engine;
+  const shim = installProcessShim();
+  try {
+    // Vite 会把 CJS 的 require 提升到 chunk 初始化阶段，import 完成时
+    // php-parser 已经读过 process.arch，可以立刻还原，别把全局污染留着。
+    const mod = (await import('php-parser')) as unknown as {
+      Engine?: PhpEngineCtor;
+      default?: PhpEngineCtor | { Engine?: PhpEngineCtor };
+    };
+    const fallback = mod.default;
+    const Engine =
+      mod.Engine ?? (typeof fallback === 'function' ? fallback : fallback?.Engine);
+    if (!Engine) throw new Error('php-parser 缺少 Engine 导出');
+    return Engine;
+  } finally {
+    uninstallProcessShim(shim);
+  }
 }
 
 export async function diagnosePhp(text: string): Promise<Diagnostic[]> {

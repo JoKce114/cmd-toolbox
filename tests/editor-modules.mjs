@@ -58,9 +58,20 @@ writeFileSync(join(projectDir, 'ro.js'), 'const ro = 1;\n', 'utf8');
 writeFileSync(join(projectDir, 'ro.min.js'), '/*OLD*/', 'utf8');
 // 诊断用例的夹具：文件树只在编辑器页签挂载时列一次根目录，
 // 所以必须在启动前就创建好（测试中途新建的文件不会出现在树里）。
-writeFileSync(join(projectDir, 'diag-bad.js'), 'const = ;\n', 'utf8');
+// 错误故意放在第 2 行，用来断言波浪线落在正确行。
+writeFileSync(
+  join(projectDir, 'diag-bad.js'),
+  'const a = 1;\nconst = ;\nconst b = 3;\n',
+  'utf8',
+);
 writeFileSync(join(projectDir, 'diag-valid.js'), 'const a = 1;\nfunction f() { return a; }\n', 'utf8');
 writeFileSync(join(projectDir, 'diag-bad.php'), '<?php $a = ;\n', 'utf8');
+// 合法 JSX：没有 acorn-jsx 时 acorn 会在这里整段误报
+writeFileSync(
+  join(projectDir, 'diag-valid.jsx'),
+  'export function App() {\n  return <div className="x">hi</div>;\n}\n',
+  'utf8',
+);
 
 const app = await electron.launch({
   executablePath: resolve(root, 'node_modules/electron/dist/electron.exe'),
@@ -423,6 +434,15 @@ try {
     (await page.locator('.cm-lint-marker').count()) > 0,
     '开启 JS 诊断后语法错误出现波浪线',
   );
+  // 夹具第 2 行是 `const = ;`，波浪线应该落在那一行而不是文件开头
+  const lintLine = await page.evaluate(() => {
+    const range = document.querySelector('.cm-lintRange-error');
+    return range?.closest('.cm-line')?.textContent ?? null;
+  });
+  assert(
+    typeof lintLine === 'string' && lintLine.includes('const = ;'),
+    `波浪线落在出错行，实际 ${JSON.stringify(lintLine)}`,
+  );
 
   console.log('15. 诊断：合法 JS 不误报');
   await openFile(page, 'diag-valid.js');
@@ -432,12 +452,42 @@ try {
     '合法 JS 没有波浪线',
   );
 
+  console.log('15b. 诊断：合法 JSX 不误报');
+  await openFile(page, 'diag-valid.jsx');
+  await page.waitForTimeout(1500);
+  assert(
+    (await page.locator('.cm-lint-marker').count()) === 0,
+    '合法 JSX 没有波浪线',
+  );
+
   console.log('16. 诊断：PHP 默认开启，语法错误标波浪线');
   await openFile(page, 'diag-bad.php');
   await page.locator('.cm-lint-marker').first().waitFor({ timeout: 10000 });
   assert(
     (await page.locator('.cm-lint-marker').count()) > 0,
     'PHP 语法错误出现波浪线',
+  );
+
+  console.log('17. 诊断：关闭 JS 诊断并保存后，已打开文件的波浪线消失');
+  await openFile(page, 'diag-bad.js');
+  await page.locator('.cm-lint-marker').first().waitFor({ timeout: 10000 });
+  await page.locator('.titlebar-settings').click();
+  await page.locator('.settings-body').waitFor({ timeout: 8000 });
+  await page.getByRole('tab', { name: '模块' }).click();
+  await page.waitForTimeout(200);
+  await jsDiagRow.locator('.settings-switch').click();
+  await page
+    .locator('.modal-footer')
+    .getByRole('button', { name: '保存', exact: true })
+    .click();
+  await page.locator('.settings-body').waitFor({ state: 'detached', timeout: 8000 });
+  await page
+    .locator('.cm-lint-marker')
+    .first()
+    .waitFor({ state: 'detached', timeout: 10000 });
+  assert(
+    (await page.locator('.cm-lint-marker').count()) === 0,
+    '关闭 JS 诊断并保存后波浪线消失',
   );
 
   console.log(`\n全部通过（${passed} 项）`);
@@ -456,7 +506,10 @@ try {
 // 打开文件树里的文件。项目文件树在编辑器页签挂载时就列出根目录，
 // 这里只处理根目录下的文件；子目录需要先点开对应目录行。
 async function openFile(page, name) {
-  const entry = page.locator('.file-row').filter({ hasText: name }).first();
+  // 用精确匹配：diag-valid.js 与 diag-valid.jsx 这种前缀相同的文件，
+  // hasText 子串匹配会命中错误的行。
+  const exact = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
+  const entry = page.locator('.file-row').filter({ hasText: exact }).first();
   await entry.waitFor({ timeout: 10000 });
   await entry.click();
   await page.locator('.cm-content').first().waitFor({ timeout: 10000 });

@@ -362,7 +362,9 @@ export function CodeMirrorHost({
       lintGutter(),
     ];
     view.dispatch({ effects: diagnosticsRef.current.reconfigure(extension) });
-  }, [filePath, diagnosticModule]);
+    // readOnly 变化会重建整个 EditorView（见上方重建 effect），新视图里的
+    // diagnosticsRef 是空的，这里必须跟着重跑，否则诊断会静默消失到下次切文件。
+  }, [filePath, readOnly, diagnosticModule]);
 
   // Ctrl + 滚轮调整字号，与终端行为一致（TerminalPane 用的是同一套判定）。
   // passive 必须为 false，否则 preventDefault 无效，Chromium 会连带缩放整页。
