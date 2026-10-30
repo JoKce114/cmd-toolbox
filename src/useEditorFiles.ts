@@ -36,7 +36,15 @@ const EMPTY: EditorFileState = {
 };
 
 // 多文件编辑：state 以 relPath 为键保存每个文件的内容，activePath 指向当前显示的那个。
-export function useEditorFiles(group: Group, onError: (message: string) => void) {
+// 「没改动也按了 Ctrl+S」和「保存失败」都不是写盘成功，
+// 但用户需要能区分：前者该提示「没有修改」，后者该报错。
+export type SaveOutcome = 'saved' | 'unchanged' | 'failed';
+
+export function useEditorFiles(
+  group: Group,
+  onError: (message: string) => void,
+  onNotice: (message: string) => void,
+) {
   const [files, setFiles] = useState<Record<string, EditorFileState>>({});
   const [activePath, setActivePath] = useState('');
   const groupRef = useRef(group);
@@ -160,18 +168,25 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
           await enqueueMinify(projectPath, target, content, async (compressed) => {
             await window.api.files.writeMinified(projectPath, target, compressed);
           });
+          // 产物被后台改写了，如果它正好开着，页签里还是旧内容——
+          // 用户此时按保存会用旧内容覆盖掉刚生成的产物，必须提醒。
+          if (filesRef.current[target]) {
+            onNotice(
+              `${target.split('/').pop()} 已更新，关闭该页签重新打开可看到最新内容`,
+            );
+          }
         } catch (error) {
           onError(`压缩为 ${minifiedName(relPath)} 失败：${toErrorMessage(error)}`);
         }
       })();
     },
-    [onError],
+    [onError, onNotice],
   );
 
   const save = useCallback(
-    async (relPath: string) => {
+    async (relPath: string): Promise<SaveOutcome> => {
       const current = filesRef.current[relPath];
-      if (!current || current.loading || current.readOnly) return false;
+      if (!current || current.loading || current.readOnly) return 'failed';
 
       // 主动按 Ctrl+S 等于声明「这个文件我要留着」，哪怕内容没改过，
       // 也不该在打开别的文件时被顶替。
@@ -182,7 +197,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
       // 有改动时要等 files.write 成功再压，否则源文件没落地、.min.js 却已是未保存的内容。
       if (!current.dirty) {
         autoMinify(relPath, current.content);
-        return false;
+        return 'unchanged';
       }
 
       const written = current.content;
@@ -233,11 +248,11 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
         });
         // 源文件已经落地，这时压缩产物的内容才和磁盘一致
         autoMinify(relPath, written);
-        return true;
+        return 'saved';
       } catch (error) {
         onError(toErrorMessage(error));
         patch(relPath, { saving: false });
-        return false;
+        return 'failed';
       }
     },
     [autoMinify, onError, patch],

@@ -81,7 +81,7 @@ export function EditorPane({
     save,
     close,
     setActivePath,
-  } = useEditorFiles(group, onError);
+  } = useEditorFiles(group, onError, (message) => onToast(message, 'info'));
 
   const [conflictCount, setConflictCount] = useState(0);
   const [hadConflict, setHadConflict] = useState(false);
@@ -150,8 +150,11 @@ export function EditorPane({
       onToast('该文件为只读，无法保存', 'error');
       return;
     }
-    const ok = await save(target);
-    if (ok) onToast('已保存', 'success');
+    const outcome = await save(target);
+    // 没改动时也要给反馈：否则按了 Ctrl+S 却什么都不发生，会让人以为保存失灵。
+    // 失败路径由 useEditorFiles 内部的 onError 提示，这里不重复。
+    if (outcome === 'saved') onToast('已保存', 'success');
+    else if (outcome === 'unchanged') onToast('文件没有改动', 'info');
   }, [onToast, save]);
 
   const markResolved = useCallback(async () => {
