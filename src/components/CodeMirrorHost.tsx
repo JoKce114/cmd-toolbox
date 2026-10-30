@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
 import {
   EditorView,
   keymap,
@@ -43,14 +42,7 @@ export type CodeMirrorHostProps = {
   highlightActiveLine: boolean;
   bracketMatching: boolean;
   showWhitespace: boolean;
-  lang: string;
   onFontSizeDelta?: (delta: number) => void;
-  // 返回 true 表示已弹出自定义菜单，此时吃掉默认右键行为
-  onRequestMenu?: (
-    event: ReactMouseEvent<HTMLDivElement>,
-    view: EditorView,
-    lang: string,
-  ) => boolean;
   onChange: (value: string) => void;
   onConflictCountChange?: (count: number) => void;
 };
@@ -175,9 +167,7 @@ export function CodeMirrorHost({
   highlightActiveLine,
   bracketMatching,
   showWhitespace,
-  lang,
   onFontSizeDelta,
-  onRequestMenu,
   onChange,
   onConflictCountChange,
 }: CodeMirrorHostProps) {
@@ -359,54 +349,5 @@ export function CodeMirrorHost({
     onCountRef.current?.(parseConflicts(value).length);
   }, [value]);
 
-  // 右键处理常驻：是否有菜单项由 EditorPane 决定，不能因为某一个模块
-  // 没启用就让右键整体失灵（压缩等模块也会用这条通道）。
-  // 回调返回 true 才吃事件，避免把「没有可用菜单」时的默认行为也挡掉。
-  const handleContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
-    const view = viewRef.current;
-    if (!view || !onRequestMenu) return;
-    if (onRequestMenu(event, view, lang)) event.preventDefault();
-  };
-
-  return <div className="codemirror-host" ref={hostRef} onContextMenu={handleContextMenu} />;
-}
-
-// 格式化是异步的（首次还要下载语言插件 chunk），期间用户可能继续输入。
-// 快照必须在函数入口同步取：动态 import 本身也是 await 窗口，晚于它取快照
-// 会把用户在这段时间里的输入一起格式化，虽然不丢内容但违背「用户改过就放弃」。
-// dispatch 前再比对一次，文档变了就整篇放弃。CodeMirror 的 Text 不可变，
-// 引用相等即未变。
-export async function applyFormat(view: EditorView, lang: string) {
-  const savedDoc = view.state.doc;
-  const target = savedDoc.toString();
-  const { format } = await import('../modules/format');
-  const next = await format(target, lang);
-  assertDocUnchanged(view, savedDoc);
-  if (next === target) return;
-  view.dispatch({ changes: { from: 0, to: target.length, insert: next } });
-}
-
-// 只格式化当前选区；没有选区时行为与全文一致
-export async function applyFormatSelection(view: EditorView, lang: string) {
-  const savedDoc = view.state.doc;
-  const range = view.state.selection.main;
-  if (range.empty) return applyFormat(view, lang);
-  const target = savedDoc.sliceString(range.from, range.to);
-  const { format } = await import('../modules/format');
-  const next = await format(target, lang);
-  assertDocUnchanged(view, savedDoc);
-  // 文档没变，但选区可能被用户改过；仍按旧范围写入会让改动出现在
-  // 用户没选中的地方，直接放弃。
-  const current = view.state.selection.main;
-  if (current.from !== range.from || current.to !== range.to) {
-    throw new Error('选区在格式化期间发生变化，已放弃本次格式化');
-  }
-  if (next === target) return;
-  view.dispatch({ changes: { from: range.from, to: range.to, insert: next } });
-}
-
-function assertDocUnchanged(view: EditorView, savedDoc: EditorView['state']['doc']) {
-  if (view.state.doc !== savedDoc) {
-    throw new Error('文档在格式化期间被修改，已放弃本次格式化');
-  }
+  return <div className="codemirror-host" ref={hostRef} />;
 }

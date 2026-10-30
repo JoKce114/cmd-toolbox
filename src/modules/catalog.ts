@@ -1,4 +1,4 @@
-export type ModuleKind = 'format' | 'minify' | 'diagnostics';
+export type ModuleKind = 'minify' | 'diagnostics';
 
 export type EditorModule = {
   id: string;
@@ -11,13 +11,6 @@ export type EditorModule = {
 };
 
 export const EDITOR_MODULES: EditorModule[] = [
-  {
-    id: 'format',
-    name: '代码格式化',
-    description: '支持 JS / TS / HTML / CSS / JSON / Markdown',
-    kind: 'format',
-    languages: ['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'html', 'htm', 'css', 'md', 'markdown'],
-  },
   {
     id: 'minify',
     name: '代码压缩',
@@ -41,7 +34,7 @@ export const EDITOR_MODULES: EditorModule[] = [
   },
 ];
 
-export const DEFAULT_ENABLED_MODULES = ['format', 'minify', 'diag-php'];
+export const DEFAULT_ENABLED_MODULES = ['minify', 'diag-php'];
 
 export function findModule(id: string): EditorModule | undefined {
   return EDITOR_MODULES.find((item) => item.id === id);
