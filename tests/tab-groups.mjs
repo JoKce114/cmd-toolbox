@@ -193,6 +193,65 @@ try {
   assert(new Set(colors).size === 2, `两个组颜色不同，实际 ${colors.join('/')}`);
   await page.screenshot({ path: resolve(root, 'test-shots/tab-groups-two.png') });
 
+  console.log('12. 拖到页签栏空白处也能退出分组');
+  // 非分屏时这条路径曾经完全没接上：组后面有大片空白，可拖过去毫无反应，
+  // 只能精确落到某个组外页签上才生效
+  const beforeBlank = await count(page, '.tab');
+  const beforeGroupTabs = await count(page, '.tab-group .tab');
+  const firstGroupTab = page.locator('.tab-group .tab').first();
+  const stripBox = await page.locator('.tabs-scroll').boundingBox();
+  await firstGroupTab.dragTo(page.locator('.tabs-scroll'), {
+    targetPosition: { x: stripBox.width - 12, y: 18 },
+  });
+  await page.waitForTimeout(500);
+  const afterGroupTabs = await count(page, '.tab-group .tab');
+  assert(
+    afterGroupTabs === beforeGroupTabs - 1,
+    `拖到空白处后该页签离开了组，${beforeGroupTabs} → ${afterGroupTabs}`,
+  );
+  assert(
+    (await count(page, '.tab')) === beforeBlank,
+    `页签没有丢失，仍是 ${beforeBlank} 个`,
+  );
+
+  console.log('13. 全部页签都在组里时也能折叠，折叠后显示初始页');
+  // 之前这种情况会被直接拒绝折叠，因为组外没有别的页签可选
+  for (let guard = 0; guard < 10; guard += 1) {
+    const loose = page.locator('.tab:not(.in-group)');
+    const looseCount = await loose.count();
+    if (looseCount === 0) break;
+    await loose.first().click({ button: 'right' });
+    await page.locator('.popup-menu').getByText('添加到新标签组', { exact: true }).click();
+    await page.locator('.tab-group-input').fill('分组');
+    await page.locator('.tab-group-input').press('Enter');
+    await page.waitForTimeout(250);
+  }
+  const looseLeft = await count(page, '.tab:not(.in-group)');
+  assert(looseLeft === 0, `所有页签都进组了，剩余 ${looseLeft} 个组外页签`);
+
+  for (let guard = 0; guard < 10; guard += 1) {
+    const openGroup = page.locator('.tab-group:not(.is-collapsed) .tab-group-label').first();
+    if ((await openGroup.count()) === 0) break;
+    await openGroup.click({ button: 'right' });
+    await page.locator('.popup-menu').getByText('折叠标签组', { exact: true }).click();
+    await page.waitForTimeout(400);
+  }
+  const groupCount = await count(page, '.tab-group');
+  assert(
+    (await count(page, '.tab-group.is-collapsed')) === groupCount && groupCount > 0,
+    `组外没有可见页签时仍然允许折叠（${groupCount} 个组全部折叠）`,
+  );
+  await page.locator('.empty-state').first().waitFor({ timeout: 5000 });
+  assert(true, '折叠后显示初始页');
+
+  await page.locator('.tab-group-toggle').first().click();
+  await page.waitForTimeout(500);
+  assert(
+    (await count(page, '.tab-group.is-collapsed')) === groupCount - 1,
+    '再点一次能展开回来',
+  );
+  assert((await count(page, '.tab-group .tab')) > 0, '展开后组内页签恢复渲染');
+
   console.log(`\n全部通过（${passed} 项）`);
 } finally {
   await session.app.close().catch(() => {});

@@ -1416,9 +1416,20 @@ export default function App() {
   const rightIds = activeGroup ? rightIdsByGroup[activeGroup.key] || [] : [];
   const split = rightIds.length > 0;
   const leftTabs = activeTabs.filter((tab) => !rightIds.includes(tab.id));
+  // 折叠组里的页签仍留在数组里（排序和持久化都要用），但不算「可见」
+  const collapsedGroupIds = new Set(
+    (activeGroup ? tabGroupsByGroup[activeGroup.key] || [] : [])
+      .filter((group) => group.collapsed)
+      .map((group) => group.id),
+  );
+  const visibleLeftTabs = leftTabs.filter(
+    (tab) => !(tab.tabGroupId && collapsedGroupIds.has(tab.tabGroupId)),
+  );
   const storedLeftId = activeGroup ? activeTabByGroup[activeGroup.key] ?? null : null;
   const activeTab =
-    leftTabs.find((tab) => tab.id === storedLeftId) ?? leftTabs[leftTabs.length - 1] ?? null;
+    visibleLeftTabs.find((tab) => tab.id === storedLeftId) ??
+    visibleLeftTabs[visibleLeftTabs.length - 1] ??
+    null;
   const effectiveActiveTabId = activeTab?.id ?? null;
   const rightActiveId = activeGroup ? rightActiveByGroup[activeGroup.key] ?? null : null;
   const rightTab =
@@ -1996,12 +2007,24 @@ export default function App() {
         );
         const rightIds = rightIdsByGroupRef.current[groupKey] || [];
         const active = activeTabByGroupRef.current[groupKey];
+        // 「可见」要把已经折叠的其他组也排掉，否则会挑中一个隐藏的页签，
+        // 随后自动展开效应又把它所在的组弹开，两个组来回打架
+        const hiddenGroups = new Set(
+          (tabGroupsByGroupRef.current[groupKey] || [])
+            .filter((group) => group.collapsed || group.id === groupId)
+            .map((group) => group.id),
+        );
         const lastIndex = list.reduce(
           (found, tab, index) => (members.has(tab.id) ? index : found),
           -1,
         );
-        const visible = (index: number) =>
-          !members.has(list[index].id) && !rightIds.includes(list[index].id);
+        const visible = (index: number) => {
+          const tab = list[index];
+          return (
+            !rightIds.includes(tab.id) &&
+            !(tab.tabGroupId && hiddenGroups.has(tab.tabGroupId))
+          );
+        };
         if (active && members.has(active)) {
           let pick: Tab | null = null;
           for (let index = lastIndex + 1; index < list.length && !pick; index += 1) {
@@ -2010,9 +2033,12 @@ export default function App() {
           for (let index = lastIndex - 1; index >= 0 && !pick; index -= 1) {
             if (visible(index)) pick = list[index];
           }
-          // 组外没有别的页签时保持展开，否则留下一块空白
-          if (!pick) return;
-          setActiveTabByGroup((previous) => ({ ...previous, [groupKey]: pick!.id }));
+          // 组外没有可见页签时把选中项清空，由空白页接管；不清空的话
+          // 上面那个「激活页签在折叠组里就自动展开」的效应会立刻把组重新弹开
+          setActiveTabByGroup((previous) => ({
+            ...previous,
+            [groupKey]: pick ? pick.id : null,
+          }));
         }
       }
       setTabGroupsByGroup((previous) => {
@@ -3155,13 +3181,17 @@ export default function App() {
                 onReorderTabs={(fromId, toId, position, tabGroupId) =>
                   reorderTabs(activeGroup.key, fromId, toId, position, tabGroupId)
                 }
+                // 没有这一项时拖到空白处会被直接忽略，组里的页签就退不出来
+                onPlaceTab={(fromId, toId, position, tabGroupId) =>
+                  placeTab(fromId, toId, 'left', position, tabGroupId)
+                }
               />
               <div
                 className="pane-area"
                 onDragOver={handlePaneDragOver}
                 onDrop={(event) => handlePaneDrop(event, effectiveActiveTabId)}
               >
-                {activeTabs.length === 0 ? (
+                {!activeTab ? (
                   <EmptyState
                     group={activeGroup}
                     shells={info.shells}
