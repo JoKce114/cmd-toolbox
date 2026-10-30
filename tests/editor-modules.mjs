@@ -43,6 +43,8 @@ writeFileSync(join(projectDir, 'withmin.min.js'), '/*old*/', 'utf8');
 // 用例 18：min.js 页签开着时改源文件，压缩会更新产物，需要给出提示
 writeFileSync(join(projectDir, 'pair.js'), 'const pairBase = 1;\n', 'utf8');
 writeFileSync(join(projectDir, 'pair.min.js'), '/*pair-old*/', 'utf8');
+// 用例 19：外部改动后自动重新加载
+writeFileSync(join(projectDir, 'live.js'), 'const liveOld = 1;\n', 'utf8');
 // 后缀为 .min.js 的文件自己不再压缩
 writeFileSync(join(projectDir, 'self.min.js'), 'const kept = 1;\n', 'utf8');
 // 文件树右键「生成压缩版」的源文件，此前没有任何产物
@@ -534,6 +536,38 @@ try {
     'pair.min.js 含最新内容',
   );
   assert(true, 'pair.min.js 已更新为最新内容');
+
+  console.log('19. 激活页签在磁盘上被改后自动重新加载');
+  // 用外部写入模拟「别的工具改了文件」，编辑器应该在 2 秒内自己刷新
+  await openFile(page, 'live.js');
+  const liveBefore = await editorText(page);
+  assert(liveBefore.includes('const liveOld = 1;'), '打开的是旧内容');
+  writeFileSync(
+    join(projectDir, 'live.js'),
+    'const liveNew = 2;\nfunction liveFn() { return liveNew; }\n',
+    'utf8',
+  );
+  await page
+    .locator('.cm-content')
+    .first()
+    .filter({ hasText: 'liveNew' })
+    .waitFor({ timeout: 12000 });
+  assert(true, '激活页签自动重新加载');
+
+  console.log('19b. 有未保存修改时不覆盖');
+  await page.locator('.cm-content').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\nconst myUnsavedEdit = 9;');
+  // 此时 dirty=true，外部再改磁盘不能冲掉我的编辑
+  writeFileSync(
+    join(projectDir, 'live.js'),
+    'const externalWrite = 3;\n',
+    'utf8',
+  );
+  await page.waitForTimeout(4000);
+  const kept = await editorText(page);
+  assert(kept.includes('myUnsavedEdit'), '未保存的编辑没有被覆盖');
+  assert(!kept.includes('externalWrite'), '有修改时不载入磁盘内容');
 
   console.log(`\n全部通过（${passed} 项）`);
 } finally {

@@ -295,6 +295,53 @@ export function useEditorFiles(
     setActivePath('');
   }, [group.key]);
 
+  // 外部改动检测：只盯当前激活的页签，2 秒一轮。
+  // 压缩产物（.min.js）会被后台改写，别的工具改文件也一样——
+  // 用户切回来看到的必须是磁盘上的真实内容，而不是打开时的快照。
+  // 有未保存修改时绝不覆盖：那时用户手上有更新的内容，静默替换等于丢数据。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const relPath = activePathRef.current;
+      const state = filesRef.current[relPath];
+      // 正在保存或加载时不动，避免和保存流程抢
+      if (!state || state.dirty || state.saving || state.loading || state.readOnly) return;
+      const projectPath = groupRef.current.path;
+      void (async () => {
+        try {
+          const disk = await window.api.files.read(projectPath, relPath);
+          // 磁盘内容没变就不用动；只比 mtime 会误报（有些工具写文件不改 mtime 精度）
+          const latest = filesRef.current[relPath];
+          if (!latest || latest.dirty || latest.saving) return;
+          if (normalizeNewlines(latest.content) === normalizeNewlines(disk.content)) {
+            // 内容一致，但 mtime 可能对不上（本应用刚写过），顺手同步免得下次重复读
+            if (latest.mtime !== disk.mtime) patch(relPath, { mtime: disk.mtime });
+            return;
+          }
+          setFiles((previous) => {
+            const target = previous[relPath];
+            // await 期间用户可能开始编辑，再确认一次
+            if (!target || target.dirty || target.saving) return previous;
+            return {
+              ...previous,
+              [relPath]: {
+                ...target,
+                content: disk.content,
+                savedContent: disk.content,
+                crlf: disk.content.includes('\r\n'),
+                mtime: disk.mtime,
+                dirty: false,
+              },
+            };
+          });
+          onNotice(`${relPath.split('/').pop()} 已在磁盘上更新，已重新加载`);
+        } catch {
+          // 文件被删或暂时读不了：忽略，下一轮再试
+        }
+      })();
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [onNotice, patch]);
+
   const active = activePath ? files[activePath] : undefined;
   const openPaths = Object.keys(files);
   const hasDirty = openPaths.some((relPath) => files[relPath].dirty);
