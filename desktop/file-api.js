@@ -156,9 +156,14 @@ async function stat(projectPath, relPath) {
   const target = resolveWithin(projectPath, relPath);
   try {
     const info = await fsp.stat(target);
-    return { exists: info.isFile(), mtime: info.mtimeMs };
-  } catch {
-    return { exists: false, mtime: 0 };
+    if (!info.isFile()) return { exists: false, mtime: 0 };
+    return { exists: true, mtime: info.mtimeMs };
+  } catch (error) {
+    // 只有「不存在」算正常结果；权限等其他错误照常抛出，避免静默失败
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
+      return { exists: false, mtime: 0 };
+    }
+    throw error;
   }
 }
 
