@@ -206,7 +206,8 @@ export function SettingsModal({
     );
   };
 
-  const updateBinding = (action: EditorActionId, combo: string) => {    const normalized = normalizeCombo(combo);
+  const updateBinding = (action: EditorActionId, combo: string) => {
+    const normalized = normalizeCombo(combo);
 
     const reserved = RESERVED_BINDINGS.find(
       (item) => normalizeCombo(item.combo) === normalized,

@@ -4,6 +4,7 @@ import { ChevronRight, File, Folder, FolderOpen } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import type { FileEntry, Group, MenuState } from '../types';
 import { PopupMenu } from './PopupMenu';
+import { minifiedName } from '../modules/minify';
 
 type FileTreeProps = {
   group: Group;
@@ -127,7 +128,8 @@ export function FileTree({
     if (entry.isDir || !canMinify(entry.relPath)) return;
     event.preventDefault();
     event.stopPropagation();
-    const target = entry.relPath.replace(/\.js$/, '.min.js');
+    // 目标名与实际写入路径用同一个函数算，避免菜单文案和产物不一致
+    const target = minifiedName(entry.relPath);
     const name = target.split('/').pop() || target;
     setMenu({
       x: event.clientX,

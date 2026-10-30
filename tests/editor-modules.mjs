@@ -45,6 +45,11 @@ writeFileSync(join(projectDir, 'pair.js'), 'const pairBase = 1;\n', 'utf8');
 writeFileSync(join(projectDir, 'pair.min.js'), '/*pair-old*/', 'utf8');
 // 用例 19：外部改动后自动重新加载
 writeFileSync(join(projectDir, 'live.js'), 'const liveOld = 1;\n', 'utf8');
+// 用例 20：名为 .js 的 dotfile，是它自己的「压缩产物」，绝不能被压缩内容覆盖
+writeFileSync(join(projectDir, '.js'), 'const dotFile = 1;\n', 'utf8');
+// 用例 21：干净页签 + 磁盘被外部改成新内容，未修改保存不能压出旧产物
+writeFileSync(join(projectDir, 'stale.js'), 'const staleOld = 1;\n', 'utf8');
+writeFileSync(join(projectDir, 'stale.min.js'), '/*stale-marker*/', 'utf8');
 // 后缀为 .min.js 的文件自己不再压缩
 writeFileSync(join(projectDir, 'self.min.js'), 'const kept = 1;\n', 'utf8');
 // 文件树右键「生成压缩版」的源文件，此前没有任何产物
@@ -321,6 +326,16 @@ try {
       queueCases.afterErrorRejected === 1,
       `写盘失败会 reject 对应的调用，实际 ${queueCases.afterErrorRejected}`,
     );
+    // 序号乱序：序号小的旧任务晚入队，必须被丢弃而不是覆盖新内容
+    assert(
+      queueCases.seqWrites.length === 1 &&
+        queueCases.seqWrites[0].includes('seq=2'),
+      `旧序号任务被丢弃，只写新内容，实际 ${JSON.stringify(queueCases.seqWrites)}`,
+    );
+    assert(
+      queueCases.staleOutcome === 'superseded',
+      `被丢弃的任务返回 superseded，实际 ${queueCases.staleOutcome}`,
+    );
   }
 
   console.log('10. 源文件写入失败时不压缩');
@@ -363,17 +378,33 @@ try {
     );
   } else {
     const nameCases = runMinifiedNameCases();
+    const names = nameCases.names;
     assert(
-      nameCases['app.test.js'] === 'app.test.min.js',
-      `多段扩展名正常，实际 ${nameCases['app.test.js']}`,
+      names['app.test.js'] === 'app.test.min.js',
+      `多段扩展名正常，实际 ${names['app.test.js']}`,
     );
     assert(
-      nameCases['dir.v2/README'] === 'dir.v2/README',
-      `目录名带点且文件无扩展名时原样返回，实际 ${nameCases['dir.v2/README']}`,
+      names['dir.v2/README'] === 'dir.v2/README',
+      `目录名带点且文件无扩展名时原样返回，实际 ${names['dir.v2/README']}`,
     );
     assert(
-      nameCases['a/b.js'] === 'a/b.min.js',
-      `子目录正常，实际 ${nameCases['a/b.js']}`,
+      names['a/b.js'] === 'a/b.min.js',
+      `子目录正常，实际 ${names['a/b.js']}`,
+    );
+    // 名为 .js 的 dotfile：没有主名，产物名就是它自己。
+    // 不拦掉的话「压缩产物」会写回源文件，把内容毁掉。
+    assert(names['.js'] === '.js', `dotfile 的产物名是它自己，实际 ${names['.js']}`);
+    assert(
+      nameCases.minifiable['.js'] === false,
+      '名为 .js 的文件不可压缩',
+    );
+    assert(
+      nameCases.minifiable['a/.js'] === false,
+      '子目录下名为 .js 的文件不可压缩',
+    );
+    assert(
+      nameCases.minifiable['a/b.js'] === true,
+      '普通 .js 仍可压缩',
     );
   }
 
@@ -537,7 +568,10 @@ try {
     .first()
     .filter({ hasText: 'pairMarker' })
     .waitFor({ timeout: 10000 });
-  assert(true, '压缩后已打开的 .min.js 页签自动同步，无需重新打开');
+  assert(
+    (await editorText(page)).includes('pairMarker'),
+    '压缩后已打开的 .min.js 页签自动同步，无需重新打开',
+  );
   assert(
     (await page.locator('.toast').filter({ hasText: '关闭该页签' }).count()) === 0,
     '不再提示「关闭页签重新打开」',
@@ -558,7 +592,10 @@ try {
     .first()
     .filter({ hasText: 'liveNew' })
     .waitFor({ timeout: 12000 });
-  assert(true, '激活页签自动重新加载');
+  assert(
+    (await editorText(page)).includes('liveNew'),
+    '激活页签自动重新加载',
+  );
 
   console.log('19b. 有未保存修改时不覆盖');
   await page.locator('.cm-content').first().click();
@@ -574,6 +611,60 @@ try {
   const kept = await editorText(page);
   assert(kept.includes('myUnsavedEdit'), '未保存的编辑没有被覆盖');
   assert(!kept.includes('externalWrite'), '有修改时不载入磁盘内容');
+
+  console.log('20. 名为 .js 的 dotfile 不会被压缩覆盖自己');
+  const dotPath = join(projectDir, '.js');
+  await openFile(page, '.js');
+  assert(
+    (await editorText(page)).includes('const dotFile = 1;'),
+    '打开的是 dotfile 原文',
+  );
+  await page.locator('.cm-content').first().click();
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(2000);
+  assert(
+    readFileSync(dotPath, 'utf8') === 'const dotFile = 1;\n',
+    `.js 源文件没有被压缩结果覆盖，实际 ${JSON.stringify(readFileSync(dotPath, 'utf8'))}`,
+  );
+
+  console.log('21. 干净页签 + 磁盘被外部改动：不压出陈旧的 .min.js');
+  const staleSource = join(projectDir, 'stale.js');
+  const staleMin = join(projectDir, 'stale.min.js');
+  await openFile(page, 'stale.js');
+  assert((await editorText(page)).includes('staleOld'), '打开的是旧内容');
+  // 模拟 git checkout 之类的外部改动：磁盘变成新内容，编辑器内存仍是旧的
+  writeFileSync(staleSource, 'const staleNew = 2;\n', 'utf8');
+  // 立刻按 Ctrl+S（不等 2 秒轮询）。没修改的页签会走 !dirty 分支，
+  // 实现必须发现磁盘 mtime 变了并跳过压缩，否则旧内容会盖到新源文件的产物上。
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(1500);
+  const staleMinContent = readFileSync(staleMin, 'utf8');
+  // 轮询可能抢先重载（那样压的是新内容，也正确），所以只断言产物里
+  // 绝不出现旧内容的压缩结果。
+  assert(
+    !staleMinContent.includes('staleOld'),
+    `陈旧的源内容没有被压进产物，实际 ${JSON.stringify(staleMinContent)}`,
+  );
+  assert(
+    readFileSync(staleSource, 'utf8').includes('staleNew'),
+    '源文件没有被旧内容回写',
+  );
+  // 轮询重载后编辑器应显示新内容，之后保存才压出新产物
+  await page
+    .locator('.cm-content')
+    .first()
+    .filter({ hasText: 'staleNew' })
+    .waitFor({ timeout: 12000 });
+  await page.keyboard.press('Control+s');
+  await waitFor(
+    () => readFileSync(staleMin, 'utf8').includes('staleNew'),
+    10000,
+    '重载后保存压出新内容',
+  );
+  assert(
+    readFileSync(staleMin, 'utf8').includes('staleNew'),
+    '重载后的保存把新内容压进产物',
+  );
 
   console.log(`\n全部通过（${passed} 项）`);
 } finally {
@@ -626,9 +717,12 @@ function moduleUrlForTests() {
 
 function runMinifiedNameCases() {
   return runTypeScriptCase(`
-    const { minifiedName } = await import(${JSON.stringify(moduleUrlForTests())});
-    const inputs = ['app.test.js', 'dir.v2/README', 'a/b.js'];
-    console.log(JSON.stringify(Object.fromEntries(inputs.map((i) => [i, minifiedName(i)]))));
+    const { minifiedName, isMinifiable } = await import(${JSON.stringify(moduleUrlForTests())});
+    const inputs = ['app.test.js', 'dir.v2/README', 'a/b.js', '.js', 'a/.js'];
+    console.log(JSON.stringify({
+      names: Object.fromEntries(inputs.map((i) => [i, minifiedName(i)])),
+      minifiable: Object.fromEntries(inputs.map((i) => [i, isMinifiable(i)])),
+    }));
   `);
 }
 
@@ -657,12 +751,25 @@ function runEnqueueMinifyCases() {
     });
     const settled2 = await Promise.allSettled([p4, p5]);
 
+    // 序号乱序：先发起（序号 1）的任务晚于后发起（序号 2）的任务入队，
+    // 必须被丢弃，不能把旧内容写到新内容之后。
+    const seqWrites = [];
+    const q1 = enqueueMinify('/proj', 'seq.min.js', 'window.seq = 2;', async (c) => {
+      seqWrites.push(c);
+    }, 2);
+    const q2 = enqueueMinify('/proj', 'seq.min.js', 'window.seq = 1;', async (c) => {
+      seqWrites.push(c);
+    }, 1);
+    const settled3 = await Promise.allSettled([q1, q2]);
+
     console.log(JSON.stringify({
       writes,
       resolved: settled.filter((s) => s.status === 'fulfilled').length,
       rejected: settled.filter((s) => s.status === 'rejected').length,
       afterErrorWrites,
       afterErrorRejected: settled2.filter((s) => s.status === 'rejected').length,
+      seqWrites,
+      staleOutcome: settled3[1].status === 'fulfilled' ? settled3[1].value : 'rejected',
     }));
   `);
 }

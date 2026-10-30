@@ -15,8 +15,14 @@ export function minifiedName(relPath: string): string {
 }
 
 // .min.js 自己不再压缩；目前只有 .js 接入 terser。
+// 名为 `.js` 的 dotfile（Windows 允许创建）没有主名，minifiedName 会原样返回它，
+// 不排除的话「产物」就是源文件本身，保存时会把自己的内容压缩后写回自己。
 export function isMinifiable(relPath: string): boolean {
-  return relPath.endsWith('.js') && !relPath.endsWith('.min.js');
+  return (
+    relPath.endsWith('.js') &&
+    !relPath.endsWith('.min.js') &&
+    minifiedName(relPath) !== relPath
+  );
 }
 
 // 配置与 VS Code 的 Nu-Minify 扩展保持一致（terser 5 下实测逐字节复现了它生成的
@@ -93,19 +99,41 @@ export async function shouldAutoMinify(
   return info.exists;
 }
 
-// 同一目标串行化，并且「后发起的覆盖先前的」：
+// 同一目标串行化，并且「后发起的覆盖先前的」。
 // 连按 Ctrl+S 会瞬间排起多个任务，旧内容既不该压在最新内容之后落盘，
 // 也不该和最新内容同时写同一个文件（写入会互相截断）。
-// 每个目标最多一个任务在跑 + 一个待写任务；待写任务被新任务替换时，
-// 旧任务直接 resolve（它的内容已经被更新的一次覆盖，没必要再写盘）。
+//
+// 光靠入队顺序不够：每条 autoMinify 链路都要先 await stat，完成顺序不保证，
+// 先发起的可能后入队。调用方在发起保存时取一个单调递增序号传进来，
+// 队列记录每个目标见过的最大序号，低于它的任务直接丢弃。
+export type MinifyOutcome = 'written' | 'superseded';
+
+let minifySeqCounter = 0;
+
+// 在发起保存的那一刻调用（任何 await 之前），保证序号反映用户的真实操作顺序。
+export function nextMinifySeq(): number {
+  minifySeqCounter += 1;
+  return minifySeqCounter;
+}
+
 type MinifyTask = {
+  seq: number;
   content: string;
   write: (compressed: string) => Promise<void>;
-  resolve: () => void;
+  resolve: (outcome: MinifyOutcome) => void;
   reject: (error: unknown) => void;
 };
 
-const minifyQueues = new Map<string, { next: MinifyTask | null }>();
+type MinifyQueue = {
+  next: MinifyTask | null;
+  running: boolean;
+  // 该目标已见的最大序号：晚发起的任务序号更大
+  latestSeq: number;
+};
+
+// 结束后不删除条目：删掉会让「早发起、晚入队」的旧任务重新通过序号检查。
+// 每条目只占一个字符串键和三个字段，数量级是本次会话编辑过的产物文件数。
+const minifyQueues = new Map<string, MinifyQueue>();
 
 function queueKey(projectPath: string, relPath: string): string {
   return `${projectPath}\u0000${relPath}`;
@@ -115,7 +143,7 @@ async function runMinifyTask(task: MinifyTask): Promise<void> {
   try {
     const compressed = await minify(task.content);
     await task.write(compressed);
-    task.resolve();
+    task.resolve('written');
   } catch (error) {
     task.reject(error);
   }
@@ -126,27 +154,40 @@ export function enqueueMinify(
   targetPath: string,
   content: string,
   write: (compressed: string) => Promise<void>,
-): Promise<void> {
+  seq = 0,
+): Promise<MinifyOutcome> {
   const key = queueKey(projectPath, targetPath);
   return new Promise((resolve, reject) => {
-    const task: MinifyTask = { content, write, resolve, reject };
-    const queue = minifyQueues.get(key);
-    if (queue) {
-      // 已有任务在跑：只保留最后一次的内容
-      queue.next?.resolve();
+    let queue = minifyQueues.get(key);
+    if (!queue) {
+      queue = { next: null, running: false, latestSeq: 0 };
+      minifyQueues.set(key, queue);
+    }
+    // 更晚发起的任务已经入队过：这次的内容已经是旧的了，不写盘
+    if (seq < queue.latestSeq) {
+      resolve('superseded');
+      return;
+    }
+    queue.latestSeq = seq;
+
+    const task: MinifyTask = { seq, content, write, resolve, reject };
+    if (queue.running) {
+      // 已有任务在跑：只保留最后一次的内容，被替换的那次标记为 superseded，
+      // 调用方据此跳过「刷新已打开页签」，避免读到还没写的新内容。
+      queue.next?.resolve('superseded');
       queue.next = task;
       return;
     }
-    minifyQueues.set(key, { next: null });
+    queue.running = true;
+    const current = queue;
     void (async () => {
       await runMinifyTask(task);
-      const current = minifyQueues.get(key);
-      while (current?.next) {
+      while (current.next) {
         const next = current.next;
         current.next = null;
         await runMinifyTask(next);
       }
-      minifyQueues.delete(key);
+      current.running = false;
     })();
   });
 }

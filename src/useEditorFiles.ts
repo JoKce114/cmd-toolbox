@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toErrorMessage } from './lib';
-import { enqueueMinify, minifiedName, shouldAutoMinify } from './modules/minify';
+import { enqueueMinify, minifiedName, nextMinifySeq, shouldAutoMinify } from './modules/minify';
 import type { Group, OpenedFile } from './types';
 
 export function normalizeNewlines(text: string): string {
@@ -153,58 +153,60 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
 
   // 从磁盘重新载入一个已打开的文件。有未保存修改时直接跳过——
   // 那时用户手上有更新的内容，静默替换等于丢数据。
-  // 返回是否真的替换了内容。
-  const reloadFromDisk = useCallback(
-    async (relPath: string): Promise<boolean> => {
-      const state = filesRef.current[relPath];
-      if (!state || state.dirty || state.saving || state.loading) return false;
-      try {
-        const disk = await window.api.files.read(groupRef.current.path, relPath);
-        let replaced = false;
-        setFiles((previous) => {
-          const target = previous[relPath];
-          // await 期间用户可能开始编辑，再确认一次
-          if (!target || target.dirty || target.saving) return previous;
-          if (normalizeNewlines(target.content) === normalizeNewlines(disk.content)) {
-            // 内容一致但 mtime 可能对不上（本应用刚写过），顺手同步
-            if (target.mtime === disk.mtime) return previous;
-            return { ...previous, [relPath]: { ...target, mtime: disk.mtime } };
-          }
-          replaced = true;
-          return {
-            ...previous,
-            [relPath]: {
-              ...target,
-              content: disk.content,
-              savedContent: disk.content,
-              crlf: disk.content.includes('\r\n'),
-              mtime: disk.mtime,
-              dirty: false,
-            },
-          };
-        });
-        return replaced;
-      } catch {
-        // 文件被删或暂时读不了：忽略，下一轮再试
-        return false;
-      }
-    },
-    [],
-  );
+  // 返回值没人用：React 不保证 updater 同步执行，`replaced` 这类副作用不可靠。
+  const reloadFromDisk = useCallback(async (relPath: string): Promise<void> => {
+    const state = filesRef.current[relPath];
+    if (!state || state.dirty || state.saving || state.loading) return;
+    try {
+      const disk = await window.api.files.read(groupRef.current.path, relPath);
+      setFiles((previous) => {
+        const target = previous[relPath];
+        // await 期间用户可能开始编辑，再确认一次
+        if (!target || target.dirty || target.saving) return previous;
+        if (normalizeNewlines(target.content) === normalizeNewlines(disk.content)) {
+          // 内容一致但 mtime 可能对不上（本应用刚写过），顺手同步
+          if (target.mtime === disk.mtime) return previous;
+          return { ...previous, [relPath]: { ...target, mtime: disk.mtime } };
+        }
+        return {
+          ...previous,
+          [relPath]: {
+            ...target,
+            content: disk.content,
+            savedContent: disk.content,
+            crlf: disk.content.includes('\r\n'),
+            mtime: disk.mtime,
+            dirty: false,
+          },
+        };
+      });
+    } catch {
+      // 文件被删或暂时读不了：忽略，下一轮再试
+    }
+  }, []);
 
   // 自动压缩：判定依据是「同名 .min.js 是否存在」，不是设置开关——不存在就绝不创建。
   // 压缩失败只提示，不 throw，保存流程继续。
   // 同一目标由 enqueueMinify 串行化并只写最后一次的内容，连按 Ctrl+S 不会写坏产物。
+  // seq 在发起保存时取好，晚发起的任务序号更大；被取代的任务返回 superseded，
+  // 不能让它们去 reload——那时真正的新写入可能还没落盘。
   const autoMinify = useCallback(
-    (relPath: string, content: string) => {
+    (relPath: string, content: string, seq: number) => {
       void (async () => {
         try {
           const projectPath = groupRef.current.path;
           if (!(await shouldAutoMinify(projectPath, relPath))) return;
           const target = minifiedName(relPath);
-          await enqueueMinify(projectPath, target, content, async (compressed) => {
-            await window.api.files.writeMinified(projectPath, target, compressed);
-          });
+          const outcome = await enqueueMinify(
+            projectPath,
+            target,
+            content,
+            async (compressed) => {
+              await window.api.files.writeMinified(projectPath, target, compressed);
+            },
+            seq,
+          );
+          if (outcome !== 'written') return;
           // 产物刚被改写。轮询只盯激活页签，而此刻激活的是源文件，
           // 所以必须在这里主动把开着的 .min.js 页签刷成最新内容。
           // 静默更新，不弹提示——和 VS Code 的外部改动行为一致。
@@ -219,6 +221,23 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
     [onError, reloadFromDisk],
   );
 
+  // 内容没改也保存（干净页签）时，先确认磁盘上的源文件还是我们手里这一版。
+  // 外部工具（git checkout 等）刚改过、2 秒轮询还没轮到的情况下，
+  // 直接压缩会把旧内容盖到新源文件对应的产物上。这种情况静默跳过：
+  // 等轮询把编辑器重载成新内容，用户再保存时才会压出正确结果。
+  const autoMinifyIfUnchangedOnDisk = useCallback(
+    async (relPath: string, state: EditorFileState, seq: number) => {
+      try {
+        const info = await window.api.files.stat(groupRef.current.path, relPath);
+        if (!info.exists || Math.abs(info.mtime - state.mtime) > 1) return;
+        autoMinify(relPath, state.content, seq);
+      } catch {
+        // 判定失败就当作磁盘已变，宁可不压也不覆盖新产物
+      }
+    },
+    [autoMinify],
+  );
+
   const save = useCallback(
     async (relPath: string): Promise<SaveOutcome> => {
       const current = filesRef.current[relPath];
@@ -228,11 +247,14 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
       // 也不该在打开别的文件时被顶替。
       touchedRef.current.add(relPath);
 
+      // 序号在这里取：任何 await 之前，反映用户真实的保存先后。
+      const minifySeq = nextMinifySeq();
+
       // 自动压缩必须在「内容没变就返回」之前决定：用户要求不管有没有修改都执行。
       // 内容没改时磁盘已经是这份内容，可以立即压缩；
       // 有改动时要等 files.write 成功再压，否则源文件没落地、.min.js 却已是未保存的内容。
       if (!current.dirty) {
-        autoMinify(relPath, current.content);
+        void autoMinifyIfUnchangedOnDisk(relPath, current, minifySeq);
         return 'unchanged';
       }
 
@@ -283,7 +305,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
           };
         });
         // 源文件已经落地，这时压缩产物的内容才和磁盘一致
-        autoMinify(relPath, written);
+        autoMinify(relPath, written, minifySeq);
         return 'saved';
       } catch (error) {
         onError(toErrorMessage(error));
@@ -291,7 +313,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
         return 'failed';
       }
     },
-    [autoMinify, onError, patch],
+    [autoMinify, autoMinifyIfUnchangedOnDisk, onError, patch],
   );
 
   const close = useCallback((relPath: string) => {
@@ -342,6 +364,17 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
       // 正在保存或加载时不动，避免和保存流程抢
       if (!state || state.dirty || state.saving || state.loading || state.readOnly) return;
       void (async () => {
+        // 先 stat 比 mtime，只有确实变了才整文件读取：
+        // 省掉每 2 秒一次的全文件 IO，也降低读到别人半截写入的概率。
+        try {
+          const info = await window.api.files.stat(groupRef.current.path, relPath);
+          const latest = filesRef.current[relPath];
+          if (!latest || latest.dirty || latest.saving || latest.loading) return;
+          if (!info.exists || Math.abs(info.mtime - latest.mtime) <= 1) return;
+        } catch {
+          // stat 失败（文件刚被删等）：交给下一轮，不在这里报错
+          return;
+        }
         // 静默更新：VS Code 也不弹提示，改了就是改了
         await reloadFromDisk(relPath);
       })();

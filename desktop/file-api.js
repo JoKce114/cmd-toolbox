@@ -145,8 +145,14 @@ async function write(projectPath, relPath, content, encoding, mtime) {
 
   const buffer = encodeContent(String(content ?? ''), encoding || 'utf8');
   const temp = `${target}.${process.pid}.tmp`;
-  await fsp.writeFile(temp, buffer);
-  await fsp.rename(temp, target);
+  try {
+    await fsp.writeFile(temp, buffer);
+    await fsp.rename(temp, target);
+  } catch (error) {
+    // 失败时别把半截临时文件留在用户项目里（writeMinified 同理）
+    await fsp.rm(temp, { force: true }).catch(() => {});
+    throw error;
+  }
   return { ok: true };
 }
 
