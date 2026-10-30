@@ -19,11 +19,66 @@ export function isMinifiable(relPath: string): boolean {
   return relPath.endsWith('.js') && !relPath.endsWith('.min.js');
 }
 
+// 配置与 VS Code 的 Nu-Minify 扩展保持一致（terser 5 下实测逐字节复现了它生成的
+// .min.js）。差异点都是有意的：
+//   hoist_funs: true     函数声明提前，输出顺序和存量文件一致
+//   max_line_len: 32000  超长自动折行，不会整个文件压成一行
+//   collapse_vars / reduce_vars: false  这两个 terser 默认开，但开了会让输出与
+//                        存量文件不一致，交叉压缩时产生大 diff
+// 顶层名不缩写：terser 的 toplevel 默认 false，且本项目里 global_obj 等被
+// 数百个 PHP 模板和其他脚本引用，改名会让它们全部 ReferenceError。
+const MINIFY_OPTIONS = {
+  mangle: true,
+  compress: {
+    sequences: true,
+    properties: true,
+    dead_code: true,
+    drop_debugger: true,
+    unsafe: false,
+    unsafe_comps: false,
+    conditionals: true,
+    comparisons: true,
+    evaluate: true,
+    booleans: true,
+    loops: true,
+    unused: true,
+    hoist_funs: true,
+    keep_fargs: true,
+    keep_fnames: false,
+    hoist_vars: false,
+    if_return: true,
+    join_vars: true,
+    collapse_vars: false,
+    reduce_vars: false,
+    side_effects: true,
+    pure_getters: false,
+    // Nu-Minify 的配置里写的是 pure_funcs: null，terser 的类型只接受数组，
+    // 省略即等价（都是「没有纯函数」）
+    negate_iife: false,
+    drop_console: false,
+    passes: 1,
+    global_defs: {},
+  },
+  output: {
+    ascii_only: false,
+    inline_script: false,
+    max_line_len: 32000,
+    braces: false,
+    semicolons: true,
+    comments: false,
+    shebang: true,
+    // Nu-Minify 的配置里 preamble 也是 null，同理省略
+    // quote_style 在 terser 5 里是数字枚举：0 = PreferDouble（自动选更短的那种引号），
+    // 对应 Nu-Minify 配置里的 "best"
+    quote_style: 0,
+  },
+};
+
 // lang 预留给将来按语言分派，目前只支持 JS。
 export async function minify(text: string, _lang = 'js'): Promise<string> {
   const { minify: terserMinify } = await import('terser');
   // terser 解析失败会直接 reject，不返回 error 字段
-  const result = await terserMinify(text, { compress: true, mangle: true });
+  const result = await terserMinify(text, MINIFY_OPTIONS);
   if (typeof result.code !== 'string') throw new Error('压缩没有返回内容');
   return result.code;
 }

@@ -375,6 +375,21 @@ try {
     );
   }
 
+  console.log('11b. 压缩配置与 Nu-Minify 一致');
+  // 配置来自 VS Code 的 Nu-Minify 扩展，项目里存量的 .min.js 都是它生成的。
+  // 换个配置就会让交叉压缩产生巨大 diff，所以把关键行为锁住：
+  //   - 顶层变量名必须保留（global_obj 这类被数百个 PHP 模板引用）
+  //   - 局部变量要缩写
+  //   - 超长自动折行（max_line_len 32000），不会压成单独一行
+  const cfgSrc = readFileSync(join(root, 'src/modules/minify.ts'), 'utf8');
+  assert(/hoist_funs:\s*true/.test(cfgSrc), 'hoist_funs 打开，与存量文件顺序一致');
+  assert(/max_line_len:\s*32000/.test(cfgSrc), 'max_line_len 32000，超长折行');
+  assert(
+    /collapse_vars:\s*false/.test(cfgSrc) && /reduce_vars:\s*false/.test(cfgSrc),
+    'collapse_vars / reduce_vars 关闭，避免与存量文件产生大 diff',
+  );
+  assert(!/toplevel\s*:/.test(cfgSrc), '没有开启 toplevel，顶层名保持原样');
+
   console.log('12. 文件树右键可生成压缩版');
   // 右键菜单删掉后，这是创建第一个 .min.js 的唯一入口。
   // 用 fresh.js，它此前没有任何产物。
