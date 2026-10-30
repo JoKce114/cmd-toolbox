@@ -269,6 +269,11 @@ node tests/device-emulation-probe.mjs
 - **组内页签必须显式撑满**：`.tab-group-tabs` 是 grid、内层是 flex，
   不写 `height: 100%` + `align-items: stretch` 时页签会塌到内容高度（实测 20px，
   组外是 42px），同样表现为文字被切。
+- **拖拽态必须在落点处理函数里清**。拖进/拖出标签组会换父容器，React 卸载旧节点，
+  挂在页签上的 `onDragEnd` 收不到，`draggingId` 会永远停在那个页签上，表现为它一直
+  是 `opacity: 0.4` 的半透明灰。三个落点（页签 / 组标题 / 空白处）各自清一次；
+  `window` 上再挂一个**捕获阶段**的 `dragend` 兜住拖到窗口外松手的情况——冒泡阶段
+  不管用，处理函数里的 `stopPropagation()` 会挡掉。
 - **组内必须连续**。任何改变顺序的操作都要维持它：新页签用 `insertTabIntoList()`
   插到组末尾，加入已有组用 `moveById()` 贴到组尾。直接把页签 append 到数组末尾
   会把一个组拆成两段，界面上出现两个同名组标题。
