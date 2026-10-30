@@ -648,12 +648,31 @@ export default function App() {
       if (!result.ok) {
         // 后台轮询失败时保留上一次结果，否则红点会莫名其妙消失
         if (mode !== 'background') setUpdateCheck(result);
+        // 手动检查失败了要给出反馈，否则点了没反应
+        if (mode === 'manual') pushToast(result.message || '检查更新失败', 'error');
         return;
       }
       setUpdateCheck(result);
       // 首次启用这个功能：只记下当前版本，不打扰用户
       if (seen === null) {
         writeSeenVersion(result.current);
+        return;
+      }
+      // 手动检查是用户主动点的，一定要给结果：有新版弹公告，没新版也提示一句
+      if (mode === 'manual') {
+        if (result.hasUpdate) {
+          const releases = result.availableReleases?.length
+            ? result.availableReleases
+            : result.releases;
+          setAnnouncement({
+            kind: 'available',
+            version: result.latest || result.current,
+            releases: releases || [],
+            url: result.url,
+          });
+        } else {
+          pushToast(`已是最新版本（${result.current}）`, 'success');
+        }
         return;
       }
       if (mode !== 'startup' || !result.announce) return;
@@ -670,7 +689,7 @@ export default function App() {
     } finally {
       if (mode !== 'background') setUpdateBusy(false);
     }
-  }, []);
+  }, [pushToast]);
 
   useEffect(() => {
     // 只自动检查一次：会话恢复完成后再请求，避免和首屏抢网络

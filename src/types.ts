@@ -158,6 +158,7 @@ export type UpdateCheckResult =
       url: string;
       notes: string;
       releases: ReleaseNote[];
+      availableReleases: ReleaseNote[];
       announce: UpdateAnnounce;
     }
   | { ok: false; message: string };

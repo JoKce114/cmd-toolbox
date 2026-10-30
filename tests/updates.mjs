@@ -145,6 +145,28 @@ const detailedResult = updates.evaluateRelease(
 assert(detailedResult.notes.endsWith('口径一致'), '详细说明的结尾没有被截断');
 assert(detailedResult.notes.includes('Nest Hub Max'), '机型列表完整保留');
 
+// 手动检查：即使之前点过「稍后」（seen 已等于新版本），也要能拿到这次更新的内容
+const afterDismiss = updates.evaluateRelease(
+  '1.3.1',
+  [{ tag_name: 'v1.4.0', html_url: 'u', body: detailed }],
+  'v1.4.0',
+);
+assert(afterDismiss.announce === null, '点过稍后不再自动弹公告');
+assert(afterDismiss.releases.length === 0, '自动公告没有内容');
+assert(
+  afterDismiss.availableReleases.length === 1,
+  '手动检查仍能拿到本次更新的版本列表',
+);
+assert(
+  afterDismiss.availableReleases[0].notes.includes('Nest Hub Max'),
+  '手动检查的说明内容完整',
+);
+assert(
+  updates.evaluateRelease('1.4.0', [{ tag_name: 'v1.4.0', html_url: 'u', body: 'x' }], '1.4.0')
+    .availableReleases.length === 0,
+  '已是最新版本时没有可展示的更新内容',
+);
+
 console.log('4. checkForUpdate 走网络时的返回形状');
 const okResult = await updates.checkForUpdate(
   '1.0.0',

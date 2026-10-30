@@ -96,6 +96,10 @@ function evaluateRelease(current, releases, seenVersion) {
     announceReleases = rangeReleases(list, seenVersion, current);
   }
 
+  // 手动检查是用户主动发起的，即使 announce 判定为 null（比如之前已经点过「稍后」，
+  // seenVersion 已经等于新版本），也要能拿到这次更新包含哪些版本。
+  const availableReleases = hasUpdate ? rangeReleases(list, current, latest) : [];
+
   return {
     ok: true,
     current,
@@ -105,6 +109,7 @@ function evaluateRelease(current, releases, seenVersion) {
     // 兼容旧字段：设置面板只用它判断「有没有说明」，公告已经改用 releases
     notes: announceReleases.length ? announceReleases[0].notes : '',
     releases: announceReleases,
+    availableReleases,
     announce,
   };
 }

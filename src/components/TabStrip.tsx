@@ -214,10 +214,8 @@ export function TabStrip({
               onDrop={(event) => handleDrop(event, tab)}
               onDragEnd={clearDragState}
             >
-              <span
-                className="tab-dot"
-                style={tab.exited ? undefined : { backgroundColor: group.color }}
-              />
+              {/* 项目色点在同组里颜色一致、标题也写着项目名，只在退出且没有状态灯时留一个灰点 */}
+              {tab.exited && !showLamp ? <span className="tab-dot" /> : null}
               <span className="tab-title">
                 {showLamp ? (
                   <span

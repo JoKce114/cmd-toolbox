@@ -152,12 +152,19 @@ ok(
 );
 await page.screenshot({ path: join(shots, 'update-settings.png') });
 
-console.log('5. 手动检查不弹公告');
+console.log('5. 手动检查弹出公告');
 const hitsBeforeManual = hits;
 await page.getByRole('button', { name: '检查更新', exact: true }).click();
 await page.waitForTimeout(1500);
-ok((await modal.count()) === 0, '手动检查只在设置里显示结果');
-ok(hits >= hitsBeforeManual, '手动检查走的是同一个接口');
+ok((await modal.count()) === 1, '手动检查后发现新版本会弹公告');
+ok(
+  (await modal.innerText()).includes('发现新版本'),
+  '手动检查的公告标题正确',
+);
+// 主进程有 5 分钟缓存，命中缓存时不会重新请求，这也是正常的
+ok(hits >= hitsBeforeManual, '手动检查复用同一个接口（命中缓存时不再发请求）');
+await page.getByRole('button', { name: '稍后', exact: true }).click();
+await modal.waitFor({ state: 'detached', timeout: 10000 });
 
 console.log('6. 关于页签在设置最左');
 const tabs = await page.locator('.settings-tab').allInnerTexts();
