@@ -50,7 +50,6 @@
 | `src/components/CodeMirrorHost.tsx` | 新增 `diagnosticsRef` Compartment、右键菜单绑定 |
 | `src/components/EditorPane.tsx` | 透传 `prefs` 与模块回调 |
 | `src/components/SettingsModal.tsx` | 新增「模块」页签与开关列表 |
-| `src/editorKeymap.ts` | 新增 `formatDocument` 动作，默认 `Shift-Alt-F` |
 | `src/styles.css` | 模块列表样式（尽量复用 `.settings-item`） |
 | `CLAUDE.md` | 页签顺序注释、模块系统约定 |
 
@@ -344,8 +343,7 @@ stat 用于判断同名 .min.js 是否存在。"
 - Create: `src/modules/format.ts`
 - Create: `src/modules/registry.ts`
 - Create: `src/components/EditorContextMenu.ts`
-- Modify: `src/editorKeymap.ts`（新增 `formatDocument` 动作）
-- Modify: `src/components/CodeMirrorHost.tsx`（右键绑定、快捷键接线）
+- Modify: `src/components/CodeMirrorHost.tsx`（右键绑定、格式化工具函数）
 - Modify: `src/components/EditorPane.tsx`（透传 props）
 - Test: `tests/editor-modules.mjs`
 
@@ -455,7 +453,6 @@ export function buildEditorMenu(actions: EditorModuleActions): MenuEntry[] {
       type: 'item',
       id: 'editor-format',
       label: '格式化文档',
-      shortcut: 'Shift+Alt+F',
       disabled: !actions.canFormat,
       onSelect: actions.format,
     });
@@ -549,9 +546,9 @@ try {
   await openFile(page, 'sample.js');
   const before = await editorText(page);
   assert(before.includes('const a={x:1,y:2}'), '打开的是未格式化的原文');
-  await page.locator('.cm-content').first().click();
-  await page.keyboard.press('Shift+Alt+f');
-  await page.waitForTimeout(1200);
+  await page.locator('.cm-content').first().click({ button: 'right' });
+  await page.locator('.popup-menu').getByText('格式化文档', { exact: true }).click();
+  await page.waitForTimeout(1500);
   const after = await editorText(page);
   assert(after.includes('const a = { x: 1, y: 2 };'), '格式化后加了空格');
   assert(after.split('\n').length > 5, `格式化后行数变多，实际 ${after.split('\n').length}`);
@@ -599,44 +596,37 @@ Expected: FAIL，`.settings-tab` 里没有「模块」
 `src/components/CodeMirrorHost.tsx`：
 
 1. props 加 `lang: string`、`canFormat: boolean`、`onRequestMenu: (event: ReactMouseEvent) => void`
-2. 在 `displayRef` 之后加 `const formatRef = useRef(new Compartment());`
-3. 在 `EditorView` 创建处加进 extensions 数组：
+2. 文件底部加格式化工具函数（导出给 `EditorPane` 的菜单调用）：
 
 ```ts
-          formatRef.current.of(
-            canFormat
-              ? keymap.of([
-                  {
-                    key: 'Shift-Alt-f',
-                    run: (view) => {
-                      void applyFormat(view, lang);
-                      return true;
-                    },
-                  },
-                ])
-              : [],
-          ),
-```
-
-4. 文件底部加格式化工具函数：
-
-```ts
-async function applyFormat(view: EditorView, lang: string) {
+export async function applyFormat(view: EditorView, lang: string) {
   const { format } = await import('../modules/format');
   const target = view.state.sliceDoc();
   const next = await format(target, lang);
   if (next === target) return;
   view.dispatch({ changes: { from: 0, to: target.length, insert: next } });
 }
+
+// 只格式化当前选区；没有选区时行为与全文一致
+export async function applyFormatSelection(view: EditorView, lang: string) {
+  const { format } = await import('../modules/format');
+  const range = view.state.selection.main;
+  if (range.empty) return applyFormat(view, lang);
+  const target = view.state.sliceDoc(range.from, range.to);
+  const next = await format(target, lang);
+  if (next === target) return;
+  view.dispatch({ changes: { from: range.from, to: range.to, insert: next } });
+}
 ```
 
-5. 给编辑器容器加右键绑定：
+3. 给编辑器容器加右键绑定：
 
 ```tsx
 <div className="cm-host" ref={hostRef} onContextMenu={(event) => onRequestMenu(event)} />
 ```
 
 > 实际容器 class 以现有渲染结果为准，可能是 `hostRef` 对应的最外层 div。
+> **不接快捷键**：格式化只从右键菜单触发，`editorKeymap.ts` 不做任何改动。
 
 - [ ] **Step 8: EditorPane 透传**
 
@@ -646,26 +636,18 @@ async function applyFormat(view: EditorView, lang: string) {
 const [menu, setMenu] = useState<MenuState | null>(null);
 ```
 
-菜单项由 `buildEditorMenu` 生成，`onSelect` 里调用与快捷键相同的 `applyFormat`。
+菜单项由 `buildEditorMenu` 生成，`onSelect` 里调用 `applyFormat` / `applyFormatSelection`。
 
-- [ ] **Step 9: 注册 formatDocument 动作**
-
-`src/editorKeymap.ts` 的 `EditorActionId` 加 `'formatDocument'`，`DEFAULT_KEYBINDINGS` 加：
-
-```ts
-  formatDocument: 'Shift-Alt-F',
-```
-
-- [ ] **Step 10: 运行测试确认通过**
+- [ ] **Step 9: 运行测试确认通过**
 
 Run: `npx tsc --noEmit && npx vite build && node tests/editor-modules.mjs`
 Expected: PASS，两项断言通过
 
-- [ ] **Step 11: 提交**
+- [ ] **Step 10: 提交**
 
 ```bash
-git add src/modules src/components/EditorContextMenu.ts src/components/CodeMirrorHost.tsx src/components/EditorPane.tsx src/editorKeymap.ts tests/editor-modules.mjs package.json package-lock.json
-git commit -m "feat(editor): 代码格式化，右键菜单与 Shift+Alt+F"
+git add src/modules src/components/EditorContextMenu.ts src/components/CodeMirrorHost.tsx src/components/EditorPane.tsx tests/editor-modules.mjs package.json package-lock.json
+git commit -m "feat(editor): 代码格式化，右键菜单触发"
 ```
 
 ---
@@ -1094,7 +1076,7 @@ git commit -m "feat(settings): 新增「模块」页签与开关"
 
 - **编辑器模块**：设置里新增「模块」页签，可单独开关代码格式化、JS 压缩、
   JS/TS 语法检查、PHP 语法检查
-- **代码格式化**：编辑器右键「格式化文档」，或按 `Shift+Alt+F`。支持
+- **代码格式化**：编辑器右键「格式化文档」或「格式化选区」。支持
   JS / TS / HTML / CSS / JSON / Markdown
 - **JS 压缩**：右键「压缩为 xxx.min.js」生成压缩版；若同名 `.min.js` 已存在，
   之后每次保存 `.js` 都会自动更新它
@@ -1124,7 +1106,7 @@ git commit -m "docs: 记录模块系统的约定与压缩触发规则"
 - 范围表格的 4 个模块 → Task 1（清单）+ Task 3（格式化）+ Task 4（压缩）+ Task 5（诊断）
 - 数据模型 → Task 1
 - 模块接口 → Task 3 的 `registry.ts`
-- 格式化入口（右键 + Shift+Alt+F）→ Task 3
+- 格式化入口（右键菜单）→ Task 3
 - 压缩的手动/自动触发与 `.min.js` 存在性判定 → Task 4
 - 诊断的 Compartment 与 linter → Task 5
 - 设置界面「模块」页签 → Task 6
@@ -1134,9 +1116,12 @@ git commit -m "docs: 记录模块系统的约定与压缩触发规则"
 - 测试清单 → `tests/editor-modules.mjs` 分布在各 Task，`tests/module-catalog.mjs` 在 Task 1
 
 **已知缺口**（诚实记录，实施时需自行补）
-- `Ctrl+K Ctrl+F` 两段式快捷键未纳入计划，降级为菜单项「格式化选区」（设计稿已允许降级）
 - `tests/editor-modules.mjs` 里「打开文件」的具体选择器需在实施时按真实 DOM 调整
 - 设置开关是否「立即生效 vs 保存生效」，Task 6 采纳了「保存时写入」，与设计稿的「立即生效」有细微出入，以 Task 6 为准
+
+**已定决策**
+- **不接任何格式化快捷键**（用户明确要求）。`Shift+Alt+F` 与 `Ctrl+K Ctrl+F` 都不做，
+  格式化只从右键菜单触发。`src/editorKeymap.ts` 完全不动。
 
 **类型一致性**
 - `Diagnostic` 在 `registry.ts` 定义，`diagnose-js.ts` / `diagnose-php.ts` 都 `import type { Diagnostic } from './registry'`，一致

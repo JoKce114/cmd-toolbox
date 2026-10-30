@@ -93,12 +93,18 @@ type Diagnostic = {
 
 ### 入口
 
+**只有右键菜单，不绑定任何快捷键。**
+
 | 入口 | 操作 |
 |---|---|
 | 右键菜单 | 编辑器内右键 →「格式化文档」 |
-| 快捷键 | `Shift+Alt+F` 格式化全文；`Ctrl+K Ctrl+F` 格式化选区 |
+| 右键菜单 | 编辑器内右键 →「格式化选区」（有选区时可点） |
 
-有选区时只格式化选区，没有则整篇。
+用户明确要求不占快捷键。`Shift+Alt+F` 虽然 VS Code 在用、且本项目当前未被占用，
+但首版不接；`Ctrl+K Ctrl+F` 这种两段式组合键还需要改 `editorKeymap.ts` 的底层
+匹配逻辑，成本更高，一概不做。`src/editorKeymap.ts` 保持原样。
+
+有选区时点「格式化选区」只整理选区，点「格式化文档」则整篇。
 
 ### 行为
 
@@ -110,16 +116,6 @@ type Diagnostic = {
 **编辑器目前没有右键菜单。** `EditorPane.tsx` 里没有任何 `onContextMenu`
 绑定（终端、页签、侧栏都有，唯独编辑器没有）。需要新加一个，复用现有的
 `src/components/PopupMenu.tsx`。
-
-### 快捷键冲突
-
-现有 `DEFAULT_KEYBINDINGS` 已占用：`Tab`、`Shift-Tab`、`Shift-Alt-ArrowDown`、
-`Shift-Alt-ArrowUp`、`Alt-ArrowUp`、`Alt-ArrowDown`、`Ctrl-...` 等。
-`Shift-Alt-F` 未被占用，可直接使用。
-
-`Ctrl+K Ctrl+F` 是两段式组合键。现有 `editorKeymap.ts` 的
-`bindingsExtension` 只支持单段组合，需要扩展才能支持，或者首版只做
-`Shift+Alt+F`（全文）而选区格式化走菜单项「格式化选区」。
 
 ## 功能二：压缩
 
@@ -348,7 +344,7 @@ node_modules 读取）：
 ## 实施顺序
 
 1. **基础设施**：`catalog.ts`、`AppPrefs.enabledModules`、设置页签
-2. **格式化**：编辑器右键菜单（全新）+ 快捷键 + prettier 接入
+2. **格式化**：编辑器右键菜单（全新）+ prettier 接入
 3. **压缩**：`files:write-minified` IPC + 菜单项 + 保存钩子
 4. **诊断**：`@codemirror/lint` + acorn + php-parser
 5. **测试与文档**：两个测试文件 + CLAUDE.md 更新
@@ -364,5 +360,3 @@ node_modules 读取）：
   无感知，但如果用户项目里有超大文本文件，需确认不会拖慢保存
 - **prettier 打进来后 bundle 会变大**，需要确认 chunk 拆分生效，
   否则首屏加载变慢
-- `Ctrl+K Ctrl+F` 两段式快捷键需要改 `editorKeymap.ts`，是额外工作量，
-  可降级为菜单项
