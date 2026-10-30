@@ -159,6 +159,8 @@ node tests/smoke.mjs
 node tests/browser-device.mjs    # F5 刷新与移动端模拟
 node tests/tab-status.mjs        # AI 页签状态灯与未读
 node tests/tab-groups.mjs        # 标签组：建组/改名/改色/折叠/拖拽/重启恢复
+node tests/editor-modules.mjs    # 压缩、语法诊断、外部改动自动重载
+node tests/module-catalog.mjs    # 模块清单与默认开关（离线）
 node tests/clipboard-image.mjs   # 剪贴板图片识别（会占用系统剪贴板）
 node tests/device-emulation-probe.mjs
 ```
@@ -166,6 +168,17 @@ node tests/device-emulation-probe.mjs
 - **UI 测试必须独占，先关掉正在运行的 Cmd Toolbox。** `desktop/pane-api.js` 写死了
   `DEFAULT_PORT = 17382`，端口被占时 `paneApi.start()` 直接 reject，窗口不会创建，
   表现为 `firstWindow: Timeout 30000ms exceeded`。这不是测试的问题，是端口冲突。
+- **测试崩溃后残留的 electron 进程会污染后续运行**。一次失败会留下 4 个 electron
+  占着 17382，下一次直接起不来，看起来像「代码坏了」但其实是环境问题。跑测试前
+  固定先清理：
+
+  ```bash
+  powershell -NoProfile -Command "Get-Process electron -ErrorAction SilentlyContinue | Stop-Process -Force"
+  sleep 3
+  netstat -ano | grep LISTENING | grep 17382 || echo PORT_FREE
+  ```
+
+  判断依据：如果失败位置在每次运行时都不一样，多半是端口争用而不是代码缺陷。
 - 测试启动时应设 `CMDTOOLBOX_NO_UPDATE=1`，否则会真的打 GitHub。
   `tests/update-notify.mjs` 是例外：它用本地假服务器 + `CMDTOOLBOX_UPDATE_API` 覆盖接口地址。
 - `tests/smoke.mjs` 依赖 `D:/project-demo` 下的固定样例目录，且断言里写死了
@@ -294,6 +307,45 @@ node tests/device-emulation-probe.mjs
 - **`desktop/session.js` 按项目校验组**：没有页签引用、跨项目引用、id 重复的组
   全部丢弃；指向不存在组的 `tabGroupId` 置空。名字截断到 30 字符，颜色必须在
   枚举内（`TAB_GROUP_COLORS`），主进程和渲染进程各有一份，改的时候两处同改。
+
+## 编辑器模块
+
+模块是「能力」的容器：格式化已整体移除，现在只剩 **JS 压缩**（不需要开关，
+保存时自动执行）和 **JS / PHP 语法诊断**（设置里两个开关，点保存才生效）。
+
+- **压缩配置必须与 VS Code 的 Nu-Minify 扩展一致**，`src/modules/minify.ts` 的
+  `MINIFY_OPTIONS` 是从它的 `package.json` 默认值照搬的。实测用同一份配置能
+  **逐字节复现**项目里存量的 `.min.js`。terser 的默认值不同（多开
+  `collapse_vars`/`reduce_vars`、少开 `hoist_funs`、不折行），换回默认会让
+  同一个源文件压出差异很大的结果，交叉压缩时产生无意义的巨量 diff。
+- **顶层名绝不能缩写**。terser 的 `toplevel` 默认就是 false，别打开：
+  `global_obj` 被 293 个 PHP 模板和其他脚本引用、`methods` 339 个、`meta` 368 个，
+  改名会让它们全部 `ReferenceError`。Nu-Minify 本身也没做这件事。
+- **压缩的触发条件是「同名 `.min.js` 是否存在」**，不是设置开关。不存在就绝不
+  创建；存在才在每次保存时覆盖（哪怕源文件没改）。钩子挂在
+  `useEditorFiles.save()` 里 `if (!current.dirty) return false;` **之前**。
+- **压缩失败不能导致保存失败**（terser 报错只推 toast）。
+- **`.min.js` 只能由文件树右键「生成 xxx.min.js」创建**，编辑器右键菜单已移除。
+- **`files.write()` 不能创建新文件**（第一行 `fsp.stat` 会抛），新建产物走
+  `files:write-minified`。
+- **php-parser 需要 `process` shim**：它的 `src/lexer/numbers.js` 在模块加载时读
+  `process.arch`，渲染进程没有这个全局会 `ReferenceError` 把整个页面带崩（表现
+  为 PHP 诊断永远没有标记）。`diagnose-php.ts` 的 `installProcessShim()` 只在
+  import 期间临时挂 `{ arch }`，`finally` 里还原。**不要改用 vite `define`**——
+  它会全局文本替换所有依赖里的 `process.*`，影响 xterm 之类按平台分支的库。
+- **`ts`/`tsx` 不挂诊断**：acorn 不认识类型注解，挂上会满屏误报。设置项因此叫
+  「JS / JSX 语法检查」而不是「JS / TS」。
+- **模块依赖全部放 `devDependencies`**：vite 打进前端 bundle，运行时不从
+  node_modules 读。
+
+### 编辑器自动重新加载
+
+- **激活页签的外部改动会自动重新载入，静默不提示**（2 秒一轮，`reloadFromDisk`）。
+  这是为了对齐 VS Code：压缩更新了开着的 `.min.js`、git 切分支、外部工具改文件，
+  用户切回来都该看到磁盘上的真实内容。
+- **有未保存修改时一律跳过**，绝不覆盖用户手上的内容。
+- **压缩完成后必须主动调 `reloadFromDisk(target)`**，不能只靠轮询：轮询只盯激活
+  页签，而保存 `global.js` 时激活的是源文件，`.min.js` 永远轮不到。
 
 ## 界面约定
 - 标题栏底色是 `--surface: #ffffff`，红点（`.titlebar-update-dot`）用
