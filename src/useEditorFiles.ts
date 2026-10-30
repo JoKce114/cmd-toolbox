@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toErrorMessage } from './lib';
+import { minifiedName, minify, shouldAutoMinify } from './modules/minify';
 import type { Group, OpenedFile } from './types';
 
 export function normalizeNewlines(text: string): string {
@@ -154,6 +155,22 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
       // 主动按 Ctrl+S 等于声明「这个文件我要留着」，哪怕内容没改过，
       // 也不该在打开别的文件时被顶替。
       touchedRef.current.add(relPath);
+
+      // 自动压缩必须挂在「内容没变就返回」之前：用户要求不管有没有修改都执行。
+      // 判定依据是「同名 .min.js 是否存在」，不是设置开关——不存在就绝不创建。
+      // 压缩失败只提示，不影响本次保存。
+      void (async () => {
+        try {
+          const projectPath = groupRef.current.path;
+          if (!(await shouldAutoMinify(projectPath, relPath))) return;
+          const target = minifiedName(relPath);
+          const compressed = await minify(current.content);
+          await window.api.files.writeMinified(projectPath, target, compressed);
+        } catch (error) {
+          onError(`压缩为 ${minifiedName(relPath)} 失败：${toErrorMessage(error)}`);
+        }
+      })();
+
       if (!current.dirty) return false;
 
       const written = current.content;

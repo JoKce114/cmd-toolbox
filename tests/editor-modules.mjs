@@ -1,7 +1,7 @@
 // 编辑器模块的端到端测试。
 // 需要独占 17382 端口，跑之前先关掉正在运行的 Cmd Toolbox。
 import { _electron as electron } from 'playwright-core';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -45,6 +45,13 @@ for (let i = 0; i < 12; i += 1) {
   raceLines.push(`function f${i}(){if(!v${i}.a){return ${i}}return ${i + 1}}`);
 }
 writeFileSync(join(projectDir, 'race.ts'), `${raceLines.join('\n')}\n`, 'utf8');
+
+// 压缩用例：
+// plain.js 没有同名产物，保存多少次都不能凭空创建 plain.min.js；
+// withmin.js 已有产物，保存必须覆盖它（哪怕源文件没改）。
+writeFileSync(join(projectDir, 'plain.js'), 'const x = 1;\nfunction f(){return x}\n', 'utf8');
+writeFileSync(join(projectDir, 'withmin.js'), 'const y = 1;\n', 'utf8');
+writeFileSync(join(projectDir, 'withmin.min.js'), '/*old*/', 'utf8');
 
 const app = await electron.launch({
   executablePath: resolve(root, 'node_modules/electron/dist/electron.exe'),
@@ -179,6 +186,63 @@ try {
   );
   await page.keyboard.press('Escape');
 
+  console.log('7. 压缩：同名 .min.js 不存在时保存不创建');
+  await openFile(page, 'plain.js');
+  const plainBefore = await editorText(page);
+  assert(plainBefore.includes('const x = 1;'), '打开的是 plain.js 原文');
+  await page.locator('.cm-content').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\nconst extra = 1;');
+  await page.keyboard.press('Control+s');
+  // 等「已保存」出现，确认这次保存真的走完了写盘流程
+  await page
+    .locator('.toast-success')
+    .filter({ hasText: '已保存' })
+    .last()
+    .waitFor({ timeout: 8000 });
+  // 压缩是保存钩子里的异步任务，多等一会
+  await page.waitForTimeout(2000);
+  assert(
+    !existsSync(join(projectDir, 'plain.min.js')),
+    '没有 .min.js 时保存不创建它',
+  );
+
+  console.log('8. 压缩：同名 .min.js 存在时自动更新');
+  const minPath = join(projectDir, 'withmin.min.js');
+  await openFile(page, 'withmin.js');
+  await page.locator('.cm-content').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\nconst z = 2;');
+  await page.keyboard.press('Control+s');
+  await waitFor(
+    () => !readFileSync(minPath, 'utf8').includes('/*old*/'),
+    8000,
+    '.min.js 被覆盖更新',
+  );
+  const minified = readFileSync(minPath, 'utf8');
+  assert(!minified.includes('/*old*/'), '已有 .min.js 被覆盖更新');
+  assert(
+    minified.length < 40,
+    `压缩结果很短，实际长度 ${minified.length}`,
+  );
+  assert(minified.includes('z=2'), `压缩结果来自最新源文件，实际 ${minified}`);
+
+  console.log('9. 压缩：源文件没改动也重新压缩');
+  const mtimeBefore = statSync(minPath).mtimeMs;
+  await page.locator('.cm-content').first().click();
+  // 拉开时间差，避免文件系统 mtime 精度导致比对失败
+  await page.waitForTimeout(1100);
+  await page.keyboard.press('Control+s');
+  await waitFor(
+    () => statSync(minPath).mtimeMs > mtimeBefore,
+    8000,
+    '.min.js 的 mtime 更新',
+  );
+  assert(
+    statSync(minPath).mtimeMs > mtimeBefore,
+    '内容没改时按 Ctrl+S 也会刷新 .min.js 的 mtime',
+  );
+
   console.log(`\n全部通过（${passed} 项）`);
 } finally {
   await app.close().catch(() => {});
@@ -199,4 +263,19 @@ async function openFile(page, name) {
 // 读编辑器全文：CodeMirror 的内容不在 textarea 里，只能从 DOM 取
 async function editorText(page) {
   return page.locator('.cm-content').first().innerText();
+}
+
+// 同步条件轮询，用于等文件被异步压缩任务写出来
+async function waitFor(predicate, timeout, label) {
+  const start = Date.now();
+  let lastError = null;
+  while (Date.now() - start < timeout) {
+    try {
+      if (predicate()) return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`等待超时：${label}${lastError ? `（${lastError.message}）` : ''}`);
 }

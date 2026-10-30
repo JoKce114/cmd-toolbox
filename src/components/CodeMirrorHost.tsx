@@ -44,8 +44,6 @@ export type CodeMirrorHostProps = {
   bracketMatching: boolean;
   showWhitespace: boolean;
   lang: string;
-  // 只影响菜单里有哪些项（由 EditorPane 组装），不参与右键是否挂载
-  canFormat: boolean;
   onFontSizeDelta?: (delta: number) => void;
   // 返回 true 表示已弹出自定义菜单，此时吃掉默认右键行为
   onRequestMenu?: (

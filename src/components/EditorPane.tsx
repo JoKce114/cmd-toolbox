@@ -9,6 +9,7 @@ import { CodeMirrorHost, applyFormat, applyFormatSelection } from './CodeMirrorH
 import { PopupMenu } from './PopupMenu';
 import { buildEditorMenu } from './EditorContextMenu';
 import { modulesFor } from '../modules/catalog';
+import { isMinifiable, minifiedName, minify } from '../modules/minify';
 import type { EditorView } from '@codemirror/view';
 import type { Group, MenuState, Tab } from '../types';
 import type { TerminalThemeMode } from '../theme';
@@ -91,6 +92,9 @@ export function EditorPane({
   const [searchOpen, setSearchOpen] = useState(false);
   const [pendingClose, setPendingClose] = useState<string | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  // 同名 .min.js 的状态：右键菜单要同步显示「新建 / 已过期 / 覆盖」，
+  // 而 stat 是异步的，所以在切换文件时预先取一次。
+  const [minTarget, setMinTarget] = useState<{ exists: boolean; mtime: number } | null>(null);
 
   const rootRef = useRef<HTMLElement>(null);
   const fileRef = useRef(file);
@@ -233,6 +237,28 @@ export function EditorPane({
     setMenu(null);
   }, [activePath]);
 
+  const minifyEnabled = isMinifiable(activePath) &&
+    modulesFor('minify', lang).some((module) => enabledModules.includes(module.id));
+
+  useEffect(() => {
+    setMinTarget(null);
+    if (!activePath || !minifyEnabled) return;
+    let cancelled = false;
+    const target = minifiedName(activePath);
+    void window.api.files
+      .stat(group.path, target)
+      .then((info) => {
+        if (!cancelled) setMinTarget(info);
+      })
+      .catch(() => {
+        // 菜单只是提示用，取不到状态就按「不存在」处理；真正点击时失败会再报错
+        if (!cancelled) setMinTarget({ exists: false, mtime: 0 });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activePath, group.path, minifyEnabled]);
+
   const handleRequestMenu = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>, view: EditorView, menuLang: string) => {
       const run = (action: Promise<void>) => {
@@ -242,19 +268,35 @@ export function EditorPane({
           // 否则紧接着的 Ctrl+Z 收不到
           .finally(() => view.focus());
       };
+      const targetName = activePath.split('/').pop() || '';
+      const target = minifiedName(activePath);
+      const minifyLabel = !minTarget || !minTarget.exists
+        ? `压缩为 ${target.split('/').pop() || targetName}`
+        : fileRef.current.mtime > minTarget.mtime
+          ? `压缩为 ${target.split('/').pop() || targetName}（已过期）`
+          : `压缩为 ${target.split('/').pop() || targetName}（覆盖）`;
+      const runMinify = async () => {
+        const currentPath = activePathRef.current;
+        if (!currentPath) return;
+        const projectPath = group.path;
+        const compressed = await minify(fileRef.current.content, menuLang);
+        const output = minifiedName(currentPath);
+        await window.api.files.writeMinified(projectPath, output, compressed);
+        onToast(`已生成 ${output.split('/').pop()}`, 'success');
+      };
       const items = buildEditorMenu({
         canFormat,
         hasSelection: !view.state.selection.main.empty,
         format: () => run(applyFormat(view, menuLang)),
         formatSelection: () => run(applyFormatSelection(view, menuLang)),
-        minify: null,
-        minifyLabel: '压缩为 .min.js',
+        minify: minifyEnabled ? () => run(runMinify()) : null,
+        minifyLabel,
       });
       if (!items.length) return false;
       setMenu({ x: event.clientX, y: event.clientY, items });
       return true;
     },
-    [canFormat, onToast],
+    [canFormat, minifyEnabled, minTarget, activePath, group.path, onToast],
   );
 
   return (
@@ -388,7 +430,6 @@ export function EditorPane({
               bracketMatching={bracketMatching}
               showWhitespace={showWhitespace}
               lang={lang}
-              canFormat={canFormat}
               onFontSizeDelta={onFontSizeDelta}
               onRequestMenu={handleRequestMenu}
               onChange={(value) => update(activePath, value)}
