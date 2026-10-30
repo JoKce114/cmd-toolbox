@@ -56,6 +56,11 @@ writeFileSync(join(projectDir, 'bad.min.js'), '/*keep-me*/', 'utf8');
 // 写入失败路径：保存时把源文件设成只读，用来验证「保存没成功就不压缩」
 writeFileSync(join(projectDir, 'ro.js'), 'const ro = 1;\n', 'utf8');
 writeFileSync(join(projectDir, 'ro.min.js'), '/*OLD*/', 'utf8');
+// 诊断用例的夹具：文件树只在编辑器页签挂载时列一次根目录，
+// 所以必须在启动前就创建好（测试中途新建的文件不会出现在树里）。
+writeFileSync(join(projectDir, 'diag-bad.js'), 'const = ;\n', 'utf8');
+writeFileSync(join(projectDir, 'diag-valid.js'), 'const a = 1;\nfunction f() { return a; }\n', 'utf8');
+writeFileSync(join(projectDir, 'diag-bad.php'), '<?php $a = ;\n', 'utf8');
 
 const app = await electron.launch({
   executablePath: resolve(root, 'node_modules/electron/dist/electron.exe'),
@@ -388,6 +393,51 @@ try {
   assert(
     (await page.locator('.popup-menu').count()) === 0,
     '.min.js 右键不弹压缩菜单',
+  );
+
+  console.log('14. 诊断：默认不开 JS 诊断，开启后出现波浪线');
+  await openFile(page, 'diag-bad.js');
+  // 默认 diag-js 关闭，等过 linter 的 500ms 延迟确认确实没有标记
+  await page.waitForTimeout(1200);
+  assert(
+    (await page.locator('.cm-lint-marker').count()) === 0,
+    '默认关闭 JS 诊断时语法错误不标波浪线',
+  );
+
+  // 设置 → 模块 → 打开「JS / TS 语法检查」→ 保存（开关点保存才生效）
+  await page.locator('.titlebar-settings').click();
+  await page.locator('.settings-body').waitFor({ timeout: 8000 });
+  await page.getByRole('tab', { name: '模块' }).click();
+  await page.waitForTimeout(200);
+  const jsDiagRow = page.locator('.settings-item').filter({ hasText: 'JS / TS 语法检查' });
+  await jsDiagRow.locator('.settings-switch').click();
+  await page
+    .locator('.modal-footer')
+    .getByRole('button', { name: '保存', exact: true })
+    .click();
+  await page.locator('.settings-body').waitFor({ state: 'detached', timeout: 8000 });
+  // 保存后 prefs 更新会重配 linter，linter 自身还有 500ms 延迟；
+  // 用 waitFor 等标记出现，避免固定的 sleep 在慢机器上偶发失败。
+  await page.locator('.cm-lint-marker').first().waitFor({ timeout: 10000 });
+  assert(
+    (await page.locator('.cm-lint-marker').count()) > 0,
+    '开启 JS 诊断后语法错误出现波浪线',
+  );
+
+  console.log('15. 诊断：合法 JS 不误报');
+  await openFile(page, 'diag-valid.js');
+  await page.waitForTimeout(1500);
+  assert(
+    (await page.locator('.cm-lint-marker').count()) === 0,
+    '合法 JS 没有波浪线',
+  );
+
+  console.log('16. 诊断：PHP 默认开启，语法错误标波浪线');
+  await openFile(page, 'diag-bad.php');
+  await page.locator('.cm-lint-marker').first().waitFor({ timeout: 10000 });
+  assert(
+    (await page.locator('.cm-lint-marker').count()) > 0,
+    'PHP 语法错误出现波浪线',
   );
 
   console.log(`\n全部通过（${passed} 项）`);

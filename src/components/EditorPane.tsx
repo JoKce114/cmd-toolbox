@@ -5,7 +5,8 @@ import { useEditorFiles } from '../useEditorFiles';
 import { FileTree } from './FileTree';
 import { SearchPanel } from './SearchPanel';
 import { CodeMirrorHost } from './CodeMirrorHost';
-import { modulesFor } from '../modules/catalog';
+import { findModule, modulesFor } from '../modules/catalog';
+import type { EditorModule } from '../modules/catalog';
 import { enqueueMinify, isMinifiable, minifiedName } from '../modules/minify';
 import type { Group, Tab } from '../types';
 import type { TerminalThemeMode } from '../theme';
@@ -68,7 +69,7 @@ export function EditorPane({
   enabledModules,
   onFontSizeDelta,
 }: EditorPaneProps) {
-  // 诊断模块还没接入（Task 5 用），先保留这个 prop 以免调用方反复改动
+  // 压缩开关只管文件树「生成压缩版」；保存时的自动更新不看这个开关。
   const minifyEnabled = modulesFor('minify', 'js').some((module) =>
     enabledModules.includes(module.id),
   );
@@ -247,6 +248,19 @@ export function EditorPane({
 
   const encodingLabel = ENCODING_LABEL[file.encoding] || file.encoding;
 
+  // 诊断模块按当前文件扩展名与开关状态挑一个。
+  // findModule 返回清单里的同一对象，引用稳定，可以安全作为 effect 依赖；
+  // 这样父组件每次渲染产生新的 enabledModules 数组也不会反复重配 linter。
+  const lang = activePath.split('.').pop()?.toLowerCase() || '';
+  const diagnosticModule: EditorModule | null =
+    lang === 'php'
+      ? enabledModules.includes('diag-php')
+        ? findModule('diag-php') ?? null
+        : null
+      : ['js', 'mjs', 'cjs', 'jsx'].includes(lang) && enabledModules.includes('diag-js')
+        ? findModule('diag-js') ?? null
+        : null;
+
   return (
     <section
       ref={rootRef}
@@ -384,6 +398,7 @@ export function EditorPane({
               highlightActiveLine={highlightActiveLine}
               bracketMatching={bracketMatching}
               showWhitespace={showWhitespace}
+              diagnosticModule={diagnosticModule}
               onFontSizeDelta={onFontSizeDelta}
               onChange={(value) => update(activePath, value)}
               onConflictCountChange={setConflictCount}

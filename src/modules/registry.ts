@@ -1,3 +1,5 @@
+import type { EditorModule } from './catalog';
+
 export type Diagnostic = {
   from: number;
   to: number;
@@ -5,5 +7,19 @@ export type Diagnostic = {
   message: string;
 };
 
-// 格式化已移除。压缩走 modules/minify 的 enqueueMinify；
-// 诊断在后续任务接入这里，按模块 id 分发到 ./diagnose-js 与 ./diagnose-php。
+// 按模块 id 分发到对应的诊断实现。动态 import 保证解析器只在真正启用时才加载。
+export async function runDiagnose(
+  module: EditorModule,
+  text: string,
+  lang: string,
+): Promise<Diagnostic[]> {
+  if (module.id === 'diag-php') {
+    const { diagnosePhp } = await import('./diagnose-php');
+    return diagnosePhp(text);
+  }
+  if (module.id === 'diag-js') {
+    const { diagnoseJs } = await import('./diagnose-js');
+    return diagnoseJs(text, lang);
+  }
+  return [];
+}

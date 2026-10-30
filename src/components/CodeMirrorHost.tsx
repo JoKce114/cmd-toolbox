@@ -16,6 +16,7 @@ import { bracketMatching as bracketMatchingExtension, indentUnit } from '@codemi
 import { bindingsExtension } from '../editorKeymap';
 import type { KeyBindingMap } from '../editorKeymap';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
+import { lintGutter, linter } from '@codemirror/lint';
 import { createRoot } from 'react-dom/client';
 import { languageFor } from '../editorLanguage';
 import { searchPhrases } from '../editorSearchPhrases';
@@ -25,6 +26,7 @@ import type { TerminalThemeMode } from '../theme';
 import { parseConflicts, resolveConflict } from '../conflictParser';
 import type { ConflictBlock, ConflictChoice } from '../conflictParser';
 import { ConflictBar } from './ConflictBar';
+import type { EditorModule } from '../modules/catalog';
 
 export type CodeMirrorHostProps = {
   value: string;
@@ -42,6 +44,9 @@ export type CodeMirrorHostProps = {
   highlightActiveLine: boolean;
   bracketMatching: boolean;
   showWhitespace: boolean;
+  // 当前文件命中的诊断模块；null 表示不挂 linter。
+  // 由上层按文件扩展名与 enabledModules 算好，避免把数组依赖带进 effect。
+  diagnosticModule: EditorModule | null;
   onFontSizeDelta?: (delta: number) => void;
   onChange: (value: string) => void;
   onConflictCountChange?: (count: number) => void;
@@ -167,6 +172,7 @@ export function CodeMirrorHost({
   highlightActiveLine,
   bracketMatching,
   showWhitespace,
+  diagnosticModule,
   onFontSizeDelta,
   onChange,
   onConflictCountChange,
@@ -180,6 +186,7 @@ export function CodeMirrorHost({
   const keysRef = useRef(new Compartment());
   const appearanceRef = useRef(new Compartment());
   const displayRef = useRef(new Compartment());
+  const diagnosticsRef = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   const onCountRef = useRef(onConflictCountChange);
   const onFontDeltaRef = useRef(onFontSizeDelta);
@@ -224,6 +231,7 @@ export function CodeMirrorHost({
           themeRef.current.of(themeExtensions(themeMode)),
           conflictField,
           languageRef.current.of([]),
+          diagnosticsRef.current.of([]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               onChangeRef.current(update.state.doc.toString());
@@ -316,6 +324,45 @@ export function CodeMirrorHost({
     });
     requestAnimationFrame(() => view.requestMeasure());
   }, [showLineNumbers, highlightActiveLine, bracketMatching, showWhitespace]);
+
+  // 诊断：只有文件语言命中已启用模块时才挂 linter。
+  // diagnosticModule 由上层从 enabledModules 算好（稳定引用），这里不直接依赖数组，
+  // 否则父组件每次渲染的新数组都会让 effect 反复 reconfigure。
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    if (!diagnosticModule) {
+      view.dispatch({ effects: diagnosticsRef.current.reconfigure([]) });
+      return;
+    }
+    const lang = filePath.split('.').pop()?.toLowerCase() || '';
+    const extension = [
+      // lintGutter 负责渲染左侧的 .cm-lint-marker，linter 负责正文里的波浪线。
+      linter(
+        async (target) => {
+          try {
+            const { runDiagnose } = await import('../modules/registry');
+            const found = await runDiagnose(diagnosticModule, target.state.sliceDoc(), lang);
+            const max = target.state.doc.length;
+            return found.map((item) => ({
+              from: Math.min(item.from, max),
+              to: Math.min(item.to, max),
+              severity: item.severity,
+              message: item.message,
+            }));
+          } catch (error) {
+            // 解析器加载失败或内部异常时返回空结果：
+            // 诊断是辅助功能，不能因为一次解析失败让整个编辑器不可用
+            console.error('[diagnostics] 诊断失败', error);
+            return [];
+          }
+        },
+        { delay: 500 },
+      ),
+      lintGutter(),
+    ];
+    view.dispatch({ effects: diagnosticsRef.current.reconfigure(extension) });
+  }, [filePath, diagnosticModule]);
 
   // Ctrl + 滚轮调整字号，与终端行为一致（TerminalPane 用的是同一套判定）。
   // passive 必须为 false，否则 preventDefault 无效，Chromium 会连带缩放整页。

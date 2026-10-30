@@ -307,7 +307,7 @@ node tests/device-emulation-probe.mjs
   折叠区标题都是 `<button>`，带 `aria-expanded` 和 `.section-caret.is-open` 箭头
 - 侧栏项目行只显示项目名，完整路径放在 `title` 里。不要再加回第二行路径——
   它是左栏变拥挤的主要原因
-- 设置页签顺序固定为 **关于 / 常规 / 终端 / 编辑器 / 快捷键**，「关于」必须第一位
+- 设置页签顺序固定为 **关于 / 常规 / 终端 / 编辑器 / 模块 / 快捷键**，「关于」必须第一位
   （`tests/update-notify.mjs` 有断言）。编辑器页签内部按 字体 / 显示 / 缩进 三组排列，
   组标题是 `.settings-group-title`
 - 设置面板里凡是需要写系统状态的操作（如开机启动），一律在点「保存」时执行，

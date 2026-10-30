@@ -5,6 +5,7 @@ import {
   Info,
   Keyboard,
   Power,
+  Puzzle,
   RefreshCw,
   RotateCcw,
   Settings,
@@ -29,6 +30,7 @@ import {
   TERMINAL_FONT_SIZE_MIN,
 } from '../prefs';
 import type { AppPrefs, EditorFontFamily } from '../prefs';
+import { EDITOR_MODULES } from '../modules/catalog';
 import type { LoginItemResult, LoginItemState, UpdateCheckResult, UpdaterState } from '../types';
 
 type SettingsModalProps = {
@@ -46,13 +48,14 @@ type SettingsModalProps = {
   onSave: (prefs: AppPrefs) => void;
 };
 
-type TabId = 'about' | 'regular' | 'terminal' | 'editor' | 'keys';
+type TabId = 'about' | 'regular' | 'terminal' | 'editor' | 'modules' | 'keys';
 
 const ALL_TABS: { id: TabId; label: string; icon: typeof Info }[] = [
   { id: 'about', label: '关于', icon: Info },
   { id: 'regular', label: '常规', icon: Power },
   { id: 'terminal', label: '终端', icon: Terminal },
   { id: 'editor', label: '编辑器', icon: FileCode2 },
+  { id: 'modules', label: '模块', icon: Puzzle },
   { id: 'keys', label: '快捷键', icon: Keyboard },
 ];
 
@@ -168,6 +171,8 @@ export function SettingsModal({
   const [keybindings, setKeybindings] = useState<KeyBindingMap>({
     ...prefs.editorKeybindings,
   });
+  // 模块开关只改本地状态，和其他普通偏好一样点「保存」才写入
+  const [modules, setModules] = useState<string[]>([...prefs.enabledModules]);
   const [recording, setRecording] = useState<EditorActionId | null>(null);
   const [bindingError, setBindingError] = useState<string>('');
 
@@ -191,8 +196,17 @@ export function SettingsModal({
     onClose();
   };
 
-  const updateBinding = (action: EditorActionId, combo: string) => {
-    const normalized = normalizeCombo(combo);
+  const toggleModule = (id: string, enabled: boolean) => {
+    setModules((previous) =>
+      enabled
+        ? previous.includes(id)
+          ? previous
+          : [...previous, id]
+        : previous.filter((item) => item !== id),
+    );
+  };
+
+  const updateBinding = (action: EditorActionId, combo: string) => {    const normalized = normalizeCombo(combo);
 
     const reserved = RESERVED_BINDINGS.find(
       (item) => normalizeCombo(item.combo) === normalized,
@@ -256,6 +270,7 @@ export function SettingsModal({
       editorTabSize,
       editorIndentWithSpaces,
       editorKeybindings: keybindings,
+      enabledModules: modules,
     });
   };
 
@@ -591,6 +606,33 @@ export function SettingsModal({
               </div>
             </section>
           </>
+        ) : null}
+
+        {tab === 'modules' ? (
+          <section className="settings-group">
+            <div className="settings-item">
+              <div className="settings-item-text">
+                <span className="settings-item-label">
+                  已启用 {modules.length} / {EDITOR_MODULES.length}
+                </span>
+                <span className="settings-item-desc">
+                  关闭保存时自动压缩后，已存在的 .min.js 仍会更新；开关只管文件树的「生成压缩版」
+                </span>
+              </div>
+            </div>
+            {EDITOR_MODULES.map((item) => (
+              <div className="settings-item" key={item.id}>
+                <div className="settings-item-text">
+                  <span className="settings-item-label">{item.name}</span>
+                  <span className="settings-item-desc">{item.description}</span>
+                </div>
+                <Toggle
+                  checked={modules.includes(item.id)}
+                  onChange={(next) => toggleModule(item.id, next)}
+                />
+              </div>
+            ))}
+          </section>
         ) : null}
 
         {tab === 'keys' ? (
