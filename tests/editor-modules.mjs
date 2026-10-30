@@ -50,6 +50,9 @@ writeFileSync(join(projectDir, '.js'), 'const dotFile = 1;\n', 'utf8');
 // 用例 21：干净页签 + 磁盘被外部改成新内容，未修改保存不能压出旧产物
 writeFileSync(join(projectDir, 'stale.js'), 'const staleOld = 1;\n', 'utf8');
 writeFileSync(join(projectDir, 'stale.min.js'), '/*stale-marker*/', 'utf8');
+// 用例 22：已自动压缩过一次的目标，右键生成仍必须真正重写
+writeFileSync(join(projectDir, 'regress.js'), 'const regressBase = 1;\n', 'utf8');
+writeFileSync(join(projectDir, 'regress.min.js'), '/*regress-old*/', 'utf8');
 // 后缀为 .min.js 的文件自己不再压缩
 writeFileSync(join(projectDir, 'self.min.js'), 'const kept = 1;\n', 'utf8');
 // 文件树右键「生成压缩版」的源文件，此前没有任何产物
@@ -636,6 +639,12 @@ try {
   writeFileSync(staleSource, 'const staleNew = 2;\n', 'utf8');
   // 立刻按 Ctrl+S（不等 2 秒轮询）。没修改的页签会走 !dirty 分支，
   // 实现必须发现磁盘 mtime 变了并跳过压缩，否则旧内容会盖到新源文件的产物上。
+  // 先确认编辑器里确实还是旧内容：如果轮询已经抢先重载，这条用例就测不到
+  // 「干净页签 + 陈旧内存」的分支了，会变成假通过。
+  assert(
+    (await editorText(page)).includes('staleOld'),
+    'Ctrl+S 前编辑器仍是旧内容（确保走的是陈旧分支）',
+  );
   await page.keyboard.press('Control+s');
   await page.waitForTimeout(1500);
   const staleMinContent = readFileSync(staleMin, 'utf8');
@@ -664,6 +673,57 @@ try {
   assert(
     readFileSync(staleMin, 'utf8').includes('staleNew'),
     '重载后的保存把新内容压进产物',
+  );
+
+  console.log('22. 自动压缩过一次后，文件树右键仍能生成产物');
+  // 序号机制按目标记录 latestSeq 且不回收：右键生成如果没取新序号（落到 0），
+  // 会被先前任意一次自动压缩永久压住——返回 superseded、不写盘，
+  // 却照样弹「已生成」并打开旧产物。这条用例锁住这个回归。
+  const regressSource = join(projectDir, 'regress.js');
+  const regressMin = join(projectDir, 'regress.min.js');
+  await openFile(page, 'regress.js');
+  await page.locator('.cm-content').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\nconst regressAdded = 2;');
+  await page.keyboard.press('Control+s');
+  // 自动压缩把 latestSeq 抬到 ≥1
+  await waitFor(
+    () => readFileSync(regressMin, 'utf8').includes('regressAdded'),
+    10000,
+    '自动压缩写入产物',
+  );
+  const minBefore = statSync(regressMin).mtimeMs;
+  await page.waitForTimeout(1100);
+  // 先清掉「已保存」之类的旧提示，避免把旧 toast 当成本次的成功提示
+  await page.waitForTimeout(4200);
+  // 上一条用例的设置面板在慢机器上可能还没完全卸载，会挡住文件树的右键点击
+  await page.locator('.modal-overlay').waitFor({ state: 'detached', timeout: 10000 }).catch(() => {});
+  await page
+    .locator('.file-row')
+    .filter({ hasText: /^regress\.js$/ })
+    .click({ button: 'right' });
+  await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+  await page.locator('.popup-menu').getByText('生成 regress.min.js').click();
+  await page
+    .locator('.toast-success')
+    .filter({ hasText: '已生成 regress.min.js' })
+    .last()
+    .waitFor({ timeout: 10000 });
+  assert(
+    (await page
+      .locator('.toast-success')
+      .filter({ hasText: '已生成 regress.min.js' })
+      .count()) > 0,
+    '右键生成后弹出成功提示',
+  );
+  await waitFor(
+    () => statSync(regressMin).mtimeMs > minBefore,
+    10000,
+    '右键生成重写了产物',
+  );
+  assert(
+    statSync(regressMin).mtimeMs > minBefore,
+    '自动压缩过的目标仍能被右键重新生成',
   );
 
   console.log(`\n全部通过（${passed} 项）`);
@@ -736,19 +796,19 @@ function runEnqueueMinifyCases() {
 
     // 三次调用在同一 tick 内完成：第 1 个立即开跑，第 2 个进等待位，
     // 第 3 个覆盖等待位并让第 2 个直接 resolve。
-    const p1 = enqueueMinify('/proj', 'out.min.js', 'window.burst = 1;', write);
-    const p2 = enqueueMinify('/proj', 'out.min.js', 'window.burst = 2;', write);
-    const p3 = enqueueMinify('/proj', 'out.min.js', 'window.burst = 3;', write);
+    const p1 = enqueueMinify('/proj', 'out.min.js', 'window.burst = 1;', write, 1);
+    const p2 = enqueueMinify('/proj', 'out.min.js', 'window.burst = 2;', write, 2);
+    const p3 = enqueueMinify('/proj', 'out.min.js', 'window.burst = 3;', write, 3);
     const settled = await Promise.allSettled([p1, p2, p3]);
 
     // 写盘失败不能卡住队列
     const afterErrorWrites = [];
     const p4 = enqueueMinify('/proj', 'err.min.js', 'window.burst = 4;', async () => {
       throw new Error('模拟写盘失败');
-    });
+    }, 4);
     const p5 = enqueueMinify('/proj', 'err.min.js', 'window.burst = 5;', async (c) => {
       afterErrorWrites.push(c);
-    });
+    }, 5);
     const settled2 = await Promise.allSettled([p4, p5]);
 
     // 序号乱序：先发起（序号 1）的任务晚于后发起（序号 2）的任务入队，

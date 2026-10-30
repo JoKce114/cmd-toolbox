@@ -110,7 +110,8 @@ export type MinifyOutcome = 'written' | 'superseded';
 
 let minifySeqCounter = 0;
 
-// 在发起保存的那一刻调用（任何 await 之前），保证序号反映用户的真实操作顺序。
+// 在发起操作的那一刻调用（任何 await 之前）：自动压缩是保存时，
+// 手动生成是文件树右键时。保证序号反映用户的真实操作顺序。
 export function nextMinifySeq(): number {
   minifySeqCounter += 1;
   return minifySeqCounter;
@@ -154,7 +155,9 @@ export function enqueueMinify(
   targetPath: string,
   content: string,
   write: (compressed: string) => Promise<void>,
-  seq = 0,
+  // 必填：调用方必须在发起操作时取好序号。漏传会退化成 0，被任何一次
+  // 之前的自动压缩（序号 ≥1）永久压住，表现为「点了生成但什么都没发生」。
+  seq: number,
 ): Promise<MinifyOutcome> {
   const key = queueKey(projectPath, targetPath);
   return new Promise((resolve, reject) => {

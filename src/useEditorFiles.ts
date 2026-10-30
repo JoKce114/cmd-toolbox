@@ -366,6 +366,8 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
       void (async () => {
         // 先 stat 比 mtime，只有确实变了才整文件读取：
         // 省掉每 2 秒一次的全文件 IO，也降低读到别人半截写入的概率。
+        // 取舍：外部工具若写入后回拨/保留 mtime 就检测不到；NTFS 的 mtime
+        // 精度是 100ns，正常写入必变，不值得为此再整读一次内容。
         try {
           const info = await window.api.files.stat(groupRef.current.path, relPath);
           const latest = filesRef.current[relPath];

@@ -7,7 +7,7 @@ import { SearchPanel } from './SearchPanel';
 import { CodeMirrorHost } from './CodeMirrorHost';
 import { findModule } from '../modules/catalog';
 import type { EditorModule } from '../modules/catalog';
-import { enqueueMinify, isMinifiable, minifiedName } from '../modules/minify';
+import { enqueueMinify, isMinifiable, minifiedName, nextMinifySeq } from '../modules/minify';
 import type { Group, Tab } from '../types';
 import type { TerminalThemeMode } from '../theme';
 import type { KeyBindingMap } from '../editorKeymap';
@@ -219,11 +219,25 @@ export function EditorPane({
     async (relPath: string) => {
       const projectPath = group.path;
       const output = minifiedName(relPath);
+      // 序号必须在任何 await 之前取：与自动压缩共用「后发起者优先」判定。
+      // 漏传会落到 0，被本会话任意一次自动压缩永久压住，点了没有任何效果。
+      const seq = nextMinifySeq();
       try {
         const source = await window.api.files.read(projectPath, relPath);
-        await enqueueMinify(projectPath, output, source.content, async (compressed) => {
-          await window.api.files.writeMinified(projectPath, output, compressed);
-        });
+        const outcome = await enqueueMinify(
+          projectPath,
+          output,
+          source.content,
+          async (compressed) => {
+            await window.api.files.writeMinified(projectPath, output, compressed);
+          },
+          seq,
+        );
+        // 被更新的任务取代时并没有写盘：不能报成功，也不能打开旧产物
+        if (outcome !== 'written') {
+          onToast('已有更新的压缩任务，本次未写入', 'error');
+          return;
+        }
         onToast(`已生成 ${output.split('/').pop()}`, 'success');
         void open(output);
       } catch (error) {
