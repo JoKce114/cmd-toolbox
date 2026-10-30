@@ -158,6 +158,7 @@ node tests/update-notify.mjs
 node tests/smoke.mjs
 node tests/browser-device.mjs    # F5 刷新与移动端模拟
 node tests/tab-status.mjs        # AI 页签状态灯与未读
+node tests/clipboard-image.mjs   # 剪贴板图片识别（会占用系统剪贴板）
 node tests/device-emulation-probe.mjs
 ```
 
@@ -217,6 +218,20 @@ node tests/device-emulation-probe.mjs
   `LOGIN_VALUE_NAME` 是同一个字符串，**改名时两处必须同改**，
   否则卸载会留下一条指向已删除 exe 的死条目，每次开机弹错误。
 
+## 终端
+
+- **图片粘贴靠「模拟按键 + CLI 自己读剪贴板」**，应用不搬运图片。
+  `Ctrl+V` → `clipboard:has-image` 判定 → `pty:alt-v` → `coninject.exe` 往
+  `CONIN$` 写一组 Alt+V 的 INPUT_RECORD。Claude / Grok 绑 Alt+V，**opencode 绑 Ctrl+V**，
+  所以 opencode 直接写 `0x16` 到 pty、不走注入器。
+- **Electron 45 删掉了同步的 `clipboard.readImage()` / `writeImage()`**，只剩异步的
+  `read()` / `write()` + `ClipboardItem`（`ClipboardItem.types`、
+  `await item.getType(type)` 拿 Blob）。`hasImage` 必须写成
+  `(await clipboard.read()).some(it => it.types.some(t => t.startsWith('image/')))`。
+  用旧 API 会抛 TypeError 被 catch 吞成 `false`，**表现是「剪贴板里有图也贴不进去」，
+  没有任何报错**——v1.3.1 升 Electron 45 时就是这么悄悄坏的。
+  `tests/clipboard-image.mjs` 锁这个行为。
+
 ## 内置浏览器
 
 - **`webContents.enableDeviceEmulation` 不能用在 `<webview>` 上**。实测请求
@@ -254,6 +269,18 @@ node tests/device-emulation-probe.mjs
   会把用户正在看的页签误标未读（用 `activeTabByGroupRef` + `rightActiveByGroupRef`）
 - **空闲阈值是 `IDLE_RESET_MS = 15000`**。AI 等慢命令时可能十几秒不出字节，
   调短会误判「已完成」并制造假的未读提示
+- **收尾标记能把「跑完」的判定从 15 秒缩到 3 秒**（`TURN_DONE_IDLE_MS`）。
+  Grok 打 `Worked for 42s`、Claude Code 打 `✻ Baked for 1s · done 11:41`
+  （动词每次不同，所以按 `· done` 认，不按动词）。`endsWithTurnDone()` 会往回看
+  3 行，因为标记和提示符之间夹着一条分隔线。**不要认 `Thought for …s`**——
+  那是思考中的计时，认了会在思考阶段误判结束
+- **实测（2026-10-30）：AI 停在输入框时 pty 完全静默**，60 秒零字节，光标闪烁是
+  xterm 自己画的、不产生 pty 输出。所以别把「灯不落绿」归咎于重绘帧——先把
+  收尾标记对上。`visibleSignature()` 只拿来滤掉纯控制序列与耗时计数这类噪声，
+  不是判定依据
+- 别再为状态灯去读 xterm 缓冲区：`subscribeAllData` 的回调早于 TerminalPane 的
+  `term.write()`（`ptyBus` 先跑全局处理器再跑会话处理器），加上 write 本身是异步的，
+  读到的永远是上一帧甚至更早，表现为「快速回答全程不亮蓝」
 
 ## IPC 约定
 
