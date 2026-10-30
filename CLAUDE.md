@@ -94,6 +94,8 @@ Windows Defender 实时保护也是关闭的（`RealTimeProtectionEnabled: False
 放进 devDependencies 的后果是打包后启动即崩，报 `Cannot find module 'xxx'`。
 
 `npmRebuild: false`，不要打开——node-pty 在 CI 上预编译有风险。
+node-pty 1.1.0 用的是 node-addon-api（Node-API，ABI 稳定），已在 Electron 45
+（Node 24.22 / NAPI 10）上实测能加载并跑起 `cmd.exe`，所以升 Electron 不需要重建它。
 
 ## 自动更新
 
@@ -177,6 +179,20 @@ node tests/smoke.mjs
   会尊重系统代理。
 - **electron-builder 不读 Windows 系统代理**：只认 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量。
   下载 Electron 慢时先导出这两个变量。
+- **打包前必须先导出镜像**：electron-builder 也不读 `~/.npmrc` 的 registry，
+  直连 GitHub 会卡到 `Timeout awaiting 'request' for 600000ms`。本机是 npm 走
+  npmmirror 但打包直连，所以每次升 Electron 或第一次跑 `dist` 都要带上：
+
+  ```bash
+  ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ \
+  ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ \
+  npm run dist
+  ```
+
+  `node_modules/electron/dist` 存在**不代表**打包能拿到二进制——那是 npm 装依赖时
+  下的，electron-builder 只认自己的 `%LOCALAPPDATA%\electron\Cache`。
+- **打包报 `directory rename failed ... code=EPERM`**：索引器占着上次的
+  `release/win-unpacked`，builder 会自己重试并最终成功，不用干预。
 - **winCodeSign 解压失败**（`Cannot create symbolic link ... darwin\...`）：
   是 macOS 符号链接需要管理员权限。用 `7za` 解包时排除 `darwin` 目录即可。
 - **编辑器字号/行高/字体只能由主题扩展设置**：`src/editorTheme.ts` 的
