@@ -147,6 +147,19 @@ try {
     (await count(page, '.tab-group .tab')) === 1,
     `拖出后组里剩一个页签，实际 ${await count(page, '.tab-group .tab')}`,
   );
+  // 拖出组会换父容器，React 卸载旧节点后 dragend 收不到，拖拽态曾经永远留着，
+  // 表现为该页签一直是半透明（文字看起来特别浅）
+  assert(
+    (await count(page, '.tab.is-dragging')) === 0,
+    '拖拽结束后没有残留的 is-dragging 页签',
+  );
+  const draggedOpacity = await page
+    .locator('.tab')
+    .evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).opacity));
+  assert(
+    draggedOpacity.every((value) => value === '1'),
+    `所有页签都是不透明的，实际 ${draggedOpacity.join('/')}`,
+  );
 
   console.log('9. 拖动组标题整组移动');
   const beforeOrder = await page.locator('.tab').evaluateAll((nodes) =>

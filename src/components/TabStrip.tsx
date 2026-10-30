@@ -125,6 +125,23 @@ export function TabStrip({
     setDropGroupId(null);
   };
 
+  // 拖进/拖出标签组会换父容器，React 卸载旧节点，挂在页签上的 onDragEnd 收不到，
+  // 拖拽态就永远留着（表现为页签一直是半透明）。drop 处理函数里各自会清一次，
+  // 这里用捕获阶段兜住「拖到窗口外松手」这类没有落点的情况。
+  useEffect(() => {
+    const reset = () => {
+      draggingIdRef.current = null;
+      draggingGroupIdRef.current = null;
+      dropHintRef.current = null;
+      setDraggingId(null);
+      setDraggingGroupId(null);
+      setDropHint(null);
+      setDropGroupId(null);
+    };
+    window.addEventListener('dragend', reset, true);
+    return () => window.removeEventListener('dragend', reset, true);
+  }, []);
+
   const handleGroupDragStart = (event: ReactDragEvent, run: TabRun) => {
     if (!run.group) return;
     event.dataTransfer.setData(TAB_GROUP_DRAG_TYPE, run.group.id);
@@ -188,9 +205,8 @@ export function TabStrip({
       event.stopPropagation();
       const hint = dropHintRef.current;
       const position = hint?.id === tab.id ? hint.position : 'before';
-      updateDropHint(null);
-      setDropGroupId(null);
       onMoveTabGroup(movedGroupId, tab.id, position);
+      clearDragState();
       return;
     }
     const fromId = draggingIdRef.current || event.dataTransfer.getData(TAB_DRAG_TYPE);
@@ -200,8 +216,7 @@ export function TabStrip({
     const hint = dropHintRef.current;
     const position = hint?.id === tab.id ? hint.position : 'before';
     const tabGroupId = groupByTabId.get(tab.id) ?? null;
-    updateDropHint(null);
-    setDropGroupId(null);
+    clearDragState();
     if (onPlaceTab) onPlaceTab(fromId, tab.id, position, tabGroupId);
     else onReorderTabs(fromId, tab.id, position, tabGroupId);
   };
@@ -231,8 +246,7 @@ export function TabStrip({
       event.preventDefault();
       event.stopPropagation();
       const last = run.tabs[run.tabs.length - 1];
-      updateDropHint(null);
-      setDropGroupId(null);
+      clearDragState();
       if (movedGroupId !== run.group.id) onMoveTabGroup(movedGroupId, last.id, 'after');
       return;
     }
@@ -241,8 +255,7 @@ export function TabStrip({
     event.preventDefault();
     event.stopPropagation();
     const last = run.tabs[run.tabs.length - 1];
-    updateDropHint(null);
-    setDropGroupId(null);
+    clearDragState();
     if (onPlaceTab) onPlaceTab(fromId, last.id, 'after', run.group.id);
     else onReorderTabs(fromId, last.id, 'after', run.group.id);
   };
@@ -253,16 +266,14 @@ export function TabStrip({
       draggingGroupIdRef.current || event.dataTransfer.getData(TAB_GROUP_DRAG_TYPE) || null;
     if (movedGroupId && onMoveTabGroup) {
       event.preventDefault();
-      updateDropHint(null);
-      setDropGroupId(null);
+      clearDragState();
       onMoveTabGroup(movedGroupId, null, 'after');
       return;
     }
     const fromId = draggingIdRef.current || event.dataTransfer.getData(TAB_DRAG_TYPE);
     if (!fromId) return;
     event.preventDefault();
-    updateDropHint(null);
-    setDropGroupId(null);
+    clearDragState();
     if (!onPlaceTab) return;
     onPlaceTab(fromId, null, 'after', null);
   };
