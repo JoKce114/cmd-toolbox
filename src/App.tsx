@@ -3014,6 +3014,7 @@ export default function App() {
           highlightActiveLine={prefs.editorHighlightActiveLine}
           bracketMatching={prefs.editorBracketMatching}
           showWhitespace={prefs.editorShowWhitespace}
+          enabledModules={prefs.enabledModules}
           onFontSizeDelta={(delta) => {
             setPrefs((previous) => {
               const editorFontSize = Math.min(

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import {
   EditorView,
   keymap,
@@ -42,7 +43,10 @@ export type CodeMirrorHostProps = {
   highlightActiveLine: boolean;
   bracketMatching: boolean;
   showWhitespace: boolean;
+  lang: string;
+  canFormat: boolean;
   onFontSizeDelta?: (delta: number) => void;
+  onRequestMenu?: (event: ReactMouseEvent<HTMLDivElement>, view: EditorView, lang: string) => void;
   onChange: (value: string) => void;
   onConflictCountChange?: (count: number) => void;
 };
@@ -167,7 +171,10 @@ export function CodeMirrorHost({
   highlightActiveLine,
   bracketMatching,
   showWhitespace,
+  lang,
+  canFormat,
   onFontSizeDelta,
+  onRequestMenu,
   onChange,
   onConflictCountChange,
 }: CodeMirrorHostProps) {
@@ -349,5 +356,33 @@ export function CodeMirrorHost({
     onCountRef.current?.(parseConflicts(value).length);
   }, [value]);
 
-  return <div className="codemirror-host" ref={hostRef} />;
+  // 右键菜单只处理「模块」能作用的语言；其余情况交回默认行为。
+  const handleContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!canFormat || !onRequestMenu) return;
+    const view = viewRef.current;
+    if (!view) return;
+    event.preventDefault();
+    onRequestMenu(event, view, lang);
+  };
+
+  return <div className="codemirror-host" ref={hostRef} onContextMenu={handleContextMenu} />;
+}
+
+export async function applyFormat(view: EditorView, lang: string) {
+  const { format } = await import('../modules/format');
+  const target = view.state.sliceDoc();
+  const next = await format(target, lang);
+  if (next === target) return;
+  view.dispatch({ changes: { from: 0, to: target.length, insert: next } });
+}
+
+// 只格式化当前选区；没有选区时行为与全文一致
+export async function applyFormatSelection(view: EditorView, lang: string) {
+  const { format } = await import('../modules/format');
+  const range = view.state.selection.main;
+  if (range.empty) return applyFormat(view, lang);
+  const target = view.state.sliceDoc(range.from, range.to);
+  const next = await format(target, lang);
+  if (next === target) return;
+  view.dispatch({ changes: { from: range.from, to: range.to, insert: next } });
 }

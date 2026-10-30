@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Save, Search, X } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import { useEditorFiles } from '../useEditorFiles';
 import { FileTree } from './FileTree';
 import { SearchPanel } from './SearchPanel';
-import { CodeMirrorHost } from './CodeMirrorHost';
-import type { Group, Tab } from '../types';
+import { CodeMirrorHost, applyFormat, applyFormatSelection } from './CodeMirrorHost';
+import { PopupMenu } from './PopupMenu';
+import { buildEditorMenu } from './EditorContextMenu';
+import { modulesFor } from '../modules/catalog';
+import type { EditorView } from '@codemirror/view';
+import type { Group, MenuState, Tab } from '../types';
 import type { TerminalThemeMode } from '../theme';
 import type { KeyBindingMap } from '../editorKeymap';
 import type { EditorFontFamily } from '../prefs';
@@ -39,6 +44,7 @@ export type EditorPaneProps = {
   highlightActiveLine: boolean;
   bracketMatching: boolean;
   showWhitespace: boolean;
+  enabledModules: string[];
   onFontSizeDelta: (delta: number) => void;
 };
 
@@ -62,6 +68,7 @@ export function EditorPane({
   highlightActiveLine,
   bracketMatching,
   showWhitespace,
+  enabledModules,
   onFontSizeDelta,
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
@@ -83,6 +90,7 @@ export function EditorPane({
   const [markingResolved, setMarkingResolved] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [pendingClose, setPendingClose] = useState<string | null>(null);
+  const [menu, setMenu] = useState<MenuState | null>(null);
 
   const rootRef = useRef<HTMLElement>(null);
   const fileRef = useRef(file);
@@ -214,6 +222,40 @@ export function EditorPane({
 
   const encodingLabel = ENCODING_LABEL[file.encoding] || file.encoding;
 
+  const baseName = activePath.split('/').pop() || '';
+  const lang = baseName.includes('.') ? baseName.split('.').pop()!.toLowerCase() : '';
+  const canFormat =
+    !file.readOnly &&
+    modulesFor('format', lang).some((module) => enabledModules.includes(module.id));
+
+  useEffect(() => {
+    // 切换文件时上一次的菜单已经指向旧文件，直接关掉
+    setMenu(null);
+  }, [activePath]);
+
+  const handleRequestMenu = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>, view: EditorView, menuLang: string) => {
+      const run = (action: Promise<void>) => {
+        void action
+          .catch((error) => onToast(toErrorMessage(error), 'error'))
+          // 菜单项点击后焦点落在 portal 里的按钮上，操作完还给编辑器，
+          // 否则紧接着的 Ctrl+Z 收不到
+          .finally(() => view.focus());
+      };
+      const items = buildEditorMenu({
+        canFormat,
+        hasSelection: !view.state.selection.main.empty,
+        format: () => run(applyFormat(view, menuLang)),
+        formatSelection: () => run(applyFormatSelection(view, menuLang)),
+        minify: null,
+        minifyLabel: '压缩为 .min.js',
+      });
+      if (!items.length) return;
+      setMenu({ x: event.clientX, y: event.clientY, items });
+    },
+    [canFormat, onToast],
+  );
+
   return (
     <section
       ref={rootRef}
@@ -344,7 +386,10 @@ export function EditorPane({
               highlightActiveLine={highlightActiveLine}
               bracketMatching={bracketMatching}
               showWhitespace={showWhitespace}
+              lang={lang}
+              canFormat={canFormat}
               onFontSizeDelta={onFontSizeDelta}
+              onRequestMenu={handleRequestMenu}
               onChange={(value) => update(activePath, value)}
               onConflictCountChange={setConflictCount}
             />
@@ -383,6 +428,8 @@ export function EditorPane({
           </div>
         </div>
       ) : null}
+
+      {menu ? <PopupMenu state={menu} onClose={() => setMenu(null)} /> : null}
     </section>
   );
 }
