@@ -4,6 +4,17 @@ const { app } = require('electron');
 
 const VERSION = 1;
 const MAX_TABS = 40;
+const MAX_TAB_GROUPS = 30;
+const TAB_GROUP_COLORS = [
+  'grey',
+  'blue',
+  'red',
+  'yellow',
+  'green',
+  'pink',
+  'purple',
+  'cyan',
+];
 
 function filePath() {
   return path.join(app.getPath('userData'), 'session.json');
@@ -14,6 +25,7 @@ function emptySession() {
     version: VERSION,
     activeGroupKey: 'global',
     tabs: [],
+    tabGroups: {},
     activeTabByGroup: {},
     sidebarCollapsed: false,
     rightIdsByGroup: {},
@@ -47,6 +59,7 @@ function normalizeTab(value) {
   return {
     id,
     groupKey,
+    tabGroupId: typeof value.tabGroupId === 'string' ? value.tabGroupId.slice(0, 40) : '',
     shellId,
     seq: Math.max(1, Math.min(999, Number(value.seq) || 1)),
     paneNo: Math.max(0, Math.min(999, Number(value.paneNo) || 0)),
@@ -132,10 +145,60 @@ function normalizeSession(raw) {
       }
     }
   }
+
+  // 组的成员关系由页签上的 tabGroupId 决定，没有成员的组直接丢掉
+  const usedGroupIds = new Map();
+  for (const tab of tabs) {
+    if (!tab.tabGroupId) continue;
+    let set = usedGroupIds.get(tab.groupKey);
+    if (!set) {
+      set = new Set();
+      usedGroupIds.set(tab.groupKey, set);
+    }
+    set.add(tab.tabGroupId);
+  }
+  const tabGroups = {};
+  if (raw.tabGroups && typeof raw.tabGroups === 'object') {
+    for (const [groupKey, list] of Object.entries(raw.tabGroups)) {
+      if (typeof groupKey !== 'string' || !Array.isArray(list)) continue;
+      const used = usedGroupIds.get(groupKey);
+      if (!used) continue;
+      const seenIds = new Set();
+      const groups = [];
+      for (const value of list) {
+        if (!value || typeof value !== 'object') continue;
+        const id = typeof value.id === 'string' ? value.id.slice(0, 40) : '';
+        if (!id || seenIds.has(id) || !used.has(id)) continue;
+        seenIds.add(id);
+        const name = typeof value.name === 'string' ? value.name.trim().slice(0, 30) : '';
+        groups.push({
+          id,
+          name: name || '标签组',
+          color: TAB_GROUP_COLORS.includes(value.color) ? value.color : 'grey',
+          collapsed: Boolean(value.collapsed),
+        });
+        if (groups.length >= MAX_TAB_GROUPS) break;
+      }
+      if (groups.length) tabGroups[groupKey] = groups;
+    }
+  }
+
+  // 指向不存在组的页签按未分组处理
+  const knownGroupIds = new Map();
+  for (const [groupKey, groups] of Object.entries(tabGroups)) {
+    knownGroupIds.set(groupKey, new Set(groups.map((group) => group.id)));
+  }
+  for (const tab of tabs) {
+    if (!tab.tabGroupId) continue;
+    const known = knownGroupIds.get(tab.groupKey);
+    if (!known || !known.has(tab.tabGroupId)) tab.tabGroupId = '';
+  }
+
   return {
     version: VERSION,
     activeGroupKey,
     tabs,
+    tabGroups,
     activeTabByGroup,
     sidebarCollapsed: Boolean(raw.sidebarCollapsed),
     rightIdsByGroup,

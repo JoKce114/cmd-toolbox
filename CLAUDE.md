@@ -158,6 +158,7 @@ node tests/update-notify.mjs
 node tests/smoke.mjs
 node tests/browser-device.mjs    # F5 刷新与移动端模拟
 node tests/tab-status.mjs        # AI 页签状态灯与未读
+node tests/tab-groups.mjs        # 标签组：建组/改名/改色/折叠/拖拽/重启恢复
 node tests/clipboard-image.mjs   # 剪贴板图片识别（会占用系统剪贴板）
 node tests/device-emulation-probe.mjs
 ```
@@ -244,6 +245,45 @@ node tests/device-emulation-probe.mjs
   `getType() === 'webview'` 判断，**不要**依赖渲染进程的 `did-attach` →
   `panes:attach-browser` 时序（实测经常抢不到，导致监听挂不上）。
 - 设备模拟与 `setZoomFactor` 互斥：进入模拟会把缩放归零，退出时还原。
+
+## 标签组
+
+对标 Chrome 标签分组。**组本身不存位置**，边界由「连续且 `tabGroupId` 相同的页签」
+派生（`src/tabGroups.ts` 的 `groupRuns`）。由此推出几条必须守住的规则：
+
+- **拖拽有两种载荷**：页签是 `TAB_DRAG_TYPE`，整组是 `TAB_GROUP_DRAG_TYPE`。
+  整组拖动靠拖组标题——组内页签自己可拖，会先一步截获拖拽，所以标题元素
+  必须 `draggable`，**里面的按钮绝不能加 `draggable={false}`**：Chrome 会因此
+  把整个祖先节点的拖拽一起禁掉，表现为「组标题拖不动」，而且时灵时不灵
+  （取决于 mousedown 落在按钮还是标题留白上）。
+- **视觉上靠三件事区分组成员**：彩色药丸组名、组容器浅底色、容器底部通栏色条。
+  组标题必须用**实心**彩色，不能用浅色底——浅底会被误读成「被选中的页签」。
+  组内选中页签浮白 + 彩色描边 + 项目名用组色，和组外页签的选中观感保持一致。
+- **折叠靠 `grid-template-columns: 1fr → 0fr` 过渡**，组内页签**不能卸载**
+  （早先是 `collapsed ? null : tabs.map(...)`，那样没有动画可播）。内层要
+  `min-width: 0` + `overflow: hidden`，外层的 `data-*`/`aria-hidden` 按折叠态给。
+  `max-width` 方案不行——内容宽度是动态的，得写死数值才过渡得了。
+- **页签文字的行盒要容得下中文**：`.tab-title` 的 `line-height` 不能是 `1`。
+  12px 字号在 `line-height: 1` 下行盒只有 12px，中日韩字形实际要 14px，
+  多出来的部分被祖先的 `overflow: hidden` 切掉，表现为「文字上下被削」。用 1.35。
+- **组内页签必须显式撑满**：`.tab-group-tabs` 是 grid、内层是 flex，
+  不写 `height: 100%` + `align-items: stretch` 时页签会塌到内容高度（实测 20px，
+  组外是 42px），同样表现为文字被切。
+- **组内必须连续**。任何改变顺序的操作都要维持它：新页签用 `insertTabIntoList()`
+  插到组末尾，加入已有组用 `moveById()` 贴到组尾。直接把页签 append 到数组末尾
+  会把一个组拆成两段，界面上出现两个同名组标题。
+- **组只存在于左栏**。`placeTab` 的 `half === 'right'` 会清掉 `tabGroupId`；
+  恢复会话时右栏页签也一律清组。分屏时右栏的 `TabStrip` 因而永远不会渲染出组。
+- **空组由 `applyTabs()` 统一回收**（`pruneTabGroups`）。关闭页签、移出组、
+  取消分组都走这条路，不要在别处再删组。
+- **折叠组的激活页签自动展开**（`App.tsx` 里的 effect）。折叠动作本身会把激活
+  页签移到组外，组外没有别的页签时不允许折叠，否则留下一块空白。
+- **落盘形状统一走 `buildSessionSnapshot()`**。三处保存（分屏比例防抖、
+  `saveSync` 关窗、200ms 防抖）共用它，加字段只改这一处——之前三份拷贝里
+  有两份漏了 `device`。
+- **`desktop/session.js` 按项目校验组**：没有页签引用、跨项目引用、id 重复的组
+  全部丢弃；指向不存在组的 `tabGroupId` 置空。名字截断到 30 字符，颜色必须在
+  枚举内（`TAB_GROUP_COLORS`），主进程和渲染进程各有一份，改的时候两处同改。
 
 ## 界面约定
 - 标题栏底色是 `--surface: #ffffff`，红点（`.titlebar-update-dot`）用

@@ -25,6 +25,7 @@ export interface ProjectSaveResult {
 export interface SessionTab {
   id: string;
   groupKey: string;
+  tabGroupId?: string;
   shellId: string;
   seq: number;
   paneNo: number;
@@ -42,6 +43,7 @@ export interface SessionTab {
 export interface SessionSnapshot {
   activeGroupKey: string;
   tabs: SessionTab[];
+  tabGroups?: Record<string, import('./types').TabGroup[]>;
   activeTabByGroup: Record<string, string | null>;
   sidebarCollapsed?: boolean;
   rightIdsByGroup?: Record<string, string[]>;

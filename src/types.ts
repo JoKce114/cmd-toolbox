@@ -39,9 +39,27 @@ export type Group = {
   color: string;
 };
 
+export type TabGroupColor =
+  | 'grey'
+  | 'blue'
+  | 'red'
+  | 'yellow'
+  | 'green'
+  | 'pink'
+  | 'purple'
+  | 'cyan';
+
+export type TabGroup = {
+  id: string;
+  name: string;
+  color: TabGroupColor;
+  collapsed: boolean;
+};
+
 export type Tab = {
   id: string;
   groupKey: string;
+  tabGroupId?: string | null;
   sessionId: string;
   shellId: string;
   seq: number;

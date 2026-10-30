@@ -29,6 +29,16 @@ import {
   X,
 } from 'lucide-react';
 import { moveById, nextPaneNo, toErrorMessage } from './lib';
+import {
+  insertTabIntoList,
+  lastTabOfGroup,
+  nextTabGroupColor,
+  pruneTabGroups,
+  setTabGroupMembership,
+  TAB_GROUP_COLORS,
+  TAB_GROUP_COLOR_LABEL,
+  TAB_GROUP_NAME_LIMIT,
+} from './tabGroups';
 import { accentFor, defaultTabTitle, GLOBAL_COLOR } from './theme';
 import type { TerminalThemeMode } from './theme';
 import { useGitStatus } from './gitStatus';
@@ -50,6 +60,7 @@ import type {
   StashEntry,
   SyncPrompt,
   Tab,
+  TabGroup,
   UpdateCheckResult,
   UpdaterState,
 } from './types';
@@ -104,6 +115,27 @@ const UPDATE_POLL_INTERVAL = 30 * 60 * 1000;
 
 function readTerminalTheme(): TerminalThemeMode {
   return window.localStorage.getItem(TERMINAL_THEME_STORAGE) === 'light' ? 'light' : 'dark';
+}
+
+// 会话落盘只有这一个形状，三处调用共用，避免漏字段
+function toSessionTab(tab: Tab) {
+  return {
+    id: tab.id,
+    groupKey: tab.groupKey,
+    tabGroupId: tab.tabGroupId || '',
+    shellId: tab.shellId,
+    seq: tab.seq,
+    paneNo: tab.paneNo,
+    descriptor: tab.descriptor,
+    custom: tab.custom,
+    cwd: tab.cwd,
+    url: tab.url || '',
+    device: tab.device || null,
+    conversationId: tab.conversationId || '',
+    filePath: tab.filePath || '',
+    diffChange: tab.diffChange || null,
+    diffCommit: tab.diffCommit || null,
+  };
 }
 
 function shellIcon(shellId: string) {
@@ -164,6 +196,8 @@ export default function App() {
   const [terminalThemeMode, setTerminalThemeMode] =
     useState<TerminalThemeMode>(readTerminalTheme);
   const [tabsByGroup, setTabsByGroup] = useState<Record<string, Tab[]>>({});
+  const [tabGroupsByGroup, setTabGroupsByGroup] = useState<Record<string, TabGroup[]>>({});
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [activeTabByGroup, setActiveTabByGroup] = useState<Record<string, string | null>>({});
   const [focusTick, setFocusTick] = useState(0);
   const [modelStatusBySession, setModelStatusBySession] = useState<Record<string, ModelStatus>>(
@@ -188,6 +222,8 @@ export default function App() {
   const [splitRatioByGroup, setSplitRatioByGroup] = useState<Record<string, number>>({});
 
   const tabsRef = useRef<Record<string, Tab[]>>({});
+  const tabGroupsByGroupRef = useRef<Record<string, TabGroup[]>>(tabGroupsByGroup);
+  tabGroupsByGroupRef.current = tabGroupsByGroup;
   const dirtyTabsRef = useRef<Map<string, boolean>>(new Map());
   // 改过就永久占住，保存后也不释放：新文件只能顶替没动过的编辑器页签
   const touchedTabsRef = useRef<Set<string>>(new Set());
@@ -208,40 +244,29 @@ export default function App() {
   const splitDragRef = useRef({ x: 0, ratio: 0.5, width: 1 });
   const [splitDragging, setSplitDragging] = useState(false);
 
+  const buildSessionSnapshot = useCallback(
+    () => ({
+      activeGroupKey: activeGroupKeyRef.current,
+      tabs: Object.values(tabsRef.current).flat().slice(0, 40).map(toSessionTab),
+      tabGroups: tabGroupsByGroupRef.current,
+      activeTabByGroup: activeTabByGroupRef.current,
+      sidebarCollapsed: sidebarCollapsedRef.current,
+      rightIdsByGroup: rightIdsByGroupRef.current,
+      rightActiveByGroup: rightActiveByGroupRef.current,
+      focusSideByGroup: focusSideByGroupRef.current,
+      splitRatioByGroup: splitRatioByGroupRef.current,
+    }),
+    [],
+  );
+
   // 分屏比例变化后延迟落盘：只靠关闭窗口时保存，异常退出会丢掉刚拖过的宽度
   useEffect(() => {
     if (!sessionReadyRef.current) return;
     const timer = window.setTimeout(() => {
-      window.api.session?.save?.({
-        activeGroupKey: activeGroupKeyRef.current,
-        tabs: Object.values(tabsRef.current)
-          .flat()
-          .slice(0, 40)
-          .map((tab) => ({
-            id: tab.id,
-            groupKey: tab.groupKey,
-            shellId: tab.shellId,
-            seq: tab.seq,
-            paneNo: tab.paneNo,
-            descriptor: tab.descriptor,
-            custom: tab.custom,
-            cwd: tab.cwd,
-            url: tab.url || '',
-            conversationId: tab.conversationId || '',
-            filePath: tab.filePath || '',
-            diffChange: tab.diffChange || null,
-            diffCommit: tab.diffCommit || null,
-          })),
-        activeTabByGroup: activeTabByGroupRef.current,
-        sidebarCollapsed: sidebarCollapsedRef.current,
-        rightIdsByGroup: rightIdsByGroupRef.current,
-        rightActiveByGroup: rightActiveByGroupRef.current,
-        focusSideByGroup: focusSideByGroupRef.current,
-        splitRatioByGroup: splitRatioByGroupRef.current,
-      }).catch(() => {});
+      window.api.session?.save?.(buildSessionSnapshot()).catch(() => {});
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [splitRatioByGroup, rightIdsByGroup]);
+  }, [buildSessionSnapshot, splitRatioByGroup, rightIdsByGroup]);
 
   const [prefs, setPrefs] = useState(readPrefs);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -404,9 +429,42 @@ export default function App() {
     });
   }, [activeTabByGroup, rightActiveByGroup, tabsByGroup]);
 
+  // 激活的页签落在折叠组里时必须自动展开，否则恢复会话后画面是空的
+  useEffect(() => {
+    const activeId = activeTabByGroup[activeGroupKey];
+    if (!activeId) return;
+    const tab = (tabsByGroup[activeGroupKey] || []).find((item) => item.id === activeId);
+    const groupId = tab?.tabGroupId;
+    if (!groupId) return;
+    const group = (tabGroupsByGroup[activeGroupKey] || []).find((item) => item.id === groupId);
+    if (!group?.collapsed) return;
+    setTabGroupsByGroup((previous) => {
+      const groups = previous[activeGroupKey] || [];
+      if (!groups.some((item) => item.id === groupId && item.collapsed)) return previous;
+      return {
+        ...previous,
+        [activeGroupKey]: groups.map((item) =>
+          item.id === groupId ? { ...item, collapsed: false } : item,
+        ),
+      };
+    });
+  }, [activeGroupKey, activeTabByGroup, tabGroupsByGroup, tabsByGroup]);
+
   const applyTabs = useCallback((next: Record<string, Tab[]>) => {
     tabsRef.current = next;
     setTabsByGroup(next);
+    // 组成员全没了就顺手删掉组，避免留下没有页签的空组
+    setTabGroupsByGroup((previous) => pruneTabGroups(previous, next));
+  }, []);
+
+  // 新页签默认跟当前激活页签同组；右栏不参与分组
+  const inheritedTabGroupId = useCallback((groupKey: string): string | null => {
+    const side = focusSideByGroupRef.current[groupKey] || 'left';
+    if (side === 'right' && (rightIdsByGroupRef.current[groupKey] || []).length) return null;
+    const activeId = activeTabByGroupRef.current[groupKey];
+    if (!activeId) return null;
+    const tab = (tabsRef.current[groupKey] || []).find((item) => item.id === activeId);
+    return tab?.tabGroupId || null;
   }, []);
 
   const refreshProjects = useCallback(async () => {
@@ -592,7 +650,20 @@ export default function App() {
           return;
         }
 
+        // 组不跨栏：右栏的页签恢复后一律不算组员
+        const rightSideIds = new Set(Object.values(snapshot.rightIdsByGroup || {}).flat());
+        const groupIdByTabId = new Map(
+          snapshot.tabs.map((tab) => [tab.id, tab.tabGroupId || null]),
+        );
+        for (const [key, list] of Object.entries(restoredTabs)) {
+          restoredTabs[key] = list.map((tab) => ({
+            ...tab,
+            tabGroupId: rightSideIds.has(tab.id) ? null : groupIdByTabId.get(tab.id) || null,
+          }));
+        }
+
         applyTabs(restoredTabs);
+        setTabGroupsByGroup(snapshot.tabGroups || {});
         const restoredActive: Record<string, string | null> = {};
         for (const [groupKey, list] of Object.entries(restoredTabs)) {
           const wanted = snapshot.activeTabByGroup[groupKey];
@@ -1426,35 +1497,7 @@ export default function App() {
   useEffect(() => {
     const flushSession = () => {
       if (!sessionReadyRef.current || !window.api?.session?.saveSync) return;
-      const tabs = Object.values(tabsRef.current)
-        .flat()
-        .slice(0, 40)
-        .map((tab) => ({
-          id: tab.id,
-          groupKey: tab.groupKey,
-          shellId: tab.shellId,
-          seq: tab.seq,
-          descriptor: tab.descriptor,
-          custom: tab.custom,
-          cwd: tab.cwd,
-          conversationId: tab.conversationId || '',
-          filePath: tab.filePath || '',
-          diffChange: tab.diffChange || null,
-          diffCommit: tab.diffCommit || null,
-          paneNo: tab.paneNo,
-          url: tab.url || '',
-          device: tab.device || null,
-        }));
-      window.api.session.saveSync({
-        activeGroupKey: activeGroupKeyRef.current,
-        tabs,
-        activeTabByGroup: activeTabByGroupRef.current,
-        sidebarCollapsed: sidebarCollapsedRef.current,
-        rightIdsByGroup: rightIdsByGroupRef.current,
-        rightActiveByGroup: rightActiveByGroupRef.current,
-        focusSideByGroup: focusSideByGroupRef.current,
-        splitRatioByGroup: splitRatioByGroupRef.current,
-      });
+      window.api.session.saveSync(buildSessionSnapshot());
     };
     const onHidden = () => {
       if (document.visibilityState === 'hidden') flushSession();
@@ -1472,38 +1515,13 @@ export default function App() {
   useEffect(() => {
     if (!info || !sessionReadyRef.current) return;
     const timer = window.setTimeout(() => {
-      const tabs = Object.values(tabsByGroup)
-        .flat()
-        .slice(0, 40)
-        .map((tab) => ({
-          id: tab.id,
-          groupKey: tab.groupKey,
-          shellId: tab.shellId,
-          seq: tab.seq,
-          descriptor: tab.descriptor,
-          custom: tab.custom,
-          cwd: tab.cwd,
-          conversationId: tab.conversationId || '',
-          filePath: tab.filePath || '',
-          paneNo: tab.paneNo,
-          url: tab.url || '',
-          device: tab.device || null,
-        }));
       void window.api.session
-        .save({
-          activeGroupKey,
-          tabs,
-          activeTabByGroup,
-          sidebarCollapsed,
-          rightIdsByGroup,
-          rightActiveByGroup,
-          focusSideByGroup,
-          splitRatioByGroup,
-        })
+        .save(buildSessionSnapshot())
         .catch((error) => pushToast(toErrorMessage(error), 'error'));
     }, 200);
     return () => window.clearTimeout(timer);
   }, [
+    buildSessionSnapshot,
     activeGroupKey,
     activeTabByGroup,
     focusSideByGroup,
@@ -1513,6 +1531,7 @@ export default function App() {
     rightIdsByGroup,
     sidebarCollapsed,
     splitRatioByGroup,
+    tabGroupsByGroup,
     tabsByGroup,
   ]);
 
@@ -1553,9 +1572,11 @@ export default function App() {
         return;
       }
       const groupTabs = tabsRef.current[group.key] || [];
+      const tabGroupId = inheritedTabGroupId(group.key);
       const tab: Tab = {
         id: crypto.randomUUID(),
         groupKey: group.key,
+        tabGroupId,
         sessionId: '',
         shellId: 'browser',
         seq: 1,
@@ -1566,7 +1587,7 @@ export default function App() {
         url: 'about:blank',
         exited: false,
       };
-      applyTabs({ ...tabsRef.current, [group.key]: [...groupTabs, tab] });
+      applyTabs({ ...tabsRef.current, [group.key]: insertTabIntoList(groupTabs, tab, tabGroupId) });
       setActiveGroupKey(group.key);
       const onRight =
         (focusSideByGroupRef.current[group.key] || 'left') === 'right' &&
@@ -1581,7 +1602,7 @@ export default function App() {
         setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
       }
     },
-    [applyTabs, pushToast],
+    [applyTabs, inheritedTabGroupId, pushToast],
   );
 
   const setTabDescriptor = useCallback(
@@ -1615,9 +1636,11 @@ export default function App() {
         return;
       }
       const groupTabs = tabsRef.current[group.key] || [];
+      const tabGroupId = inheritedTabGroupId(group.key);
       const tab: Tab = {
         id: crypto.randomUUID(),
         groupKey: group.key,
+        tabGroupId,
         sessionId: '',
         shellId: 'editor',
         seq: 1,
@@ -1628,11 +1651,11 @@ export default function App() {
         filePath,
         exited: false,
       };
-      applyTabs({ ...tabsRef.current, [group.key]: [...groupTabs, tab] });
+      applyTabs({ ...tabsRef.current, [group.key]: insertTabIntoList(groupTabs, tab, tabGroupId) });
       setActiveGroupKey(group.key);
       setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
     },
-    [applyTabs, pushToast],
+    [applyTabs, inheritedTabGroupId, pushToast],
   );
 
   const openDiffTab = useCallback(
@@ -1786,9 +1809,11 @@ export default function App() {
           groupTabs
             .filter((tab) => tab.shellId === shell.id)
             .reduce((maximum, tab) => Math.max(maximum, tab.seq), 0) + 1;
+        const tabGroupId = inheritedTabGroupId(group.key);
         const tab: Tab = {
           id: crypto.randomUUID(),
           groupKey: group.key,
+          tabGroupId,
           sessionId,
           shellId: shell.id,
           seq,
@@ -1799,7 +1824,10 @@ export default function App() {
           exited: false,
         };
 
-        applyTabs({ ...tabsRef.current, [group.key]: [...groupTabs, tab] });
+        applyTabs({
+          ...tabsRef.current,
+          [group.key]: insertTabIntoList(groupTabs, tab, tabGroupId),
+        });
         setActiveGroupKey(group.key);
         const onRight =
           (focusSideByGroupRef.current[group.key] || 'left') === 'right' &&
@@ -1820,7 +1848,7 @@ export default function App() {
         return null;
       }
     },
-    [applyTabs, createBrowser, info, pushToast, refreshProjects],
+    [applyTabs, createBrowser, inheritedTabGroupId, info, pushToast, refreshProjects],
   );
 
   const closeTabs = useCallback(
@@ -1887,6 +1915,165 @@ export default function App() {
       return true;
     },
     [applyTabs],
+  );
+
+  const createTabGroup = useCallback(
+    (groupKey: string, tabId: string) => {
+      const groups = tabGroupsByGroupRef.current[groupKey] || [];
+      const group: TabGroup = {
+        id: crypto.randomUUID(),
+        name: '新标签组',
+        color: nextTabGroupColor(groups),
+        collapsed: false,
+      };
+      const tabs = tabsRef.current[groupKey] || [];
+      const withMembership = setTabGroupMembership(tabs, tabId, group.id);
+      if (withMembership === tabs) return;
+      setTabGroupsByGroup((previous) => ({
+        ...previous,
+        [groupKey]: [...(previous[groupKey] || []), group],
+      }));
+      applyTabs({ ...tabsRef.current, [groupKey]: withMembership });
+      setRenamingGroupId(group.id);
+    },
+    [applyTabs],
+  );
+
+  const assignTabGroup = useCallback(
+    (groupKey: string, tabId: string, groupId: string | null) => {
+      const tabs = tabsRef.current[groupKey] || [];
+      let next = setTabGroupMembership(tabs, tabId, groupId);
+      if (next === tabs) return;
+      if (groupId) {
+        const last = lastTabOfGroup(next, groupId);
+        if (last && last.id !== tabId) {
+          const moved = moveById(next, tabId, last.id, 'after', (tab) => tab.id);
+          if (moved) next = moved;
+        }
+      }
+      applyTabs({ ...tabsRef.current, [groupKey]: next });
+    },
+    [applyTabs],
+  );
+
+  const renameTabGroup = useCallback((groupKey: string, groupId: string, rawName: string) => {
+    setRenamingGroupId(null);
+    const name = rawName.trim().slice(0, TAB_GROUP_NAME_LIMIT);
+    if (!name) return;
+    setTabGroupsByGroup((previous) => {
+      const groups = previous[groupKey] || [];
+      if (!groups.some((group) => group.id === groupId && group.name !== name)) return previous;
+      return {
+        ...previous,
+        [groupKey]: groups.map((group) => (group.id === groupId ? { ...group, name } : group)),
+      };
+    });
+  }, []);
+
+  const setTabGroupColor = useCallback(
+    (groupKey: string, groupId: string, color: TabGroup['color']) => {
+      setTabGroupsByGroup((previous) => {
+        const groups = previous[groupKey] || [];
+        if (!groups.some((group) => group.id === groupId && group.color !== color)) return previous;
+        return {
+          ...previous,
+          [groupKey]: groups.map((group) =>
+            group.id === groupId ? { ...group, color } : group,
+          ),
+        };
+      });
+    },
+    [],
+  );
+
+  const setTabGroupCollapsed = useCallback(
+    (groupKey: string, groupId: string, collapsed: boolean) => {
+      if (collapsed) {
+        // 折叠后组里的页签就看不见了，得先把激活页签挪到组外
+        const list = tabsRef.current[groupKey] || [];
+        const members = new Set(
+          list.filter((tab) => tab.tabGroupId === groupId).map((tab) => tab.id),
+        );
+        const rightIds = rightIdsByGroupRef.current[groupKey] || [];
+        const active = activeTabByGroupRef.current[groupKey];
+        const lastIndex = list.reduce(
+          (found, tab, index) => (members.has(tab.id) ? index : found),
+          -1,
+        );
+        const visible = (index: number) =>
+          !members.has(list[index].id) && !rightIds.includes(list[index].id);
+        if (active && members.has(active)) {
+          let pick: Tab | null = null;
+          for (let index = lastIndex + 1; index < list.length && !pick; index += 1) {
+            if (visible(index)) pick = list[index];
+          }
+          for (let index = lastIndex - 1; index >= 0 && !pick; index -= 1) {
+            if (visible(index)) pick = list[index];
+          }
+          // 组外没有别的页签时保持展开，否则留下一块空白
+          if (!pick) return;
+          setActiveTabByGroup((previous) => ({ ...previous, [groupKey]: pick!.id }));
+        }
+      }
+      setTabGroupsByGroup((previous) => {
+        const groups = previous[groupKey] || [];
+        if (!groups.some((group) => group.id === groupId && group.collapsed !== collapsed)) {
+          return previous;
+        }
+        return {
+          ...previous,
+          [groupKey]: groups.map((group) =>
+            group.id === groupId ? { ...group, collapsed } : group,
+          ),
+        };
+      });
+    },
+    [],
+  );
+
+  const moveTabGroup = useCallback(
+    (groupKey: string, groupId: string, toTabId: string | null, position: 'before' | 'after') => {
+      const list = tabsRef.current[groupKey] || [];
+      const members = list.filter((tab) => tab.tabGroupId === groupId);
+      if (!members.length) return;
+      const memberIds = new Set(members.map((tab) => tab.id));
+      // 落到自己组里等于没动
+      if (toTabId && memberIds.has(toTabId)) return;
+      const rest = list.filter((tab) => !memberIds.has(tab.id));
+      if (toTabId) {
+        const index = rest.findIndex((tab) => tab.id === toTabId);
+        if (index < 0) return;
+        // 右栏页签只存在于右栏顺序里，拿它当归位点会算错位置
+        if ((rightIdsByGroupRef.current[groupKey] || []).includes(toTabId)) return;
+        const insertAt = position === 'before' ? index : index + 1;
+        rest.splice(insertAt, 0, ...members);
+      } else {
+        rest.push(...members);
+      }
+      applyTabs({ ...tabsRef.current, [groupKey]: rest });
+    },
+    [applyTabs],
+  );
+
+  const toggleTabGroupCollapsed = useCallback(
+    (groupKey: string, groupId: string) => {
+      const group = (tabGroupsByGroupRef.current[groupKey] || []).find(
+        (item) => item.id === groupId,
+      );
+      if (!group) return;
+      setTabGroupCollapsed(groupKey, groupId, !group.collapsed);
+    },
+    [setTabGroupCollapsed],
+  );
+
+  const closeTabGroup = useCallback(
+    (groupKey: string, groupId: string) => {
+      const members = (tabsRef.current[groupKey] || [])
+        .filter((tab) => tab.tabGroupId === groupId)
+        .map((tab) => tab.id);
+      closeTabs(groupKey, members);
+    },
+    [closeTabs],
   );
 
   const updateBrowserUrl = useCallback((tabId: string, url: string) => {
@@ -2025,9 +2212,16 @@ export default function App() {
   );
 
   const reorderTabs = useCallback(
-    (groupKey: string, fromId: string, toId: string, position: 'before' | 'after') => {
+    (
+      groupKey: string,
+      fromId: string,
+      toId: string,
+      position: 'before' | 'after',
+      tabGroupId: string | null = null,
+    ) => {
       const currentTabs = tabsRef.current[groupKey] || [];
-      const nextList = moveById(currentTabs, fromId, toId, position, (tab) => tab.id);
+      const withMembership = setTabGroupMembership(currentTabs, fromId, tabGroupId);
+      const nextList = moveById(withMembership, fromId, toId, position, (tab) => tab.id);
       if (!nextList) return;
       applyTabs({ ...tabsRef.current, [groupKey]: nextList });
     },
@@ -2040,11 +2234,22 @@ export default function App() {
       targetId: string | null,
       half: 'left' | 'right',
       position: 'before' | 'after' = half === 'right' ? 'after' : 'before',
+      tabGroupId: string | null = null,
     ) => {
       if (!activeGroup) return;
       const key = activeGroup.key;
       const tabs = tabsRef.current[key] || [];
       if (!tabs.some((tab) => tab.id === fromId)) return;
+
+      // 组不跨栏：挪到右栏就自动退组
+      if (half === 'right') {
+        const withMembership = setTabGroupMembership(tabs, fromId, null);
+        if (withMembership !== tabs) applyTabs({ ...tabsRef.current, [key]: withMembership });
+      } else if (!targetId) {
+        // 落到左栏空白处：只改归属，位置留到最后
+        const withMembership = setTabGroupMembership(tabs, fromId, tabGroupId);
+        if (withMembership !== tabs) applyTabs({ ...tabsRef.current, [key]: withMembership });
+      }
 
       setRightIdsByGroup((previous) => {
         const current = previous[key] || [];
@@ -2083,7 +2288,7 @@ export default function App() {
           return { ...previous, [key]: remaining[remaining.length - 1] ?? null };
         });
         if (targetId && targetId !== fromId) {
-          reorderTabs(key, fromId, targetId, position);
+          reorderTabs(key, fromId, targetId, position, tabGroupId);
         }
       }
       setFocusTick((tick) => tick + 1);
@@ -2356,6 +2561,43 @@ export default function App() {
       event.preventDefault();
       event.stopPropagation();
       const groupTabs = tabsRef.current[tab.groupKey] || [];
+      // 分组只在左栏成立，右栏页签不给分组项
+      const onRightSide = (rightIdsByGroupRef.current[tab.groupKey] || []).includes(tab.id);
+      const currentGroupId = tab.tabGroupId || null;
+      const groupItems: MenuEntry[] = [];
+      if (!onRightSide) {
+        if (currentGroupId) {
+          groupItems.push({
+            type: 'item',
+            id: 'tab-group-leave',
+            label: '移出标签组',
+            icon: <X size={14} />,
+            onSelect: () => assignTabGroup(tab.groupKey, tab.id, null),
+          });
+        } else {
+          groupItems.push({
+            type: 'item',
+            id: 'tab-group-new',
+            label: '添加到新标签组',
+            onSelect: () => createTabGroup(tab.groupKey, tab.id),
+          });
+        }
+        const joinable = (tabGroupsByGroupRef.current[tab.groupKey] || []).filter(
+          (group) => group.id !== currentGroupId,
+        );
+        if (joinable.length) {
+          groupItems.push({ type: 'label', id: 'tab-group-join-label', label: '加入标签组' });
+          for (const group of joinable) {
+            groupItems.push({
+              type: 'item',
+              id: `tab-group-join-${group.id}`,
+              label: group.name,
+              icon: <span className="tab-group-dot" data-color={group.color} />,
+              onSelect: () => assignTabGroup(tab.groupKey, tab.id, group.id),
+            });
+          }
+        }
+      }
       const items: MenuEntry[] = [
         {
           type: 'item',
@@ -2386,6 +2628,9 @@ export default function App() {
             void restartTab(tab);
           },
         });
+      }
+      if (groupItems.length) {
+        items.push({ type: 'separator', id: 'tab-menu-sep-group' }, ...groupItems);
       }
       items.push(
         { type: 'separator', id: 'tab-menu-sep-1' },
@@ -2419,7 +2664,65 @@ export default function App() {
       );
       setMenu({ x: event.clientX, y: event.clientY, items });
     },
-    [closeTabs, copyWorkingDirectory, restartTab],
+    [assignTabGroup, closeTabs, copyWorkingDirectory, createTabGroup, restartTab],
+  );
+
+  const openTabGroupMenu = useCallback(
+    (event: ReactMouseEvent, tabGroup: TabGroup) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const groupKey = activeGroupKeyRef.current;
+      const items: MenuEntry[] = [
+        {
+          type: 'item',
+          id: 'tab-group-rename',
+          label: '重命名',
+          icon: <Pencil size={14} />,
+          onSelect: () => setRenamingGroupId(tabGroup.id),
+        },
+        { type: 'label', id: 'tab-group-color-label', label: '颜色' },
+        ...TAB_GROUP_COLORS.map(
+          (color): MenuEntry => ({
+            type: 'item',
+            id: `tab-group-color-${color}`,
+            label: TAB_GROUP_COLOR_LABEL[color],
+            icon: <span className="tab-group-dot" data-color={color} />,
+            onSelect: () => setTabGroupColor(groupKey, tabGroup.id, color),
+          }),
+        ),
+        { type: 'separator', id: 'tab-group-sep-1' },
+        {
+          type: 'item',
+          id: 'tab-group-collapse',
+          label: tabGroup.collapsed ? '展开标签组' : '折叠标签组',
+          onSelect: () => setTabGroupCollapsed(groupKey, tabGroup.id, !tabGroup.collapsed),
+        },
+        {
+          type: 'item',
+          id: 'tab-group-ungroup',
+          label: '取消分组',
+          onSelect: () => {
+            const members = (tabsRef.current[groupKey] || []).filter(
+              (tab) => tab.tabGroupId === tabGroup.id,
+            );
+            let next = tabsRef.current[groupKey] || [];
+            for (const tab of members) next = setTabGroupMembership(next, tab.id, null);
+            applyTabs({ ...tabsRef.current, [groupKey]: next });
+          },
+        },
+        { type: 'separator', id: 'tab-group-sep-2' },
+        {
+          type: 'item',
+          id: 'tab-group-close',
+          label: '关闭标签组',
+          icon: <X size={14} />,
+          danger: true,
+          onSelect: () => closeTabGroup(groupKey, tabGroup.id),
+        },
+      ];
+      setMenu({ x: event.clientX, y: event.clientY, items });
+    },
+    [applyTabs, closeTabGroup, setTabGroupCollapsed, setTabGroupColor],
   );
 
   const openTerminalMenu = useCallback(
@@ -2599,6 +2902,23 @@ export default function App() {
   ]);
 
   if (!info) return <BootScreen error={bootError} />;
+
+  const tabStripGroupProps = {
+    tabGroups: activeGroup ? tabGroupsByGroup[activeGroup.key] || [] : [],
+    renamingGroupId,
+    onToggleGroup: (groupId: string) => {
+      if (activeGroup) toggleTabGroupCollapsed(activeGroup.key, groupId);
+    },
+    onMoveTabGroup: (groupId: string, toTabId: string | null, position: 'before' | 'after') => {
+      if (activeGroup) moveTabGroup(activeGroup.key, groupId, toTabId, position);
+    },
+    onGroupMenu: openTabGroupMenu,
+    onStartGroupRename: (groupId: string) => setRenamingGroupId(groupId),
+    onCommitGroupRename: (groupId: string, name: string) => {
+      if (activeGroup) renameTabGroup(activeGroup.key, groupId, name);
+    },
+    onCancelGroupRename: () => setRenamingGroupId(null),
+  };
 
   const isPaneActive = (tab: Tab) => {
     if (!activeGroup || tab.groupKey !== activeGroup.key) return false;
@@ -2818,6 +3138,7 @@ export default function App() {
               <TabStrip
                 group={activeGroup}
                 tabs={activeTabs}
+                {...tabStripGroupProps}
                 activeTabId={effectiveActiveTabId}
                 canChooseShell
                 modelStatusBySession={tabModelStatus}
@@ -2831,8 +3152,8 @@ export default function App() {
                 onNewTab={() => spawnOnSide('left')}
                 onNewEditor={() => createEditor(activeGroup)}
                 onShellMenu={(event) => openShellMenu(event, activeGroup)}
-                onReorderTabs={(fromId, toId, position) =>
-                  reorderTabs(activeGroup.key, fromId, toId, position)
+                onReorderTabs={(fromId, toId, position, tabGroupId) =>
+                  reorderTabs(activeGroup.key, fromId, toId, position, tabGroupId)
                 }
               />
               <div
@@ -2869,6 +3190,7 @@ export default function App() {
                 <TabStrip
                   group={activeGroup}
                   tabs={leftTabs}
+                  {...tabStripGroupProps}
                   activeTabId={effectiveActiveTabId}
                   canChooseShell
                   modelStatusBySession={tabModelStatus}
@@ -2882,11 +3204,11 @@ export default function App() {
                   onNewTab={() => spawnOnSide('left')}
                   onNewEditor={() => createEditor(activeGroup)}
                   onShellMenu={(event) => openShellMenu(event, activeGroup)}
-                  onReorderTabs={(fromId, toId, position) =>
-                    reorderTabs(activeGroup.key, fromId, toId, position)
+                  onReorderTabs={(fromId, toId, position, tabGroupId) =>
+                    reorderTabs(activeGroup.key, fromId, toId, position, tabGroupId)
                   }
-                  onPlaceTab={(fromId, toId, position) =>
-                    placeTab(fromId, toId, 'left', position)
+                  onPlaceTab={(fromId, toId, position, tabGroupId) =>
+                    placeTab(fromId, toId, 'left', position, tabGroupId)
                   }
                 />
                 <div
@@ -2921,6 +3243,7 @@ export default function App() {
                 <TabStrip
                   group={activeGroup}
                   tabs={rightTabs}
+                  {...tabStripGroupProps}
                   activeTabId={effectiveRightTabId}
                   canChooseShell
                   modelStatusBySession={tabModelStatus}
@@ -2934,8 +3257,8 @@ export default function App() {
                   onNewTab={() => spawnOnSide('right')}
                   onNewEditor={() => createEditor(activeGroup)}
                   onShellMenu={(event) => openShellMenu(event, activeGroup)}
-                  onReorderTabs={(fromId, toId, position) =>
-                    reorderTabs(activeGroup.key, fromId, toId, position)
+                  onReorderTabs={(fromId, toId, position, tabGroupId) =>
+                    reorderTabs(activeGroup.key, fromId, toId, position, tabGroupId)
                   }
                   onPlaceTab={(fromId, toId, position) =>
                     placeTab(fromId, toId, 'right', position)

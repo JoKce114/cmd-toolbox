@@ -2312,11 +2312,11 @@ p {
 }
 
 .tabstrip {
-  flex: 0 0 49px;
+  flex: 0 0 48px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 12px;
   background: var(--bg-soft);
   border-bottom: 1px solid var(--border);
 }
@@ -2324,7 +2324,7 @@ p {
 .tabs-scroll {
   flex: 1;
   min-width: 0;
-  height: 33px;
+  height: 36px;
   display: flex;
   align-items: stretch;
   gap: 5px;
@@ -2418,7 +2418,9 @@ p {
   align-items: baseline;
   gap: 4px;
   font-size: 12px;
-  line-height: 1;
+  /* 行盒必须容得下中文：line-height: 1 只有 12px，字形实际要 14px，会被祖先的
+     overflow: hidden 切掉上下各一截 */
+  line-height: 1.35;
   white-space: nowrap;
 }
 
@@ -2500,6 +2502,216 @@ p {
 .tab-close:hover {
   background: #e8e8ed;
   color: #33363d;
+}
+
+/* 标签组：颜色只在 data-color 上声明成对变量，容器和菜单里的色点共用 */
+[data-color='grey'] {
+  --tg-accent: #5f6368;
+  --tg-tint: #e8eaed;
+}
+
+[data-color='blue'] {
+  --tg-accent: #1a73e8;
+  --tg-tint: #d2e3fc;
+}
+
+[data-color='red'] {
+  --tg-accent: #d93025;
+  --tg-tint: #fce8e6;
+}
+
+[data-color='yellow'] {
+  --tg-accent: #b06000;
+  --tg-tint: #fef7e0;
+}
+
+[data-color='green'] {
+  --tg-accent: #1e8e3e;
+  --tg-tint: #e6f4ea;
+}
+
+[data-color='pink'] {
+  --tg-accent: #c01a7d;
+  --tg-tint: #fde7f3;
+}
+
+[data-color='purple'] {
+  --tg-accent: #9334e6;
+  --tg-tint: #f3e8fd;
+}
+
+[data-color='cyan'] {
+  --tg-accent: #0b7b83;
+  --tg-tint: #e4f7fb;
+}
+
+.tab-group {
+  position: relative;
+  flex: 0 1 auto;
+  align-self: center;
+  min-width: 0;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 5px 0 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--tg-tint) 62%, #ffffff);
+  transition: background 110ms ease;
+}
+
+/* 组底部色条：这是区分「哪些页签同一个组」最直接的信号 */
+.tab-group::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--tg-accent);
+  pointer-events: none;
+}
+
+.tab-group.is-collapsed {
+  padding-right: 0;
+}
+
+/* 1fr → 0fr 是唯一能过渡到「内容自然宽度」的写法，max-width 需要写死数值 */
+.tab-group-tabs {
+  align-self: stretch;
+  height: 100%;
+  display: grid;
+  grid-template-columns: 1fr;
+  min-width: 0;
+  transition: grid-template-columns 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tab-group-tabs.is-collapsed {
+  grid-template-columns: 0fr;
+}
+
+.tab-group-tabs-inner {
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity 150ms ease 40ms;
+}
+
+.tab-group-tabs.is-collapsed .tab-group-tabs-inner {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 110ms ease;
+}
+
+.tab-group.is-drop-target {
+  box-shadow: inset 0 0 0 1.5px var(--tg-accent);
+}
+
+.tab-group.is-dragging {
+  opacity: 0.45;
+}
+
+.tab-group-label {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding-left: 2px;
+}
+
+.tab-group-label[draggable='true'] {
+  cursor: grab;
+}
+
+.tab-group-label[draggable='true']:active {
+  cursor: grabbing;
+}
+
+/* 组标题是实心彩色药丸，和「被选中的页签」在观感上彻底区分开 */
+.tab-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--tg-accent);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  outline: none;
+}
+
+.tab-group-toggle:hover {
+  filter: brightness(1.08);
+}
+
+.tab-group-toggle:focus-visible {
+  outline: 2px solid rgba(91, 108, 255, 0.45);
+  outline-offset: -1px;
+}
+
+.tab-group-dot {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tg-accent, #5f6368);
+}
+
+.tab-group-toggle .tab-group-dot {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.tab-group-name {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-group-count {
+  color: rgba(255, 255, 255, 0.78);
+  font-variant-numeric: tabular-nums;
+}
+
+.tab-group-input {
+  width: 96px;
+  height: 25px;
+  padding: 0 7px;
+  border: 1px solid var(--tg-accent);
+  border-radius: 6px;
+  background: var(--surface);
+  color: #1f2126;
+  font-size: 12px;
+  outline: none;
+}
+
+/* 组内页签：未选中融进组底色，选中直接浮白，和组外页签的选中观感一致 */
+.tab.in-group {
+  height: 100%;
+  background: transparent;
+}
+
+.tab-group .tab:hover {
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.tab-group .tab.active {
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--tg-accent) 34%, #e3e3e8);
+  box-shadow: 0 1px 2px rgba(16, 18, 24, 0.1), 0 4px 10px -6px rgba(16, 18, 24, 0.3);
+}
+
+/* 选中页签的项目名保持深色，别用组色——浅蓝小字在白底上会读成「禁用」 */
+.tab-group .tab.active .tab-project {
+  color: #1f2126;
 }
 
 .tab-empty-label {
