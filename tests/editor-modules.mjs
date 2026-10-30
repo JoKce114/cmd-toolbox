@@ -510,9 +510,10 @@ try {
     '关闭 JS 诊断并保存后波浪线消失',
   );
 
-  console.log('18. 压缩更新了已打开的 .min.js 时给出提示');
-  // 用户开着 min.js 页签（旧内容）时改源文件，后台会重写 min.js；
-  // 此时页签里还是旧内容，按保存会把产物覆盖掉，所以必须提醒。
+  console.log('18. 压缩更新已打开的 .min.js 时静默同步');
+  // 用户开着 min.js 页签（旧内容）时改源文件，后台会重写 min.js。
+  // 页签必须在压缩完成后自动变成新内容——否则用户切过去看到的还是旧内容，
+  // 按保存会把刚生成的产物覆盖掉。和 VS Code 一样不弹提示。
   // 先让 min.js 页签占住（没碰过的页签会被新文件顶替）。
   await openFile(page, 'pair.min.js');
   await page.locator('.cm-content').first().click();
@@ -523,19 +524,24 @@ try {
   await page.keyboard.press('Control+End');
   await page.keyboard.type('\nconst pairMarker = 42;');
   await page.keyboard.press('Control+s');
-  await page
-    .locator('.toast')
-    .filter({ hasText: '已更新' })
-    .last()
-    .waitFor({ timeout: 10000 });
-  assert(true, '压缩更新已打开的 .min.js 时给出提示');
-  // 产物本身仍然是新的
+  // 产物落盘
   await waitFor(
     () => readFileSync(join(projectDir, 'pair.min.js'), 'utf8').includes('pairMarker'),
     8000,
     'pair.min.js 含最新内容',
   );
-  assert(true, 'pair.min.js 已更新为最新内容');
+  // 切回 min.js 页签，编辑器里应该已经是新内容（不需要关掉重开）
+  await openFile(page, 'pair.min.js');
+  await page
+    .locator('.cm-content')
+    .first()
+    .filter({ hasText: 'pairMarker' })
+    .waitFor({ timeout: 10000 });
+  assert(true, '压缩后已打开的 .min.js 页签自动同步，无需重新打开');
+  assert(
+    (await page.locator('.toast').filter({ hasText: '关闭该页签' }).count()) === 0,
+    '不再提示「关闭页签重新打开」',
+  );
 
   console.log('19. 激活页签在磁盘上被改后自动重新加载');
   // 用外部写入模拟「别的工具改了文件」，编辑器应该在 2 秒内自己刷新

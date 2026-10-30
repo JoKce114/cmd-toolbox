@@ -40,11 +40,7 @@ const EMPTY: EditorFileState = {
 // 但用户需要能区分：前者该提示「没有修改」，后者该报错。
 export type SaveOutcome = 'saved' | 'unchanged' | 'failed';
 
-export function useEditorFiles(
-  group: Group,
-  onError: (message: string) => void,
-  onNotice: (message: string) => void,
-) {
+export function useEditorFiles(group: Group, onError: (message: string) => void) {
   const [files, setFiles] = useState<Record<string, EditorFileState>>({});
   const [activePath, setActivePath] = useState('');
   const groupRef = useRef(group);
@@ -155,6 +151,47 @@ export function useEditorFiles(
     [],
   );
 
+  // 从磁盘重新载入一个已打开的文件。有未保存修改时直接跳过——
+  // 那时用户手上有更新的内容，静默替换等于丢数据。
+  // 返回是否真的替换了内容。
+  const reloadFromDisk = useCallback(
+    async (relPath: string): Promise<boolean> => {
+      const state = filesRef.current[relPath];
+      if (!state || state.dirty || state.saving || state.loading) return false;
+      try {
+        const disk = await window.api.files.read(groupRef.current.path, relPath);
+        let replaced = false;
+        setFiles((previous) => {
+          const target = previous[relPath];
+          // await 期间用户可能开始编辑，再确认一次
+          if (!target || target.dirty || target.saving) return previous;
+          if (normalizeNewlines(target.content) === normalizeNewlines(disk.content)) {
+            // 内容一致但 mtime 可能对不上（本应用刚写过），顺手同步
+            if (target.mtime === disk.mtime) return previous;
+            return { ...previous, [relPath]: { ...target, mtime: disk.mtime } };
+          }
+          replaced = true;
+          return {
+            ...previous,
+            [relPath]: {
+              ...target,
+              content: disk.content,
+              savedContent: disk.content,
+              crlf: disk.content.includes('\r\n'),
+              mtime: disk.mtime,
+              dirty: false,
+            },
+          };
+        });
+        return replaced;
+      } catch {
+        // 文件被删或暂时读不了：忽略，下一轮再试
+        return false;
+      }
+    },
+    [],
+  );
+
   // 自动压缩：判定依据是「同名 .min.js 是否存在」，不是设置开关——不存在就绝不创建。
   // 压缩失败只提示，不 throw，保存流程继续。
   // 同一目标由 enqueueMinify 串行化并只写最后一次的内容，连按 Ctrl+S 不会写坏产物。
@@ -168,19 +205,18 @@ export function useEditorFiles(
           await enqueueMinify(projectPath, target, content, async (compressed) => {
             await window.api.files.writeMinified(projectPath, target, compressed);
           });
-          // 产物被后台改写了，如果它正好开着，页签里还是旧内容——
-          // 用户此时按保存会用旧内容覆盖掉刚生成的产物，必须提醒。
+          // 产物刚被改写。轮询只盯激活页签，而此刻激活的是源文件，
+          // 所以必须在这里主动把开着的 .min.js 页签刷成最新内容。
+          // 静默更新，不弹提示——和 VS Code 的外部改动行为一致。
           if (filesRef.current[target]) {
-            onNotice(
-              `${target.split('/').pop()} 已更新，关闭该页签重新打开可看到最新内容`,
-            );
+            await reloadFromDisk(target);
           }
         } catch (error) {
           onError(`压缩为 ${minifiedName(relPath)} 失败：${toErrorMessage(error)}`);
         }
       })();
     },
-    [onError, onNotice],
+    [onError, reloadFromDisk],
   );
 
   const save = useCallback(
@@ -305,42 +341,13 @@ export function useEditorFiles(
       const state = filesRef.current[relPath];
       // 正在保存或加载时不动，避免和保存流程抢
       if (!state || state.dirty || state.saving || state.loading || state.readOnly) return;
-      const projectPath = groupRef.current.path;
       void (async () => {
-        try {
-          const disk = await window.api.files.read(projectPath, relPath);
-          // 磁盘内容没变就不用动；只比 mtime 会误报（有些工具写文件不改 mtime 精度）
-          const latest = filesRef.current[relPath];
-          if (!latest || latest.dirty || latest.saving) return;
-          if (normalizeNewlines(latest.content) === normalizeNewlines(disk.content)) {
-            // 内容一致，但 mtime 可能对不上（本应用刚写过），顺手同步免得下次重复读
-            if (latest.mtime !== disk.mtime) patch(relPath, { mtime: disk.mtime });
-            return;
-          }
-          setFiles((previous) => {
-            const target = previous[relPath];
-            // await 期间用户可能开始编辑，再确认一次
-            if (!target || target.dirty || target.saving) return previous;
-            return {
-              ...previous,
-              [relPath]: {
-                ...target,
-                content: disk.content,
-                savedContent: disk.content,
-                crlf: disk.content.includes('\r\n'),
-                mtime: disk.mtime,
-                dirty: false,
-              },
-            };
-          });
-          onNotice(`${relPath.split('/').pop()} 已在磁盘上更新，已重新加载`);
-        } catch {
-          // 文件被删或暂时读不了：忽略，下一轮再试
-        }
+        // 静默更新：VS Code 也不弹提示，改了就是改了
+        await reloadFromDisk(relPath);
       })();
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [onNotice, patch]);
+  }, [reloadFromDisk]);
 
   const active = activePath ? files[activePath] : undefined;
   const openPaths = Object.keys(files);

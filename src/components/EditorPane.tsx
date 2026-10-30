@@ -81,7 +81,7 @@ export function EditorPane({
     save,
     close,
     setActivePath,
-  } = useEditorFiles(group, onError, (message) => onToast(message, 'info'));
+  } = useEditorFiles(group, onError);
 
   const [conflictCount, setConflictCount] = useState(0);
   const [hadConflict, setHadConflict] = useState(false);
