@@ -548,8 +548,39 @@ function attachBrowser(tabId, webContentsId) {
   guests.set(tabId, id);
 }
 
+// 焦点落在网页内部时，按键只在 guest 渲染进程里，应用收不到，
+// 所以刷新快捷键必须在主进程接管。绑定时机不能依赖渲染进程的 attach 回调
+// （did-attach 和 useEffect 有竞态），改由 web-contents-created 统一挂。
+const reloadBound = new Set();
+
+function bindBrowserKeys(contents) {
+  if (!contents || contents.isDestroyed()) return;
+  const id = contents.id;
+  if (reloadBound.has(id)) return;
+  reloadBound.add(id);
+
+  contents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const key = String(input.key || '');
+    const isReload = key === 'F5' || (input.control && key.toLowerCase() === 'r');
+    if (!isReload) return;
+    event.preventDefault();
+    if (input.shift) contents.reloadIgnoringCache();
+    else contents.reload();
+  });
+
+  contents.once('destroyed', () => reloadBound.delete(id));
+}
+
 function detachBrowser(tabId) {
   if (typeof tabId === 'string') guests.delete(tabId);
 }
 
-module.exports = { start, getInfo, setPanes, attachBrowser, detachBrowser };
+module.exports = {
+  start,
+  getInfo,
+  setPanes,
+  attachBrowser,
+  detachBrowser,
+  bindBrowserKeys,
+};

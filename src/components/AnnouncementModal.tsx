@@ -1,6 +1,69 @@
 import { Download, RefreshCw, RotateCcw, Sparkles } from 'lucide-react';
 import { Modal } from './Modal';
+import { parseInline, parseReleaseNotes, type NoteBlock } from '../releaseNotes';
 import type { ReleaseNote, UpdaterState } from '../types';
+
+function NoteLine({ text }: { text: string }) {
+  return (
+    <>
+      {parseInline(text).map((token, index) =>
+        token.kind === 'strong' ? (
+          <strong key={index}>{token.value}</strong>
+        ) : token.kind === 'code' ? (
+          <code key={index} className="note-code">
+            {token.value}
+          </code>
+        ) : (
+          <span key={index}>{token.value}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+function ReleaseNoteBody({ notes }: { notes: string }) {
+  const blocks = parseReleaseNotes(notes);
+  if (!blocks.length) return null;
+
+  return (
+    <>
+      {blocks.map((block: NoteBlock, index: number) => {
+        if (block.kind === 'heading') {
+          return (
+            <p className="note-heading" key={index}>
+              <NoteLine text={block.text} />
+            </p>
+          );
+        }
+        if (block.kind === 'subheading') {
+          return (
+            <p className="note-subheading" key={index}>
+              <NoteLine text={block.text} />
+            </p>
+          );
+        }
+        if (block.kind === 'bullet') {
+          return (
+            <p
+              className={block.depth > 0 ? 'note-bullet is-nested' : 'note-bullet'}
+              key={index}
+            >
+              <span className="note-bullet-mark">·</span>
+              <span>
+                <NoteLine text={block.text} />
+              </span>
+            </p>
+          );
+        }
+        return (
+          <p className="note-paragraph" key={index}>
+            <NoteLine text={block.text} />
+          </p>
+        );
+      })}
+    </>
+  );
+}
 
 export type Announcement = {
   kind: 'available' | 'updated';
@@ -63,7 +126,9 @@ export function AnnouncementModal({
                 </button>
               </div>
               {release.notes ? (
-                <p className="announcement-release-notes">{release.notes}</p>
+                <div className="announcement-release-notes">
+                  <ReleaseNoteBody notes={release.notes} />
+                </div>
               ) : (
                 <p className="announcement-release-notes is-empty">这个版本没有填写更新说明。</p>
               )}

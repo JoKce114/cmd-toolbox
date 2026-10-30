@@ -34,10 +34,11 @@ const release = {
   html_url: 'https://github.com/o/r/releases/tag/v1.1.0',
   body: 'a'.repeat(900),
 };
-const newer = updates.evaluateRelease('1.0.0', [release], null);
+// seenVersion 传当前版本才会生成公告正文，否则 releases 是空的
+const newer = updates.evaluateRelease('1.0.0', [release], '1.0.0');
 assert(newer.ok === true && newer.hasUpdate === true, '更新版本被识别');
 assert(newer.latest === 'v1.1.0' && newer.url.includes('v1.1.0'), '带出 tag 与页面地址');
-assert(newer.notes.length < 900, '更新说明被截断');
+assert(newer.releases[0].notes.length === 900, '常规长度的更新说明完整保留，不被截断');
 
 const same = updates.evaluateRelease('1.1.0', [release], null);
 assert(same.hasUpdate === false, '同版本不提示更新');
@@ -112,11 +113,37 @@ console.log('3d. 列表上限与说明截断');
 const many = Array.from({ length: 40 }, (_, i) => ({
   tag_name: `v1.0.${40 - i}`,
   html_url: `u${i}`,
-  body: 'b'.repeat(1200),
+  body: 'b'.repeat(3000),
 }));
 const capped = updates.evaluateRelease('0.0.1', many, '0.0.1');
 assert(capped.releases.length === 30, '最多列出 30 个版本');
-assert(capped.releases.every((r) => r.notes.length <= 601), '单条说明被截断');
+assert(capped.releases.every((r) => r.notes.length <= 2401), '超长说明仍会被截断兜底');
+
+// 一节带小标题和机型列表的说明不能被切掉
+const detailed = [
+  '## [1.4.0] - 2026-10-30',
+  '',
+  '### 新增',
+  '',
+  '**浏览器移动端模拟**',
+  '',
+  '- 内置 13 种设备，分四组：',
+  '  - 手机：iPhone SE、iPhone 16、iPhone 16 Pro Max、Pixel 9、Pixel 9 Pro、Pixel 10、Samsung Galaxy A55',
+  '  - 折叠屏：Pixel 9 Pro Fold、Galaxy Z Fold 6',
+  '  - 平板与桌面：iPad mini、iPad Pro 13"、Surface Pro 10',
+  '  - 智能屏：Nest Hub Max',
+  '',
+  '### 说明',
+  '',
+  '- 机型尺寸按 CSS 逻辑像素填写，与 Chrome 开发者工具的口径一致',
+].join('\n');
+const detailedResult = updates.evaluateRelease(
+  '1.3.1',
+  [{ tag_name: 'v1.4.0', html_url: 'u', body: detailed }],
+  '1.3.1',
+);
+assert(detailedResult.notes.endsWith('口径一致'), '详细说明的结尾没有被截断');
+assert(detailedResult.notes.includes('Nest Hub Max'), '机型列表完整保留');
 
 console.log('4. checkForUpdate 走网络时的返回形状');
 const okResult = await updates.checkForUpdate(

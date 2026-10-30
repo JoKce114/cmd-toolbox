@@ -7,7 +7,9 @@ const API_URL =
 const RELEASE_PAGE = `https://github.com/${REPO}/releases`;
 const TIMEOUT_MS = 8000;
 const CACHE_TTL = 5 * 60 * 1000;
-const NOTES_LIMIT = 600;
+// 带分节和机型列表的详细说明很容易超过 600 字符，截断会正好切在列表中间，
+// 公告反而看不明白。上限只用来兜底异常长的正文。
+const NOTES_LIMIT = 2400;
 const MAX_RELEASES = 30;
 
 // 延迟取 net：单测在纯 Node 里 require 本文件时 electron 不是真实模块

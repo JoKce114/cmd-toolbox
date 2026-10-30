@@ -32,6 +32,7 @@ export interface SessionTab {
   custom: boolean;
   cwd: string;
   url?: string;
+  device?: import('./types').DeviceProfile | null;
   conversationId?: string;
   filePath?: string;
   diffChange?: import('./types').GitChange | null;

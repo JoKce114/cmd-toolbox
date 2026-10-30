@@ -36,6 +36,7 @@ import { GLOBAL_GROUP_KEY, isBrowserTab, isDiffTab, isEditorTab, projectGroupKey
 import type {
   AppInfo,
   CommitRef,
+  DeviceProfile,
   GitChange,
   GitPullStrategy,
   GitStatus,
@@ -55,7 +56,9 @@ import type {
 import { discardSession, startPtyBus, subscribeAllData, subscribeExit } from './ptyBus';
 import {
   classifyModelOutput,
+  IDLE_RESET_MS,
   rollupModelStatus,
+  transitionUnread,
   type ModelStatus,
 } from './sessionStatus';
 import { TitleBar } from './components/TitleBar';
@@ -163,6 +166,7 @@ export default function App() {
   const [modelStatusBySession, setModelStatusBySession] = useState<Record<string, ModelStatus>>(
     {},
   );
+  const [unreadBySession, setUnreadBySession] = useState<Record<string, boolean>>({});
   const [projectModal, setProjectModal] = useState<{
     mode: 'add' | 'edit';
     project?: Project;
@@ -290,7 +294,7 @@ export default function App() {
           setModelStatusBySession((previous) =>
             previous[sessionId] === 'idle' ? previous : { ...previous, [sessionId]: 'idle' },
           );
-        }, 8000),
+        }, IDLE_RESET_MS),
       );
     });
     return () => {
@@ -320,7 +324,70 @@ export default function App() {
       }
       return changed ? next : previous;
     });
+    setUnreadBySession((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const sessionId of Object.keys(next)) {
+        if (live.has(sessionId)) continue;
+        delete next[sessionId];
+        changed = true;
+      }
+      return changed ? next : previous;
+    });
   }, [tabsByGroup]);
+
+  // 状态从忙碌落到空闲/报错时打未读；用户正在看的页签不算未读。
+  const statusBeforeRef = useRef<Record<string, ModelStatus>>({});
+  useEffect(() => {
+    const before = statusBeforeRef.current;
+    setUnreadBySession((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const [sessionId, status] of Object.entries(modelStatusBySession)) {
+        if (before[sessionId] === status) continue;
+        const tab = Object.values(tabsRef.current)
+          .flat()
+          .find((item) => item.sessionId === sessionId);
+        if (!tab) continue;
+        const groupKey = tab.groupKey;
+        const watched =
+          activeTabByGroupRef.current[groupKey] === tab.id ||
+          rightActiveByGroupRef.current[groupKey] === tab.id;
+        const action = transitionUnread(before[sessionId], status, watched);
+        if (action === 'set-unread' && !next[sessionId]) {
+          next[sessionId] = true;
+          changed = true;
+        } else if (action === 'clear-unread' && next[sessionId]) {
+          delete next[sessionId];
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+    statusBeforeRef.current = modelStatusBySession;
+  }, [modelStatusBySession]);
+
+  // 切到某个页签（或因分栏变化让它变得可见）时清掉它的未读。
+  useEffect(() => {
+    setUnreadBySession((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const sessionId of Object.keys(next)) {
+        const tab = Object.values(tabsRef.current)
+          .flat()
+          .find((item) => item.sessionId === sessionId);
+        if (!tab) continue;
+        const visible =
+          activeTabByGroupRef.current[tab.groupKey] === tab.id ||
+          rightActiveByGroupRef.current[tab.groupKey] === tab.id;
+        if (visible) {
+          delete next[sessionId];
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [activeTabByGroup, rightActiveByGroup, tabsByGroup]);
 
   const applyTabs = useCallback((next: Record<string, Tab[]>) => {
     tabsRef.current = next;
@@ -340,10 +407,16 @@ export default function App() {
     let disposed = false;
 
     const unsubscribe = subscribeExit((sessionId, code) => {
-      setModelStatusBySession((previous) => ({
-        ...previous,
-        [sessionId]: code === 0 ? 'idle' : 'error',
-      }));
+      // 只有 AI 页签才有状态灯，普通终端退出不该留下状态记录
+      const aiSession = Object.values(tabsRef.current)
+        .flat()
+        .some((tab) => tab.sessionId === sessionId && isCliTool(tab.shellId));
+      if (aiSession) {
+        setModelStatusBySession((previous) => ({
+          ...previous,
+          [sessionId]: code === 0 ? 'idle' : 'error',
+        }));
+      }
       setTabsByGroup((previous) => {
         let changed = false;
         const next: Record<string, Tab[]> = {};
@@ -410,6 +483,7 @@ export default function App() {
                 custom: saved.custom,
                 cwd: group.path,
                 url: saved.url || 'about:blank',
+                device: saved.device || null,
                 conversationId: '',
                 exited: false,
               },
@@ -1275,6 +1349,34 @@ export default function App() {
     return next;
   }, [modelStatusBySession, tabsByGroup]);
 
+  // 页签灯只给 AI 页签，普通终端不显示
+  const tabModelStatus = useMemo(() => {
+    const next: Record<string, ModelStatus> = {};
+    for (const tab of allTabs) {
+      if (!isCliTool(tab.shellId)) continue;
+      const status = modelStatusBySession[tab.sessionId];
+      if (status) next[tab.sessionId] = status;
+    }
+    return next;
+  }, [allTabs, modelStatusBySession]);
+
+  const tabUnread = useMemo(() => {
+    const next: Record<string, boolean> = {};
+    for (const tab of allTabs) {
+      if (!isCliTool(tab.shellId)) continue;
+      if (unreadBySession[tab.sessionId]) next[tab.sessionId] = true;
+    }
+    return next;
+  }, [allTabs, unreadBySession]);
+
+  const unreadByGroup = useMemo(() => {
+    const next: Record<string, boolean> = {};
+    for (const [groupKey, list] of Object.entries(tabsByGroup)) {
+      next[groupKey] = list.some((tab) => isCliTool(tab.shellId) && unreadBySession[tab.sessionId]);
+    }
+    return next;
+  }, [tabsByGroup, unreadBySession]);
+
   useEffect(() => {
     if (!info) return;
     if (groups.length > 0 && !groups.some((group) => group.key === activeGroupKey)) {
@@ -1307,6 +1409,7 @@ export default function App() {
           diffCommit: tab.diffCommit || null,
           paneNo: tab.paneNo,
           url: tab.url || '',
+          device: tab.device || null,
         }));
       window.api.session.saveSync({
         activeGroupKey: activeGroupKeyRef.current,
@@ -1350,6 +1453,7 @@ export default function App() {
           filePath: tab.filePath || '',
           paneNo: tab.paneNo,
           url: tab.url || '',
+          device: tab.device || null,
         }));
       void window.api.session
         .save({
@@ -1760,6 +1864,24 @@ export default function App() {
           if (item.id !== tabId || item.url === url) return item;
           changed = true;
           return { ...item, url };
+        });
+      }
+      if (!changed) return previous;
+      tabsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const updateBrowserDevice = useCallback((tabId: string, device: DeviceProfile | null) => {
+    setTabsByGroup((previous) => {
+      let changed = false;
+      const next: Record<string, Tab[]> = {};
+      for (const [groupKey, list] of Object.entries(previous)) {
+        next[groupKey] = list.map((item) => {
+          if (item.id !== tabId) return item;
+          if (!item.device && !device) return item;
+          changed = true;
+          return { ...item, device };
         });
       }
       if (!changed) return previous;
@@ -2467,6 +2589,7 @@ export default function App() {
           onClose={(target) => closeTabs(target.groupKey, [target.id])}
           onToast={pushToast}
           onUrlChange={updateBrowserUrl}
+          onDeviceChange={updateBrowserDevice}
         />
       );
     }
@@ -2595,6 +2718,7 @@ export default function App() {
           activeKey={activeGroup?.key || activeGroupKey}
           counts={counts}
           modelStatusByGroup={modelStatusByGroup}
+          unreadByGroup={unreadByGroup}
           collapsed={sidebarCollapsed}
           onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
           onSelectGroup={selectGroup}
@@ -2662,6 +2786,8 @@ export default function App() {
                 tabs={activeTabs}
                 activeTabId={effectiveActiveTabId}
                 canChooseShell
+                modelStatusBySession={tabModelStatus}
+                unreadBySession={tabUnread}
                 onSelectTab={selectTab}
                 onCloseTab={(tabId) => closeTabs(activeGroup.key, [tabId])}
                 onTabMenu={openTabMenu}
@@ -2711,6 +2837,8 @@ export default function App() {
                   tabs={leftTabs}
                   activeTabId={effectiveActiveTabId}
                   canChooseShell
+                  modelStatusBySession={tabModelStatus}
+                  unreadBySession={tabUnread}
                   onSelectTab={selectTab}
                   onCloseTab={(tabId) => closeTabs(activeGroup.key, [tabId])}
                   onTabMenu={openTabMenu}
@@ -2761,6 +2889,8 @@ export default function App() {
                   tabs={rightTabs}
                   activeTabId={effectiveRightTabId}
                   canChooseShell
+                  modelStatusBySession={tabModelStatus}
+                  unreadBySession={tabUnread}
                   onSelectTab={selectTab}
                   onCloseTab={(tabId) => closeTabs(activeGroup.key, [tabId])}
                   onTabMenu={openTabMenu}

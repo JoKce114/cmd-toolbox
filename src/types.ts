@@ -1,4 +1,7 @@
 import type { ReactNode } from 'react';
+import type { DeviceProfile } from './deviceProfiles';
+
+export type { DeviceProfile };
 
 export type ShellInfo = {
   id: string;
@@ -47,6 +50,7 @@ export type Tab = {
   custom: boolean;
   cwd: string;
   url?: string;
+  device?: DeviceProfile | null;
   conversationId?: string;
   filePath?: string;
   diffChange?: GitChange;

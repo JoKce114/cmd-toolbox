@@ -23,6 +23,20 @@ function emptySession() {
   };
 }
 
+function normalizeDevice(value) {
+  if (!value || typeof value !== 'object') return null;
+  const width = Number(value.width);
+  const height = Number(value.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  const presetId = typeof value.presetId === 'string' ? value.presetId.slice(0, 40) : 'custom';
+  return {
+    presetId: presetId || 'custom',
+    width: Math.round(Math.min(1920, Math.max(240, width))),
+    height: Math.round(Math.min(2400, Math.max(320, height))),
+    rotated: Boolean(value.rotated),
+  };
+}
+
 function normalizeTab(value) {
   if (!value || typeof value !== 'object') return null;
   const id = typeof value.id === 'string' ? value.id : '';
@@ -40,6 +54,7 @@ function normalizeTab(value) {
     custom: Boolean(value.custom),
     cwd: typeof value.cwd === 'string' ? value.cwd : '',
     url: typeof value.url === 'string' ? value.url.trim().slice(0, 2000) : '',
+    device: normalizeDevice(value.device),
     conversationId: typeof value.conversationId === 'string' ? value.conversationId.trim() : '',
     filePath: typeof value.filePath === 'string' ? value.filePath.trim().slice(0, 500) : '',
     diffChange:

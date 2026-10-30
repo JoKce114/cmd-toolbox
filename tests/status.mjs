@@ -48,6 +48,15 @@ function rollup(values) {
   return best;
 }
 
+// 与 src/sessionStatus.ts 的 transitionUnread 保持一致
+function transitionUnread(previous, next, watched) {
+  if (next === 'idle' || next === 'error') {
+    const wasBusy = previous === 'running' || previous === 'waiting';
+    return wasBusy && !watched ? 'set-unread' : 'none';
+  }
+  return 'clear-unread';
+}
+
 assert(classify('Waiting for approval') === 'waiting', '等待确认');
 assert(classify('Error: boom') === 'error', '报错');
 assert(classify('\u001b[31mError: boom') === 'error', '带颜色的报错');
@@ -55,5 +64,30 @@ assert(classify('thinking about the code') === 'running', '回答中');
 assert(rollup(['idle', 'running', 'waiting']) === 'waiting', '等待优先于回答');
 assert(rollup(['waiting', 'error']) === 'error', '报错优先');
 assert(rollup([]) === 'idle', '没有模型就是空闲');
+
+assert(
+  transitionUnread('running', 'idle', false) === 'set-unread',
+  '跑完且没在看 → 标记未读',
+);
+assert(
+  transitionUnread('running', 'idle', true) === 'none',
+  '跑完时正在看 → 不标记未读',
+);
+assert(
+  transitionUnread('error', 'idle', false) === 'none',
+  '报错后回落空闲不重复标记',
+);
+assert(
+  transitionUnread('waiting', 'error', false) === 'set-unread',
+  '等待确认后报错 → 标记未读',
+);
+assert(
+  transitionUnread('idle', 'running', false) === 'clear-unread',
+  '重新开始跑 → 清除未读',
+);
+assert(
+  transitionUnread(undefined, 'running', false) === 'clear-unread',
+  '首次输出不产生未读',
+);
 
 console.log(`status ${passed} passed`);

@@ -29,7 +29,7 @@ const waitFor = async (fn, message, timeout = 20000) => {
 const release = {
   tag_name: 'v9.9.0',
   html_url: 'https://github.com/JoKce114/cmd-toolbox/releases/tag/v9.9.0',
-  body: '### 测试更新\n- 第一项改动\n- 第二项改动',
+  body: '## [9.9.0] - 2026-10-30\n\n### 测试更新\n\n**浏览器刷新**\n\n- 第一项改动\n  - 嵌套说明\n- 第二项改动\n\n按 `F5` 即可刷新',
 };
 let hits = 0;
 const server = createServer((req, res) => {
@@ -97,6 +97,29 @@ ok(
   (await modal.locator('.announcement-body').innerText()).includes('第一项改动'),
   '显示该版本自己的更新说明',
 );
+ok(
+  (await modal.locator('.note-heading').first().innerText()) === '测试更新',
+  'Markdown 的 ### 小节渲染为标题',
+);
+ok(
+  (await modal.locator('.note-subheading').first().innerText()) === '浏览器刷新',
+  '独占一行的加粗渲染为小标题',
+);
+ok(
+  (await modal.locator('.note-bullet').count()) === 3,
+  '列表项渲染为条目（含一条嵌套）',
+);
+ok(
+  (await modal.locator('.note-bullet.is-nested').count()) === 1,
+  '嵌套列表有缩进',
+);
+ok(
+  (await modal.locator('.note-code').first().innerText()) === 'F5',
+  '反引号内容渲染为代码样式',
+);
+const bodyText = await modal.locator('.announcement-body').innerText();
+ok(!bodyText.includes('###') && !bodyText.includes('**'), '不显示 Markdown 符号');
+ok(!bodyText.includes('[9.9.0] - 2026-10-30'), '标题里的版本行不重复显示');
 ok(
   (await modal
     .locator('.announcement-body')

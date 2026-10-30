@@ -7,12 +7,24 @@ import {
   Plus,
   RotateCw,
   Search,
+  Smartphone,
   Star,
   X,
 } from 'lucide-react';
 import { normalizeHttpUrl, toErrorMessage } from '../lib';
-import type { Group, Tab } from '../types';
+import {
+  DEVICE_GROUPS,
+  MOBILE_UA,
+  clampDeviceProfile,
+  deviceLabel,
+  presetsByGroup,
+  resolveViewSize,
+  type DeviceProfile,
+} from '../deviceProfiles';
+import type { Group, MenuEntry, Tab } from '../types';
 import type { ToastKind } from './Toast';
+import { Modal } from './Modal';
+import { PopupMenu } from './PopupMenu';
 
 type BrowserPaneProps = {
   tab: Tab;
@@ -21,6 +33,7 @@ type BrowserPaneProps = {
   onClose: (tab: Tab) => void;
   onToast: (message: string, kind?: ToastKind) => void;
   onUrlChange: (tabId: string, url: string) => void;
+  onDeviceChange: (tabId: string, device: DeviceProfile | null) => void;
 };
 
 export function BrowserPane({
@@ -30,10 +43,12 @@ export function BrowserPane({
   onClose,
   onToast,
   onUrlChange,
+  onDeviceChange,
 }: BrowserPaneProps) {
   const viewRef = useRef<HTMLWebViewElement | null>(null);
   const toastRef = useRef(onToast);
   const onUrlChangeRef = useRef(onUrlChange);
+  const onDeviceChangeRef = useRef(onDeviceChange);
   const initialSrc = useRef(tab.url && tab.url !== 'about:blank' ? tab.url : 'about:blank');
   const [address, setAddress] = useState(tab.url && tab.url !== 'about:blank' ? tab.url : '');
   const [loading, setLoading] = useState(false);
@@ -50,9 +65,24 @@ export function BrowserPane({
     }
   });
   const findInputRef = useRef<HTMLInputElement>(null);
+  const [device, setDevice] = useState<DeviceProfile | null>(() =>
+    clampDeviceProfile(tab.device),
+  );
+  const [deviceMenu, setDeviceMenu] = useState<{
+    x: number;
+    y: number;
+    items: MenuEntry[];
+  } | null>(null);
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customWidth, setCustomWidth] = useState('500');
+  const [customHeight, setCustomHeight] = useState('900');
+  const zoomBeforeDevice = useRef(1);
+  const deviceRef = useRef<DeviceProfile | null>(device);
 
   toastRef.current = onToast;
   onUrlChangeRef.current = onUrlChange;
+  onDeviceChangeRef.current = onDeviceChange;
+  deviceRef.current = device;
 
   useEffect(() => {
     if (!findOpen) return;
@@ -92,6 +122,7 @@ export function BrowserPane({
     const handleAttach = () => {
       try {
         window.api.panes.attachBrowser(tab.id, view.getWebContentsId());
+        syncDeviceToView(view, deviceRef.current);
       } catch {
         // guest not ready
       }
@@ -130,6 +161,113 @@ export function BrowserPane({
     }
   };
 
+  // 设备模拟只改 webview 元素尺寸和 UA，不碰主进程。
+  const syncDeviceToView = (view: HTMLWebViewElement, next: DeviceProfile | null) => {
+    if (!next) {
+      view.style.width = '';
+      view.style.height = '';
+      view.style.flex = '';
+      try {
+        view.setUserAgent('');
+        view.setZoomFactor(zoomBeforeDevice.current);
+      } catch {
+        // guest not ready
+      }
+      return;
+    }
+    const size = resolveViewSize(next);
+    view.style.width = `${size.width}px`;
+    view.style.height = `${size.height}px`;
+    view.style.flex = '0 0 auto';
+    try {
+      view.setZoomFactor(1);
+      view.setUserAgent(MOBILE_UA);
+    } catch {
+      // guest not ready
+    }
+  };
+
+  const applyDevice = (next: DeviceProfile | null) => {
+    if (next && !device) zoomBeforeDevice.current = zoom;
+    setDevice(next);
+    onDeviceChangeRef.current(tab.id, next);
+    setZoom(next ? 1 : zoomBeforeDevice.current);
+    const view = viewRef.current;
+    if (view) syncDeviceToView(view, next);
+  };
+
+  const openDeviceMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const items: MenuEntry[] = [
+      {
+        type: 'item',
+        id: 'device-desktop',
+        label: '桌面',
+        disabled: !device,
+        title: '按窗口宽度渲染',
+        onSelect: () => applyDevice(null),
+      },
+      { type: 'separator', id: 'device-sep' },
+      ...DEVICE_GROUPS.flatMap<MenuEntry>((group) => [
+        { type: 'label', id: `device-group-${group.id}`, label: group.label },
+        ...presetsByGroup(group.id).map<MenuEntry>((preset) => {
+          const isCurrent = device?.presetId === preset.id;
+          return {
+            type: 'item',
+            id: `device-${preset.id}`,
+            label: preset.label,
+            shortcut: isCurrent ? `${preset.width}×${preset.height}` : undefined,
+            onSelect: () =>
+              applyDevice({
+                presetId: preset.id,
+                width: preset.width,
+                height: preset.height,
+                rotated: false,
+              }),
+          };
+        }),
+      ]),
+      { type: 'separator', id: 'device-sep-2' },
+      {
+        type: 'item',
+        id: 'device-rotate',
+        label: device?.rotated ? '切换为竖屏' : '切换为横屏',
+        disabled: !device,
+        onSelect: () => device && applyDevice({ ...device, rotated: !device.rotated }),
+      },
+      {
+        type: 'item',
+        id: 'device-custom',
+        label: '自定义尺寸…',
+        onSelect: () => {
+          if (device) {
+            setCustomWidth(String(device.width));
+            setCustomHeight(String(device.height));
+          }
+          setCustomOpen(true);
+        },
+      },
+    ];
+    setDeviceMenu({ x: rect.left, y: rect.bottom + 4, items });
+  };
+
+  const submitCustomDevice = () => {
+    const width = Number(customWidth);
+    const height = Number(customHeight);
+    const profile = clampDeviceProfile({
+      presetId: 'custom',
+      width,
+      height,
+      rotated: device?.rotated ?? false,
+    });
+    if (!profile) {
+      toastRef.current('请输入有效的宽高', 'error');
+      return;
+    }
+    setCustomOpen(false);
+    applyDevice(profile);
+  };
+
   const starred = Boolean(address && bookmarks.some((item) => item.url === address));
 
   const toggleBookmark = () => {
@@ -166,6 +304,19 @@ export function BrowserPane({
         if (event.ctrlKey && event.key.toLowerCase() === 'f') {
           event.preventDefault();
           setFindOpen(true);
+          return;
+        }
+        // 焦点在网页内部时由主进程的 before-input-event 接管，这里是地址栏/工具栏的兜底
+        const reloadKey =
+          event.key === 'F5' || (event.ctrlKey && event.key.toLowerCase() === 'r');
+        if (reloadKey) {
+          event.preventDefault();
+          try {
+            if (event.shiftKey) viewRef.current?.reloadIgnoringCache();
+            else viewRef.current?.reload();
+          } catch {
+            // guest not ready
+          }
         }
       }}
     >
@@ -227,8 +378,18 @@ export function BrowserPane({
         </button>
         <button
           type="button"
+          className={device ? 'browser-nav is-active' : 'browser-nav'}
+          title={device ? `设备模拟：${deviceLabel(device)}` : '切换设备模拟'}
+          aria-label={device ? `设备模拟：${deviceLabel(device)}` : '切换设备模拟'}
+          onClick={openDeviceMenu}
+        >
+          <Smartphone size={14} />
+        </button>
+        <button
+          type="button"
           className="browser-nav"
-          title="缩小"
+          title={device ? '模拟移动端时不可缩放，请先切回桌面' : '缩小'}
+          disabled={Boolean(device)}
           onClick={() => applyZoom(zoom - 0.1)}
         >
           <Minus size={14} />
@@ -237,7 +398,8 @@ export function BrowserPane({
         <button
           type="button"
           className="browser-nav"
-          title="放大"
+          title={device ? '模拟移动端时不可缩放，请先切回桌面' : '放大'}
+          disabled={Boolean(device)}
           onClick={() => applyZoom(zoom + 0.1)}
         >
           <Plus size={14} />
@@ -312,15 +474,61 @@ export function BrowserPane({
           </button>
         </div>
       ) : null}
-      <webview
-        ref={(node) => {
-          viewRef.current = node as HTMLWebViewElement | null;
-        }}
-        className="browser-view"
-        src={initialSrc.current}
-        partition={`persist:cmd-toolbox-browser:${tab.groupKey}`}
-        webpreferences="contextIsolation=yes, nodeIntegration=no, sandbox=yes"
-      />
+      <div className={`browser-stage${device ? ' is-device' : ''}`}>
+        <webview
+          ref={(node) => {
+            viewRef.current = node as HTMLWebViewElement | null;
+          }}
+          className="browser-view"
+          src={initialSrc.current}
+          partition={`persist:cmd-toolbox-browser:${tab.groupKey}`}
+          webpreferences="contextIsolation=yes, nodeIntegration=no, sandbox=yes"
+        />
+      </div>
+      {deviceMenu ? (
+        <PopupMenu state={deviceMenu} onClose={() => setDeviceMenu(null)} />
+      ) : null}
+      {customOpen ? (
+        <Modal
+          title="自定义设备尺寸"
+          subtitle="按 CSS 逻辑像素填写，超出可用范围会自动收敛"
+          icon={<Smartphone size={16} />}
+          onClose={() => setCustomOpen(false)}
+          width={380}
+        >
+          <div className="modal-body">
+            <label className="field">
+              <span className="field-label">宽度</span>
+              <input
+                data-autofocus
+                type="number"
+                min={240}
+                max={1920}
+                value={customWidth}
+                onChange={(event) => setCustomWidth(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">高度</span>
+              <input
+                type="number"
+                min={320}
+                max={2400}
+                value={customHeight}
+                onChange={(event) => setCustomHeight(event.target.value)}
+              />
+            </label>
+          </div>
+          <div className="modal-actions">
+            <button type="button" className="btn ghost" onClick={() => setCustomOpen(false)}>
+              取消
+            </button>
+            <button type="button" className="btn primary" onClick={submitCustomDevice}>
+              应用
+            </button>
+          </div>
+        </Modal>
+      ) : null}
     </section>
   );
 }

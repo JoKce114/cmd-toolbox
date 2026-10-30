@@ -1,5 +1,23 @@
 export type ModelStatus = 'idle' | 'waiting' | 'running' | 'error';
 
+// AI 在等一个慢命令时可能十几秒不出一个字节，阈值太短会把「还在跑」误判成「已完成」。
+export const IDLE_RESET_MS = 15000;
+
+export type StatusTransition = 'set-unread' | 'clear-unread' | 'none';
+
+// 任务从忙碌落到空闲或报错、且用户当时没在看这个页签 → 标记未读。
+export function transitionUnread(
+  previous: ModelStatus | undefined,
+  next: ModelStatus,
+  watched: boolean,
+): StatusTransition {
+  if (next === 'idle' || next === 'error') {
+    const wasBusy = previous === 'running' || previous === 'waiting';
+    return wasBusy && !watched ? 'set-unread' : 'none';
+  }
+  return 'clear-unread';
+}
+
 export const MODEL_STATUS_LABEL: Record<ModelStatus, string> = {
   idle: '暂时没有对话',
   waiting: '等待确认',

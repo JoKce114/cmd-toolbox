@@ -26,6 +26,7 @@ type GroupRowProps = {
   dragging?: boolean;
   dropPosition?: 'before' | 'after' | null;
   modelStatus?: ModelStatus;
+  unread?: boolean;
   onSelect: () => void;
   onQuickOpen: () => void;
   onContextMenu: (event: ReactMouseEvent) => void;
@@ -44,6 +45,7 @@ function GroupRow({
   dragging = false,
   dropPosition = null,
   modelStatus = 'idle',
+  unread = false,
   onSelect,
   onQuickOpen,
   onContextMenu,
@@ -92,9 +94,17 @@ function GroupRow({
         <span className="group-text">
           <span className="group-name">
             <span
-              className={cn('group-lamp', `is-${modelStatus}`)}
-              title={MODEL_STATUS_LABEL[modelStatus]}
-              aria-label={MODEL_STATUS_LABEL[modelStatus]}
+              className={cn(
+                'group-lamp',
+                `is-${modelStatus}`,
+                unread && 'is-unread',
+              )}
+              title={
+                unread
+                  ? `${MODEL_STATUS_LABEL[modelStatus]}（有任务已完成，未查看）`
+                  : MODEL_STATUS_LABEL[modelStatus]
+              }
+              aria-label={unread ? '有任务已完成，未查看' : MODEL_STATUS_LABEL[modelStatus]}
             />
             <span className="group-name-text">{group.name}</span>
             {!group.exists && !global ? (
@@ -131,6 +141,7 @@ type SidebarProps = {
   activeKey: string;
   counts: Record<string, number>;
   modelStatusByGroup: Record<string, ModelStatus>;
+  unreadByGroup?: Record<string, boolean>;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onSelectGroup: (key: string) => void;
@@ -154,6 +165,7 @@ export function Sidebar({
   activeKey,
   counts,
   modelStatusByGroup,
+  unreadByGroup = {},
   collapsed,
   onToggleCollapsed,
   onSelectGroup,
@@ -243,6 +255,7 @@ export function Sidebar({
             group={globalGroup}
             count={counts[globalGroup.key] || 0}
             modelStatus={modelStatusByGroup[globalGroup.key] || 'idle'}
+            unread={Boolean(unreadByGroup[globalGroup.key])}
             active={activeKey === globalGroup.key}
             global
             onSelect={() => onSelectGroup(globalGroup.key)}
@@ -280,6 +293,7 @@ export function Sidebar({
               group={group}
               count={counts[group.key] || 0}
               modelStatus={modelStatusByGroup[group.key] || 'idle'}
+              unread={Boolean(unreadByGroup[group.key])}
               active={activeKey === group.key}
               reorderable
               dragging={draggingId === group.projectId}

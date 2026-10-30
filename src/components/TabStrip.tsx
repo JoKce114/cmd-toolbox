@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { ChevronDown, FileCode2, Plus, X } from 'lucide-react';
 import { cn } from '../lib';
+import { MODEL_STATUS_LABEL, type ModelStatus } from '../sessionStatus';
 import type { Group, Tab } from '../types';
 
 export const TAB_DRAG_TYPE = 'text/cmd-toolbox-tab';
@@ -13,6 +14,8 @@ type TabStripProps = {
   rightTabIds?: string[];
   rightActiveTabId?: string | null;
   canChooseShell: boolean;
+  modelStatusBySession?: Record<string, ModelStatus>;
+  unreadBySession?: Record<string, boolean>;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onTabMenu: (event: ReactMouseEvent, tab: Tab) => void;
@@ -39,6 +42,8 @@ export function TabStrip({
   rightTabIds = [],
   rightActiveTabId = null,
   canChooseShell,
+  modelStatusBySession = {},
+  unreadBySession = {},
   onSelectTab,
   onCloseTab,
   onTabMenu,
@@ -169,6 +174,9 @@ export function TabStrip({
         {tabs.map((tab) => {
           const onRight = rightTabIds.includes(tab.id);
           const active = tab.id === activeTabId || tab.id === rightActiveTabId;
+          const modelStatus = modelStatusBySession[tab.sessionId];
+          const showLamp = Boolean(modelStatus);
+          const unread = Boolean(unreadBySession[tab.sessionId]);
           return (
             <div
               key={tab.id}
@@ -211,6 +219,21 @@ export function TabStrip({
                 style={tab.exited ? undefined : { backgroundColor: group.color }}
               />
               <span className="tab-title">
+                {showLamp ? (
+                  <span
+                    className={cn(
+                      'tab-lamp',
+                      `is-${modelStatus}`,
+                      unread && 'is-unread',
+                    )}
+                    title={
+                      unread
+                        ? `${MODEL_STATUS_LABEL[modelStatus]}（已完成，未查看）`
+                        : MODEL_STATUS_LABEL[modelStatus]
+                    }
+                    aria-label={MODEL_STATUS_LABEL[modelStatus]}
+                  />
+                ) : null}
                 <span className="tab-pane">#{tab.paneNo}</span>
                 <span className="tab-project">{group.name}</span>
                 <span className="tab-sep">·</span>

@@ -344,6 +344,47 @@ p {
   background: #d6453d;
 }
 
+/* 未读：灯外一圈呼吸，提示「跑完了但没看」 */
+.group-lamp.is-unread,
+.tab-lamp.is-unread {
+  animation: unread-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes unread-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 108, 255, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(59, 108, 255, 0.28);
+  }
+}
+
+.tab-lamp {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 5px;
+  background: #2f9e62;
+}
+
+.tab-lamp.is-idle {
+  background: #2f9e62;
+}
+
+.tab-lamp.is-waiting {
+  background: #d4a017;
+}
+
+.tab-lamp.is-running {
+  background: #3b6cff;
+}
+
+.tab-lamp.is-error {
+  background: #d6453d;
+}
+
 .group-name-text {
   overflow: hidden;
   white-space: nowrap;
@@ -2744,6 +2785,21 @@ p {
   color: #2f3238;
 }
 
+.browser-nav.is-active {
+  background: #eaeefe;
+  color: #3b6cff;
+}
+
+.browser-nav:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.browser-nav:disabled:hover {
+  background: transparent;
+  color: #858992;
+}
+
 .browser-address {
   flex: 1;
   min-width: 0;
@@ -2766,12 +2822,34 @@ p {
   background: #ffffff;
 }
 
+.browser-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  overflow: auto;
+  background: #ffffff;
+}
+
+/* 模拟移动端时按设备尺寸居中显示，超出窗格就滚动，不挤压其它区域 */
+.browser-stage.is-device {
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12px;
+  background: #f2f3f7;
+}
+
 .browser-view {
   flex: 1;
   width: 100%;
   min-height: 0;
   border: 0;
   background: #ffffff;
+}
+
+.browser-stage.is-device .browser-view {
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(16, 18, 25, 0.16);
 }
 
 .browser-zoom {
@@ -3988,6 +4066,56 @@ p {
   word-break: break-word;
 }
 
+/* 更新说明由 Markdown 解析成块，块之间靠 margin 控制间距 */
+.note-heading {
+  margin: 12px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #17181c;
+}
+
+.note-heading:first-child {
+  margin-top: 0;
+}
+
+.note-subheading {
+  margin: 10px 0 3px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #2f3238;
+}
+
+.note-bullet {
+  display: flex;
+  gap: 6px;
+  margin: 3px 0;
+  padding-left: 2px;
+  line-height: 1.65;
+}
+
+.note-bullet.is-nested {
+  padding-left: 16px;
+  color: #5b5f68;
+}
+
+.note-bullet-mark {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.note-paragraph {
+  margin: 4px 0;
+  line-height: 1.65;
+}
+
+.note-code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #f1f2f5;
+  font-family: 'Consolas', 'Microsoft YaHei', monospace;
+  font-size: 11.5px;
+}
+
 .announcement-release-notes.is-empty {
   color: var(--faint);
 }
@@ -4025,6 +4153,9 @@ p {
   background: var(--surface);
   box-shadow: var(--shadow-lg), 0 0 0 1px rgba(16, 18, 24, 0.02);
   animation: menu-in 110ms ease;
+  /* 设备机型列表较长，窗口矮时允许滚动而不是溢出到屏幕外 */
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 
 .popup-label {

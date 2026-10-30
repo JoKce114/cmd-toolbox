@@ -60,6 +60,11 @@ Electron + React + TypeScript 的本地项目终端工作台，只面向 Windows
 - **tag 必须带 `v` 前缀**（`v1.0.1`）。应用拿 `tag_name` 和本地版本比对。
 - **`version` 必须比线上高**，否则装了新版也收不到提示。
 - 应用的 Release 解析在 `desktop/updates.js`，只取 `tag_name` / `html_url` / `body`。
+- **更新说明按 Markdown 渲染**：公告弹窗用 `src/releaseNotes.ts` 解析
+  `###` / `####` / `-` / `**加粗**` / `` `代码` `` 这几种子集，其余语法不会生效。
+  写 `CHANGELOG.md` 时用这几种就够，别用表格、图片或链接语法——它们在弹窗里会变成纯文本。
+- **说明长度上限 2400 字符**（`updates.js` 的 `NOTES_LIMIT`）。超过会被截断并加省略号，
+  所以详细说明要控制在这个长度内。
 
 ## 打包
 
@@ -130,6 +135,7 @@ node tests/git-core.mjs      # Git 后端逻辑
 node tests/git-pull.mjs      # 拉取/推送/上游修复
 node tests/commit-diff.mjs   # 提交 patch 切分
 node tests/login-item.mjs     # 开机自启动（假 app，不碰注册表）
+node tests/status.mjs         # AI 状态分类、未读状态迁移
 ```
 
 - `tests/login-item.mjs` 用假 `app` 对象，**不会**读写真实注册表。
@@ -150,6 +156,9 @@ node tests/prefs-migration.mjs
 node tests/git-panel.mjs
 node tests/update-notify.mjs
 node tests/smoke.mjs
+node tests/browser-device.mjs    # F5 刷新与移动端模拟
+node tests/tab-status.mjs        # AI 页签状态灯与未读
+node tests/device-emulation-probe.mjs
 ```
 
 - **UI 测试必须独占，先关掉正在运行的 Cmd Toolbox。** `desktop/pane-api.js` 写死了
@@ -208,8 +217,20 @@ node tests/smoke.mjs
   `LOGIN_VALUE_NAME` 是同一个字符串，**改名时两处必须同改**，
   否则卸载会留下一条指向已删除 exe 的死条目，每次开机弹错误。
 
-## 界面约定
+## 内置浏览器
 
+- **`webContents.enableDeviceEmulation` 不能用在 `<webview>` 上**。实测请求
+  375×667 时 `screen` 是对的，但视口被缩放成 `innerWidth=981 / innerHeight=1744`，
+  媒体查询全错。移动端模拟只能靠前端：把 `<webview>` 元素本身设成设备尺寸，
+  UA 用元素自带的 `setUserAgent()`（传空串还原）。见
+  `src/deviceProfiles.ts` 与 `tests/device-emulation-probe.mjs`。
+- **刷新快捷键要在主进程接管**。焦点在网页里时按键只会在 guest 渲染进程，
+  应用层收不到。绑定放在 `app.on('web-contents-created')` 里按
+  `getType() === 'webview'` 判断，**不要**依赖渲染进程的 `did-attach` →
+  `panes:attach-browser` 时序（实测经常抢不到，导致监听挂不上）。
+- 设备模拟与 `setZoomFactor` 互斥：进入模拟会把缩放归零，退出时还原。
+
+## 界面约定
 - 标题栏底色是 `--surface: #ffffff`，红点（`.titlebar-update-dot`）用
   `box-shadow: 0 0 0 2px #fff` 贴合
 - 滚动条样式是全局的 `::-webkit-scrollbar`（10px）和 `::-webkit-scrollbar-thumb`
@@ -226,6 +247,13 @@ node tests/smoke.mjs
   组标题是 `.settings-group-title`
 - 设置面板里凡是需要写系统状态的操作（如开机启动），一律在点「保存」时执行，
   不能切开关就立即生效，否则「取消」会名不副实
+- **AI 页签状态灯只给 AI 页签**（`isCliTool(tab.shellId)` 为真）。普通终端退出时
+  也会触发 `subscribeExit`，不加判断会给 cmd 页签也挂上灯。传给 `TabStrip` 的
+  `modelStatusBySession` / `unreadBySession` 已在 `App.tsx` 里按 AI 页签过滤。
+- **未读判定要按左右分栏算**：分栏时两侧页签同时可见，只比单个 `activeTabId`
+  会把用户正在看的页签误标未读（用 `activeTabByGroupRef` + `rightActiveByGroupRef`）
+- **空闲阈值是 `IDLE_RESET_MS = 15000`**。AI 等慢命令时可能十几秒不出字节，
+  调短会误判「已完成」并制造假的未读提示
 
 ## IPC 约定
 

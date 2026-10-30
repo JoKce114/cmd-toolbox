@@ -518,6 +518,10 @@ if (!hasLock) {
     mainWindow.focus();
   });
 
+  app.on('web-contents-created', (_event, contents) => {
+    if (contents.getType() === 'webview') paneApi.bindBrowserKeys(contents);
+  });
+
   app.whenReady().then(async () => {
     nativeTheme.themeSource = 'light';
     const mcp = await paneApi.start({

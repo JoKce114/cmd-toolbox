@@ -19,6 +19,8 @@ declare global {
     partition: string;
     loadURL: (url: string) => void;
     reload: () => void;
+    reloadIgnoringCache: () => void;
+    setUserAgent: (userAgent: string) => void;
     goBack: () => void;
     goForward: () => void;
     canGoBack: () => boolean;
