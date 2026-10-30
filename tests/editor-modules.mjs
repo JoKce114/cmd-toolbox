@@ -42,6 +42,12 @@ writeFileSync(join(projectDir, 'withmin.js'), 'const y = 1;\n', 'utf8');
 writeFileSync(join(projectDir, 'withmin.min.js'), '/*old*/', 'utf8');
 // 后缀为 .min.js 的文件自己不再压缩
 writeFileSync(join(projectDir, 'self.min.js'), 'const kept = 1;\n', 'utf8');
+// 文件树右键「生成压缩版」的源文件，此前没有任何产物
+writeFileSync(
+  join(projectDir, 'fresh.js'),
+  'const freshValue = 1;\nfunction freshFn(){ return freshValue + 1 }\n',
+  'utf8',
+);
 // 压缩失败路径：源文件本身合法，用户改出语法错误后再保存
 writeFileSync(join(projectDir, 'bad.js'), 'const ok = 1;\n', 'utf8');
 writeFileSync(join(projectDir, 'bad.min.js'), '/*keep-me*/', 'utf8');
@@ -349,6 +355,40 @@ try {
       `子目录正常，实际 ${nameCases['a/b.js']}`,
     );
   }
+
+  console.log('12. 文件树右键可生成压缩版');
+  // 右键菜单删掉后，这是创建第一个 .min.js 的唯一入口。
+  // 用 fresh.js，它此前没有任何产物。
+  assert(!existsSync(join(projectDir, 'fresh.min.js')), 'fresh.min.js 一开始不存在');
+  await page.locator('.file-row').filter({ hasText: /^fresh\.js$/ }).click({ button: 'right' });
+  await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+  assert(
+    (await page.locator('.popup-menu').getByText('生成 fresh.min.js').count()) > 0,
+    '文件树右键出现「生成 fresh.min.js」',
+  );
+  await page.locator('.popup-menu').getByText('生成 fresh.min.js').click();
+  await page.waitForTimeout(2500);
+  assert(existsSync(join(projectDir, 'fresh.min.js')), '产物已生成');
+  const freshMin = readFileSync(join(projectDir, 'fresh.min.js'), 'utf8');
+  assert(freshMin.length > 0, '产物非空');
+  assert(
+    freshMin.length < readFileSync(join(projectDir, 'fresh.js'), 'utf8').length,
+    '产物比源文件短',
+  );
+
+  console.log('13. .min.js 自身没有压缩菜单');
+  // 用测试开始前就已存在的 self.min.js：刚生成的 fresh.min.js 不在文件树缓存里，
+  // 树不会自动刷新，拿它测会等不到元素
+  await page
+    .locator('.file-row')
+    .filter({ hasText: 'self.min.js' })
+    .first()
+    .click({ button: 'right' });
+  await page.waitForTimeout(800);
+  assert(
+    (await page.locator('.popup-menu').count()) === 0,
+    '.min.js 右键不弹压缩菜单',
+  );
 
   console.log(`\n全部通过（${passed} 项）`);
 } finally {

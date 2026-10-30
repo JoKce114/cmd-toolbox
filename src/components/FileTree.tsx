@@ -2,12 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { ChevronRight, File, Folder, FolderOpen } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
-import type { FileEntry, Group } from '../types';
+import type { FileEntry, Group, MenuState } from '../types';
+import { PopupMenu } from './PopupMenu';
 
 type FileTreeProps = {
   group: Group;
   activePath: string;
   onOpen: (relPath: string) => void;
+  onMinify: (relPath: string) => void;
+  canMinify: (relPath: string) => boolean;
   onError: (message: string) => void;
 };
 
@@ -35,9 +38,17 @@ function ancestorsOf(relPath: string): string[] {
   return result;
 }
 
-export function FileTree({ group, activePath, onOpen, onError }: FileTreeProps) {
+export function FileTree({
+  group,
+  activePath,
+  onOpen,
+  onMinify,
+  canMinify,
+  onError,
+}: FileTreeProps) {
   const [children, setChildren] = useState<DirState>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']));
+  const [menu, setMenu] = useState<MenuState | null>(null);
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
   const pendingRevealRef = useRef('');
 
@@ -112,6 +123,26 @@ export function FileTree({ group, activePath, onOpen, onError }: FileTreeProps) 
     });
   };
 
+  const openRowMenu = (event: React.MouseEvent, entry: FileEntry) => {
+    if (entry.isDir || !canMinify(entry.relPath)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const target = entry.relPath.replace(/\.js$/, '.min.js');
+    const name = target.split('/').pop() || target;
+    setMenu({
+      x: event.clientX,
+      y: event.clientY,
+      items: [
+        {
+          type: 'item',
+          id: 'file-minify',
+          label: `生成 ${name}`,
+          onSelect: () => onMinify(entry.relPath),
+        },
+      ],
+    });
+  };
+
   const renderDir = (relDir: string, depth: number): ReactElement[] => {
     const entries = [...(children[relDir] || [])].sort(compareEntries);
     return entries.flatMap((entry) => {
@@ -133,6 +164,7 @@ export function FileTree({ group, activePath, onOpen, onError }: FileTreeProps) 
           title={entry.relPath}
           disabled={entry.isSymlink}
           onClick={() => (entry.isDir ? toggle(entry.relPath) : onOpen(entry.relPath))}
+          onContextMenu={(event) => openRowMenu(event, entry)}
         >
           {entry.isDir ? (
             isOpen ? <ChevronRight size={12} className="file-caret open" /> : <ChevronRight size={12} className="file-caret" />
@@ -152,5 +184,10 @@ export function FileTree({ group, activePath, onOpen, onError }: FileTreeProps) 
     });
   };
 
-  return <div className="file-tree">{renderDir('', 0)}</div>;
+  return (
+    <div className="file-tree">
+      {renderDir('', 0)}
+      {menu ? <PopupMenu state={menu} onClose={() => setMenu(null)} /> : null}
+    </div>
+  );
 }
