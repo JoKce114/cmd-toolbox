@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toErrorMessage } from './lib';
-import { minifiedName, minify, shouldAutoMinify } from './modules/minify';
+import { enqueueMinify, minifiedName, shouldAutoMinify } from './modules/minify';
 import type { Group, OpenedFile } from './types';
 
 export function normalizeNewlines(text: string): string {
@@ -147,6 +147,27 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
     [],
   );
 
+  // 自动压缩：判定依据是「同名 .min.js 是否存在」，不是设置开关——不存在就绝不创建。
+  // 压缩失败只提示，不 throw，保存流程继续。
+  // 同一目标由 enqueueMinify 串行化并只写最后一次的内容，连按 Ctrl+S 不会写坏产物。
+  const autoMinify = useCallback(
+    (relPath: string, content: string) => {
+      void (async () => {
+        try {
+          const projectPath = groupRef.current.path;
+          if (!(await shouldAutoMinify(projectPath, relPath))) return;
+          const target = minifiedName(relPath);
+          await enqueueMinify(projectPath, target, content, async (compressed) => {
+            await window.api.files.writeMinified(projectPath, target, compressed);
+          });
+        } catch (error) {
+          onError(`压缩为 ${minifiedName(relPath)} 失败：${toErrorMessage(error)}`);
+        }
+      })();
+    },
+    [onError],
+  );
+
   const save = useCallback(
     async (relPath: string) => {
       const current = filesRef.current[relPath];
@@ -156,22 +177,13 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
       // 也不该在打开别的文件时被顶替。
       touchedRef.current.add(relPath);
 
-      // 自动压缩必须挂在「内容没变就返回」之前：用户要求不管有没有修改都执行。
-      // 判定依据是「同名 .min.js 是否存在」，不是设置开关——不存在就绝不创建。
-      // 压缩失败只提示，不影响本次保存。
-      void (async () => {
-        try {
-          const projectPath = groupRef.current.path;
-          if (!(await shouldAutoMinify(projectPath, relPath))) return;
-          const target = minifiedName(relPath);
-          const compressed = await minify(current.content);
-          await window.api.files.writeMinified(projectPath, target, compressed);
-        } catch (error) {
-          onError(`压缩为 ${minifiedName(relPath)} 失败：${toErrorMessage(error)}`);
-        }
-      })();
-
-      if (!current.dirty) return false;
+      // 自动压缩必须在「内容没变就返回」之前决定：用户要求不管有没有修改都执行。
+      // 内容没改时磁盘已经是这份内容，可以立即压缩；
+      // 有改动时要等 files.write 成功再压，否则源文件没落地、.min.js 却已是未保存的内容。
+      if (!current.dirty) {
+        autoMinify(relPath, current.content);
+        return false;
+      }
 
       const written = current.content;
       // CodeMirror 输出 LF；原文件是 CRLF 时写回要保持原样，否则整个文件的行尾会被改写
@@ -219,6 +231,8 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
             },
           };
         });
+        // 源文件已经落地，这时压缩产物的内容才和磁盘一致
+        autoMinify(relPath, written);
         return true;
       } catch (error) {
         onError(toErrorMessage(error));
@@ -226,7 +240,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
         return false;
       }
     },
-    [onError, patch],
+    [autoMinify, onError, patch],
   );
 
   const close = useCallback((relPath: string) => {

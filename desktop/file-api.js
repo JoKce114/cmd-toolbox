@@ -169,13 +169,43 @@ async function stat(projectPath, relPath) {
 
 // 压缩产物专用：允许创建新文件，不做 mtime 校验。
 // 产物没有并发编辑的顾虑，现有 write() 因为先 stat 所以无法建新文件。
+// 临时名必须唯一：同一进程里并发压缩同一文件时，共用一个 temp 会互相截断/抢 rename。
+// 不用 randomUUID 是为了少一次 crypto 依赖引入，pid + 时间 + 进程内序号 + 随机数已足够。
+let minifyTempSeq = 0;
+function minifyTempName(target) {
+  minifyTempSeq = (minifyTempSeq + 1) >>> 0;
+  const random = Math.random().toString(36).slice(2, 10);
+  return `${target}.${process.pid}.${Date.now()}.${minifyTempSeq}.${random}.tmp`;
+}
+
 async function writeMinified(projectPath, relPath, content) {
   const target = resolveWithin(projectPath, relPath);
   await fsp.mkdir(path.dirname(target), { recursive: true });
-  const temp = `${target}.${process.pid}.tmp`;
-  await fsp.writeFile(temp, String(content ?? ''), 'utf8');
-  await fsp.rename(temp, target);
+  const temp = minifyTempName(target);
+  try {
+    await fsp.writeFile(temp, String(content ?? ''), 'utf8');
+    await renameWithRetry(temp, target);
+  } catch (error) {
+    // rename 失败时别把半截临时文件留在项目里
+    await fsp.rm(temp, { force: true }).catch(() => {});
+    throw error;
+  }
   return { ok: true };
+}
+
+// Windows 上 rename 覆盖正被占用/刚被替换的目标会瞬时 EPERM/EBUSY，
+// 多路并发写同一产物时尤其明显。退避重试几次即可，不必让用户看到莫名失败。
+const RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+async function renameWithRetry(temp, target) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fsp.rename(temp, target);
+      return;
+    } catch (error) {
+      if (!RENAME_RETRY_CODES.has(error.code) || attempt >= 5) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+    }
+  }
 }
 
 const SEARCH_MAX_FILES = 4000;

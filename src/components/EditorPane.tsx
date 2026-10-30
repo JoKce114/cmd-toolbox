@@ -9,7 +9,7 @@ import { CodeMirrorHost, applyFormat, applyFormatSelection } from './CodeMirrorH
 import { PopupMenu } from './PopupMenu';
 import { buildEditorMenu } from './EditorContextMenu';
 import { modulesFor } from '../modules/catalog';
-import { isMinifiable, minifiedName, minify } from '../modules/minify';
+import { enqueueMinify, isMinifiable, minifiedName } from '../modules/minify';
 import type { EditorView } from '@codemirror/view';
 import type { Group, MenuState, Tab } from '../types';
 import type { TerminalThemeMode } from '../theme';
@@ -279,9 +279,10 @@ export function EditorPane({
         const currentPath = activePathRef.current;
         if (!currentPath) return;
         const projectPath = group.path;
-        const compressed = await minify(fileRef.current.content, menuLang);
         const output = minifiedName(currentPath);
-        await window.api.files.writeMinified(projectPath, output, compressed);
+        await enqueueMinify(projectPath, output, fileRef.current.content, async (compressed) => {
+          await window.api.files.writeMinified(projectPath, output, compressed);
+        });
         onToast(`已生成 ${output.split('/').pop()}`, 'success');
       };
       const items = buildEditorMenu({

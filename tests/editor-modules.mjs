@@ -1,11 +1,23 @@
 // 编辑器模块的端到端测试。
 // 需要独占 17382 端口，跑之前先关掉正在运行的 Cmd Toolbox。
 import { _electron as electron } from 'playwright-core';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
+// 主进程的文件写入实现：并发写产物的用例要直接调它
+const require = createRequire(import.meta.url);
+const fileApi = require(join(root, 'desktop', 'file-api.js'));
 const dataDir = mkdtempSync(join(tmpdir(), 'cmdtb-modules-'));
 const projectDir = mkdtempSync(join(tmpdir(), 'cmdtb-proj-'));
 
@@ -52,6 +64,11 @@ writeFileSync(join(projectDir, 'race.ts'), `${raceLines.join('\n')}\n`, 'utf8');
 writeFileSync(join(projectDir, 'plain.js'), 'const x = 1;\nfunction f(){return x}\n', 'utf8');
 writeFileSync(join(projectDir, 'withmin.js'), 'const y = 1;\n', 'utf8');
 writeFileSync(join(projectDir, 'withmin.min.js'), '/*old*/', 'utf8');
+// 后缀为 .min.js 的文件自己不再压缩
+writeFileSync(join(projectDir, 'self.min.js'), 'const kept = 1;\n', 'utf8');
+// 压缩失败路径：源文件本身合法，用户改出语法错误后再保存
+writeFileSync(join(projectDir, 'bad.js'), 'const ok = 1;\n', 'utf8');
+writeFileSync(join(projectDir, 'bad.min.js'), '/*keep-me*/', 'utf8');
 
 const app = await electron.launch({
   executablePath: resolve(root, 'node_modules/electron/dist/electron.exe'),
@@ -241,6 +258,92 @@ try {
   assert(
     statSync(minPath).mtimeMs > mtimeBefore,
     '内容没改时按 Ctrl+S 也会刷新 .min.js 的 mtime',
+  );
+
+  console.log('10. 并发写同一产物：临时文件名唯一，结果不混合');
+  // 直接打主进程的 writeMinified：同一进程内 20 路并发写同一个 .min.js。
+  // 旧实现共用 `${pid}.tmp`，这里会报 ENOENT/EPERM，或留下半截混合内容。
+  const concDir = mkdtempSync(join(tmpdir(), 'cmdtb-conc-'));
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 20 }, (_, i) =>
+        fileApi.writeMinified(concDir, 'out.min.js', `/*v${i}*/`),
+      ),
+    );
+    assert(results.every((item) => item.ok), '20 路并发写全部成功');
+    const finalContent = readFileSync(join(concDir, 'out.min.js'), 'utf8');
+    assert(
+      /^\/\*v\d+\*\/$/.test(finalContent),
+      `产物是某一次完整写入，实际 ${JSON.stringify(finalContent)}`,
+    );
+    assert(
+      !readdirSync(concDir).some((name) => name.endsWith('.tmp')),
+      '没有残留临时文件',
+    );
+  } finally {
+    rmSync(concDir, { recursive: true, force: true });
+  }
+
+  console.log('11. 连按 Ctrl+S：压缩任务排队，不报错也不写坏');
+  await page.locator('.cm-content').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\nconst burst = 7;');
+  // 第一次是 dirty 保存（等源文件落地后才压缩），后面几次都是非 dirty，
+  // 各自立刻排进压缩队列，后发起的覆盖先前的。
+  for (let i = 0; i < 5; i += 1) await page.keyboard.press('Control+s');
+  await waitFor(
+    () => readFileSync(minPath, 'utf8').includes('burst=7'),
+    10000,
+    '连按保存后产物是最新内容',
+  );
+  const burstContent = readFileSync(minPath, 'utf8');
+  assert(burstContent.includes('burst=7'), `产物来自最新内容，实际 ${burstContent}`);
+  assert(
+    (await page.locator('.toast-error').filter({ hasText: '压缩' }).count()) === 0,
+    '连按保存没有出现压缩失败提示',
+  );
+
+  console.log('12. 压缩失败不影响保存');
+  const badPath = join(projectDir, 'bad.js');
+  await openFile(page, 'bad.js');
+  await page.locator('.cm-content').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\nconst = ;');
+  await page.keyboard.press('Control+s');
+  const errorToast = page.locator('.toast-error').filter({ hasText: '压缩' }).last();
+  await errorToast.waitFor({ timeout: 10000 });
+  assert(await errorToast.isVisible(), '压缩失败弹出错误提示');
+  assert(
+    readFileSync(badPath, 'utf8').includes('const = ;'),
+    '源文件仍然保存成功（含语法错误的内容已落盘）',
+  );
+  assert(
+    readFileSync(join(projectDir, 'bad.min.js'), 'utf8') === '/*keep-me*/',
+    '压缩失败时已有 .min.js 不被改写',
+  );
+
+  console.log('13. .min.js 自己不再压缩');
+  await openFile(page, 'self.min.js');
+  await page.locator('.cm-content').first().click({ button: 'right' });
+  await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+  assert(
+    (await page.locator('.popup-menu').getByText(/压缩为/).count()) === 0,
+    '打开 .min.js 时右键菜单没有压缩项',
+  );
+  await page.keyboard.press('Escape');
+  await page.locator('.cm-content').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\nconst again = 2;');
+  await page.keyboard.press('Control+s');
+  await page
+    .locator('.toast-success')
+    .filter({ hasText: '已保存' })
+    .last()
+    .waitFor({ timeout: 8000 });
+  await page.waitForTimeout(1500);
+  assert(
+    !existsSync(join(projectDir, 'self.min.min.js')),
+    '保存 .min.js 不会生成 .min.min.js',
   );
 
   console.log(`\n全部通过（${passed} 项）`);
