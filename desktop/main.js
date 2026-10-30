@@ -392,6 +392,14 @@ function registerIpc() {
     fileApi.write(assertProjectPath(projectPath), relPath, content, encoding, mtime),
   );
 
+  ipcMain.handle('fs:stat', (_event, projectPath, relPath) =>
+    fileApi.stat(assertProjectPath(projectPath), relPath),
+  );
+
+  ipcMain.handle('fs:write-minified', (_event, projectPath, relPath, content) =>
+    fileApi.writeMinified(assertProjectPath(projectPath), relPath, content),
+  );
+
   ipcMain.handle('fs:search', (_event, projectPath, query, options) =>
     fileApi.search(assertProjectPath(projectPath), query, options),
   );

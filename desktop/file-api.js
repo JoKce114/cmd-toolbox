@@ -150,6 +150,29 @@ async function write(projectPath, relPath, content, encoding, mtime) {
   return { ok: true };
 }
 
+// 「文件不存在」是正常结果而不是异常，所以不抛错。
+// 自动压缩要靠它判断同名 .min.js 在不在。
+async function stat(projectPath, relPath) {
+  const target = resolveWithin(projectPath, relPath);
+  try {
+    const info = await fsp.stat(target);
+    return { exists: info.isFile(), mtime: info.mtimeMs };
+  } catch {
+    return { exists: false, mtime: 0 };
+  }
+}
+
+// 压缩产物专用：允许创建新文件，不做 mtime 校验。
+// 产物没有并发编辑的顾虑，现有 write() 因为先 stat 所以无法建新文件。
+async function writeMinified(projectPath, relPath, content) {
+  const target = resolveWithin(projectPath, relPath);
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  const temp = `${target}.${process.pid}.tmp`;
+  await fsp.writeFile(temp, String(content ?? ''), 'utf8');
+  await fsp.rename(temp, target);
+  return { ok: true };
+}
+
 const SEARCH_MAX_FILES = 4000;
 const SEARCH_MAX_MATCHES = 500;
 const SEARCH_MAX_FILE_BYTES = 1024 * 1024;
@@ -229,4 +252,4 @@ async function search(projectPath, query, options = {}) {
   return { matches, truncated, scanned };
 }
 
-module.exports = { list, read, write, detectEncoding, search };
+module.exports = { list, read, write, stat, writeMinified, detectEncoding, search };

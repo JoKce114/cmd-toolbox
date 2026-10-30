@@ -199,6 +199,15 @@ declare global {
           encoding: string,
           mtime: number,
         ) => Promise<{ ok: true }>;
+        stat: (
+          projectPath: string,
+          relPath: string,
+        ) => Promise<{ exists: boolean; mtime: number }>;
+        writeMinified: (
+          projectPath: string,
+          relPath: string,
+          content: string,
+        ) => Promise<{ ok: true }>;
         search: (
           projectPath: string,
           query: string,

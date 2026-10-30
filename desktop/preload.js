@@ -111,6 +111,9 @@ contextBridge.exposeInMainWorld('api', {
     read: (projectPath, relPath) => invoke('fs:read', projectPath, relPath),
     write: (projectPath, relPath, content, encoding, mtime) =>
       invoke('fs:write', projectPath, relPath, content, encoding, mtime),
+    stat: (projectPath, relPath) => invoke('fs:stat', projectPath, relPath),
+    writeMinified: (projectPath, relPath, content) =>
+      invoke('fs:write-minified', projectPath, relPath, content),
     search: (projectPath, query, options) =>
       invoke('fs:search', projectPath, query, options),
   },
