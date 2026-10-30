@@ -91,7 +91,16 @@ try {
     `折叠有过渡动画，transition-duration 实际 ${transition}`,
   );
   await page.locator('.tab-group-toggle').click();
-  await page.waitForTimeout(500);
+  await page
+    .waitForFunction(
+      () => {
+        const node = document.querySelector('.tab-group-tabs-inner');
+        return !node || node.getBoundingClientRect().width < 1;
+      },
+      null,
+      { timeout: 5000 },
+    )
+    .catch(() => {});
   assert((await count(page, '.tab-group.is-collapsed')) === 1, '组进入折叠态');
   const innerBox = await page.locator('.tab-group-tabs-inner').boundingBox();
   assert(
@@ -104,7 +113,16 @@ try {
   );
   assert((await count(page, '.tab')) === 3, '折叠不影响页签总数');
   await page.locator('.tab-group-toggle').click();
-  await page.waitForTimeout(500);
+  await page
+    .waitForFunction(
+      () => {
+        const node = document.querySelector('.tab-group-tabs-inner');
+        return Boolean(node) && node.getBoundingClientRect().width > 100;
+      },
+      null,
+      { timeout: 5000 },
+    )
+    .catch(() => {});
   assert((await count(page, '.tab')) === 3, '展开后页签全部回来');
   const openBox = await page.locator('.tab-group-tabs-inner').boundingBox();
   assert((openBox?.width ?? 0) > 100, `展开后组内容恢复宽度，实际 ${openBox?.width}`);
