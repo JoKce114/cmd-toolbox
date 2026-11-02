@@ -21,7 +21,7 @@ export function OpenEditors({
   }
 
   return (
-    <div className="file-tree">
+    <div className="open-editors-list">
       {openPaths.map((relPath) => {
         const name = relPath.split('/').pop() || relPath;
         return (

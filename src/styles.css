@@ -3537,6 +3537,11 @@ p {
   border-right-color: #23252b;
 }
 
+.editor-pane.theme-dark .editor-sidebar {
+  background: #141519;
+  border-right-color: #23252b;
+}
+
 .editor-pane.theme-dark .file-row {
   color: #a8adb8;
 }
@@ -4852,10 +4857,17 @@ p {
   flex: 1;
 }
 
-.editor-sidebar-section .file-tree {
+.editor-sidebar-section.is-grow .file-tree {
   flex: 1;
   min-height: 0;
   border-right: 0;
+}
+
+/* 「打开的编辑器」列表：不参与 flex 分配，自己滚动 */
+.open-editors-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 0;
 }
 
 .file-tree-empty {
