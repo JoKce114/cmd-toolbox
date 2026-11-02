@@ -876,6 +876,23 @@ p {
   background: var(--surface);
 }
 
+/* 对比分栏：左编辑器 / 可拖拽分界线 / 右 DiffPane */
+.editor-diff-split {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+/* DiffPane 的 .terminal-pane 是 absolute inset，必须由这里定位约束在右半栏内 */
+.editor-diff-pane {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 .editor-placeholder {
   margin: 0;
   padding: 18px;

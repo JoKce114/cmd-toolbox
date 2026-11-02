@@ -7,7 +7,9 @@ import type { CommitRef, GitChange } from '../types';
 
 export type DiffTarget =
   | { kind: 'change'; change: GitChange }
-  | { kind: 'commit'; commit: CommitRef };
+  | { kind: 'commit'; commit: CommitRef }
+  // 两段文本直接算好的 patch，不读磁盘也不读 git
+  | { kind: 'text'; title: string; patch: string };
 
 export type DiffPaneProps = {
   projectPath: string;
@@ -33,6 +35,8 @@ export function DiffPane({
   const [selectedPath, setSelectedPath] = useState('');
 
   // target 对象每次渲染都是新的，依赖必须落在原始值上，否则会无限重取
+  const isText = target.kind === 'text';
+  const textPatch = target.kind === 'text' ? target.patch : '';
   const commitHash = target.kind === 'commit' ? target.commit.hash : '';
   const changePath = target.kind === 'change' ? target.change.path : '';
   const changeStatus =
@@ -44,6 +48,14 @@ export function DiffPane({
     let cancelled = false;
     setLoading(true);
     setSelectedPath('');
+    // text 变体的 patch 是上层算好的，直接渲染，不发起任何 IPC
+    if (isText) {
+      setPatch(textPatch);
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     const load = async () => {
       const result = commitHash
         ? await window.api.git.commitDiff(projectPath, commitHash)
@@ -63,7 +75,7 @@ export function DiffPane({
     return () => {
       cancelled = true;
     };
-  }, [projectPath, commitHash, changePath, changeStatus, onToast]);
+  }, [isText, textPatch, projectPath, commitHash, changePath, changeStatus, onToast]);
 
   const files = useMemo(
     () => (commitHash ? splitCommitPatch(patch) : []),
@@ -72,24 +84,31 @@ export function DiffPane({
   const activeFile = files.find((file) => file.path === selectedPath) ?? files[0] ?? null;
   const parsed = parsePatch(commitHash ? activeFile?.patch || '' : patch);
 
-  const title = commitHash
-    ? `${target.kind === 'commit' ? target.commit.short : ''} · ${
-        target.kind === 'commit' ? target.commit.subject : ''
-      }`
-    : target.kind === 'change' && target.change.origPath
-      ? `${target.change.origPath} → ${target.change.path}`
-      : changePath;
+  const title = isText
+    ? target.kind === 'text'
+      ? target.title
+      : ''
+    : commitHash
+      ? `${target.kind === 'commit' ? target.commit.short : ''} · ${
+          target.kind === 'commit' ? target.commit.subject : ''
+        }`
+      : target.kind === 'change' && target.change.origPath
+        ? `${target.change.origPath} → ${target.change.path}`
+        : changePath;
 
   const openPath = commitHash ? activeFile?.path || '' : changePath;
-  const openDisabled = commitHash
-    ? !activeFile || activeFile.status === 'deleted'
-    : false;
+  // text 变体对应两段内存文本，没有可单独打开的磁盘文件
+  const openDisabled = isText
+    ? true
+    : commitHash
+      ? !activeFile || activeFile.status === 'deleted'
+      : false;
 
   return (
     <section className={`terminal-pane diff-pane${active ? '' : ' is-hidden'}`}>
       <header className="pane-header">
         <span className="pane-path" title={title}>
-          {title}
+          <span>{title}</span>
         </span>
         {!parsed.isEmpty ? (
           <span className="diff-stats">
