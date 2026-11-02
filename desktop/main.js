@@ -204,6 +204,11 @@ function registerIpc() {
     if (typeof projectPath !== 'string' || !projectPath.trim()) {
       return { ok: false, matches: [], truncated: false, scanned: 0 };
     }
+    // name 同样来自渲染进程。非字符串经 String() 会变成 "[object Object]"，
+    // 长度足够长，从而白白触发一次全项目扫描；这里提前拦截。
+    if (typeof name !== 'string' || name.trim().length < 2) {
+      return { ok: true, matches: [], truncated: false, scanned: 0 };
+    }
     const input = options && typeof options === 'object' ? options : {};
     return symbols.lookup(projectPath, name, input);
   });

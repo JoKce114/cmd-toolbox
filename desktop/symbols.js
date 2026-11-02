@@ -509,7 +509,12 @@ function normalizeCurrentPath(root, value) {
 }
 
 async function lookup(projectPath, name, options = {}) {
-  const target = String(name || '').trim();
+  // name 可能来自外部输入。非字符串经 String() 会变成 "[object Object]"，
+  // 长度足够从而在预筛前就触发全项目文件遍历；这里一律视为无效查询。
+  if (typeof name !== 'string') {
+    return { ok: true, matches: [], truncated: false, scanned: 0 };
+  }
+  const target = name.trim();
   if (target.length < 2) {
     return { ok: true, matches: [], truncated: false, scanned: 0 };
   }

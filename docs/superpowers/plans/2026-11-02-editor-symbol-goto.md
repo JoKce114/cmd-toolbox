@@ -861,7 +861,7 @@ const symbols = require('./symbols');
       };
 ```
 
-并在该文件顶部类型导入处补上 `SymbolMatch`（定义放在 `src/types.ts`，见Task 6）。
+并在该文件顶部类型导入处补上 `SymbolMatch`（定义放在 `src/types.ts`，Task 4 已加好）。
 
 - [ ] **Step 4: 依赖迁移**
 
@@ -1018,7 +1018,7 @@ EOF
 ## Task 6: 渲染侧取词与卡片组件
 
 **Files:**
-- Modify: `src/types.ts`
+- 确认: `src/types.ts`（类型已在 Task 4 定义，无需修改）
 - Create: `src/symbolLookup.ts`
 - Create: `src/components/SymbolCard.tsx`
 - Modify: `src/styles.css`
@@ -1029,28 +1029,15 @@ EOF
   - `wordAndReceiverAt(state, pos) => { name, receiver, from, to } | null`
   - `SymbolCard` 组件，props `{ card, onJump, onClose }`
 
-- [ ] **Step 1: 加类型**
+- [ ] **Step 1: 确认类型已存在**
 
-在 `src/types.ts` 末尾追加：
+`SymbolMatch` 与 `SymbolLookupResult` 已在 Task 4 定义在 `src/types.ts`，
+此处只需确认它们存在，**不要重复添加**（重复声明会报 TS2300）。
+
+需要时直接从 `./types` 导入：
 
 ```ts
-export type SymbolMatch = {
-  relPath: string;
-  line: number;
-  kind: 'function' | 'method' | 'class';
-  name: string;
-  owner: string;
-  namespace: string;
-  signature: string;
-  doc: string;
-};
-
-export type SymbolLookupResult = {
-  ok: boolean;
-  matches: SymbolMatch[];
-  truncated: boolean;
-  scanned: number;
-};
+import type { SymbolLookupResult, SymbolMatch } from './types';
 ```
 
 - [ ] **Step 2: 写取词实现**
@@ -2004,6 +1991,6 @@ EOF
 | 离线测试 / UI 测试 | Task 1–3、Task 9 |
 | CLAUDE.md 记录 | Task 10 |
 
-**类型一致性**：`SymbolMatch`（含 `relPath`/`line`/`kind`/`name`/`owner`/`namespace`/`signature`/`doc`）在 Task 3 主进程产出、Task 6 定义、Task 7/8 消费，字段一致。`SymbolCardState` 的 `{ name, loading, truncated, matches }` 在 Task 6 定义、Task 7 构造、Task 9 断言，一致。`lookup` 的 options 键 `currentPath` / `receiver` 在 Task 3、4、6、7 一致。
+**类型一致性**：`SymbolMatch`（含 `relPath`/`line`/`kind`/`name`/`owner`/`namespace`/`signature`/`doc`）在 Task 3 主进程产出、Task 4 定义、Task 7/8 消费，字段一致。`SymbolCardState` 的 `{ name, loading, truncated, matches }` 在 Task 6 定义、Task 7 构造、Task 9 断言，一致。`lookup` 的 options 键 `currentPath` / `receiver` 在 Task 3、4、6、7 一致。
 
 **风险点**：Task 9 用「第几行第几列」点击比较脆弱，所以 Step 3 给出了基于 TreeWalker 的稳定定位实现；若首轮失败，直接替换即可。

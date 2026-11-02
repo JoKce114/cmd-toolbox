@@ -437,6 +437,27 @@ try {
   const tooShort = await symbols.lookup(projectDir, 'a', {});
   assert(tooShort.matches.length === 0, '查询名少于 2 字符直接返回空');
 
+  // 非法 name 不能被 String() 转成 "[object Object]" 之类的长字符串，
+  // 否则会白白触发一次全项目扫描。scanned 为 0 才能证明没有遍历项目。
+  const badNameCases = [
+    ['对象', { foo: 'bar' }],
+    ['数字', 123],
+    ['纯空格', '   '],
+  ];
+  for (const [label, badName] of badNameCases) {
+    let result = null;
+    let error = null;
+    try {
+      result = await symbols.lookup(projectDir, badName, {});
+    } catch (err) {
+      error = err;
+    }
+    assert(!error, `${label} name 不抛异常，实际 ${error && error.message}`);
+    assert(result && result.ok === true, `${label} name 返回成功形状`);
+    assert(result && result.matches.length === 0, `${label} name 返回空 matches`);
+    assert(result && result.scanned === 0, `${label} name 不扫描项目，实际 ${result && result.scanned}`);
+  }
+
   // 先查询一个存在且会被解析的名字（确保写入缓存），再改内容与 mtime：
   // 缓存不失效的话，旧名字仍会命中旧声明。
   symbols.resetCache();
