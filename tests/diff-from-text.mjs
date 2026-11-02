@@ -193,7 +193,7 @@ console.log('11. 一万行仅一行相同（有交集，走正常差分）');
   assert(removed.length === size - 1 && inserted.length === size - 1, '其余行全部删除并新增');
 }
 
-console.log('7. 剪贴板粘贴校验');
+console.log('8. 剪贴板粘贴校验');
 const clip = await import('../src/fileClipboard.ts');
 
 const crossProject = clip.canPaste(
@@ -219,6 +219,20 @@ assert(caseDiff.ok === true, '项目路径大小写不同仍视为同一项目')
 const noClip = clip.canPaste(null, 'D:/p1');
 assert(noClip.ok === false, '剪贴板为空时不能粘贴');
 
+// 空项目路径不能被当成「同一项目」放行
+const emptyProject = clip.canPaste(
+  { kind: 'copy', relPath: 'a.txt', projectPath: '' },
+  '',
+);
+assert(emptyProject.ok === false, '空项目路径被拒绝，不 fail-open');
+
+// 结尾的 /. 段应归一掉，与不带它的同一路径等价
+const dotSuffix = clip.canPaste(
+  { kind: 'copy', relPath: 'a.txt', projectPath: 'D:/p1/.' },
+  'D:/p1',
+);
+assert(dotSuffix.ok === true, '结尾 /. 归一后视为同一项目');
+
 assert(
   clip.pasteTargetDir({ kind: 'copy', relPath: 'dir/a.txt', projectPath: 'D:/p1' }, 'sub') ===
     'sub/a.txt',
@@ -227,6 +241,18 @@ assert(
 assert(
   clip.pasteTargetDir({ kind: 'copy', relPath: 'a.txt', projectPath: 'D:/p1' }, '') === 'a.txt',
   '粘贴到根目录时没有多余斜杠',
+);
+assert(
+  clip.pasteTargetDir({ kind: 'copy', relPath: 'a.txt', projectPath: 'D:/p1' }, 'sub/') ===
+    'sub/a.txt',
+  '目标目录带尾斜杠时不产生双斜杠',
+);
+assert(
+  clip.pasteTargetDir(
+    { kind: 'copy', relPath: 'sub/dir\\a.txt', projectPath: 'D:/p1' },
+    'sub',
+  ) === 'sub/a.txt',
+  'relPath 混用正反斜杠时仍能取出文件名',
 );
 
 console.log(`\n全部通过：${passed} 项`);
