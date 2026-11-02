@@ -168,7 +168,7 @@ export function EditorPane({
   const compareWithDisk = useCallback(
     async (relPath: string) => {
       if (isUntitledPath(relPath)) {
-        onToast('空白窗口没有磁盘版本，无法比较', 'error');
+        onToast('空白窗口没有可比较的版本', 'error');
         return;
       }
       const entry = files[relPath];
@@ -203,7 +203,7 @@ export function EditorPane({
       setDiffSource({ kind: 'pair', left: leftRel, right: rightRel });
       setDiffTarget({
         kind: 'text',
-        title: `${leftRel} ↔ ${rightRel}`,
+        title: `${displayNameFor(leftRel)} ↔ ${displayNameFor(rightRel)}`,
         patch: buildTextPatch(leftRel, left.content, rightRel, right.content),
       });
       setDiffCompareWith(null);
@@ -215,7 +215,7 @@ export function EditorPane({
   const compareWithHead = useCallback(
     async (relPath: string) => {
       if (isUntitledPath(relPath)) {
-        onToast('空白窗口没有磁盘版本，无法比较', 'error');
+        onToast('空白窗口没有可比较的版本', 'error');
         return;
       }
       const entry = files[relPath];
@@ -1001,7 +1001,9 @@ export function EditorPane({
               {
                 type: 'item',
                 id: 'diff-pick',
-                label: diffCompareWith ? `与 ${diffCompareWith} 比较` : '选择以进行比较',
+                label: diffCompareWith
+                  ? `与 ${displayNameFor(diffCompareWith)} 比较`
+                  : '选择以进行比较',
                 disabled:
                   menuReadOnly || pickedReadOnly || diffCompareWith === editorMenu.relPath,
                 onSelect: () => {
