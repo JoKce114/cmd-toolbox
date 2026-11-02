@@ -1665,6 +1665,22 @@ export default function App() {
     [applyTabs],
   );
 
+  // 空白窗口新建 / 另存为后，页签要从虚拟路径换成新的路径
+  const setTabFilePath = useCallback(
+    (groupKey: string, tabId: string, relPath: string) => {
+      const list = tabsRef.current[groupKey] || [];
+      const existing = list.find((tab) => tab.id === tabId);
+      if (!existing || existing.filePath === relPath) return;
+      applyTabs({
+        ...tabsRef.current,
+        [groupKey]: list.map((tab) =>
+          tab.id === tabId ? { ...tab, filePath: relPath } : tab,
+        ),
+      });
+    },
+    [applyTabs],
+  );
+
   const handleDirtyChange = useCallback((tabId: string, dirty: boolean) => {
     if (dirty) {
       dirtyTabsRef.current.set(tabId, true);
@@ -3058,6 +3074,7 @@ export default function App() {
           onClose={(target) => closeTabs(target.groupKey, [target.id])}
           onToast={pushToast}
           onTitleChange={(title) => setTabDescriptor(tab.groupKey, tab.id, title)}
+          onFilePathChange={(relPath) => setTabFilePath(tab.groupKey, tab.id, relPath)}
           onDirtyChange={handleDirtyChange}
           themeMode={terminalThemeMode}
           wordWrap={prefs.editorWordWrap}

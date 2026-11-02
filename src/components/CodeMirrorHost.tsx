@@ -40,6 +40,7 @@ import { SymbolCard } from './SymbolCard';
 import type { SymbolCardState } from './SymbolCard';
 import { lookupSymbol, wordAndReceiverAt } from '../symbolLookup';
 import type { SymbolMatch } from '../types';
+import { isUntitledPath } from '../untitledPath';
 
 export type CodeMirrorHostProps = {
   value: string;
@@ -389,6 +390,19 @@ export function CodeMirrorHost({
   jumpRef.current = onJumpToSymbol;
   onGotoLineAppliedRef.current = onGotoLineApplied;
 
+  // 空白窗口另存为只换路径、不换文件：编辑器实例与撤销栈必须保留。
+  // 重建 effect 的依赖里有 filePath，正常切文件要重建（各文件自带撤销历史），
+  // 但 untitled://N → 真实路径 是同一次编辑的落盘，不能重建。
+  // 这个标记必须在 render 阶段算好：React 会先跑上一次 effect 的清理，
+  // 清理函数只能通过 ref 知道「这次变化要不要保留实例」。
+  const viewPathRef = useRef(filePath);
+  const preserveViewRef = useRef(false);
+  if (viewPathRef.current !== filePath) {
+    preserveViewRef.current =
+      isUntitledPath(viewPathRef.current) && !isUntitledPath(filePath);
+    viewPathRef.current = filePath;
+  }
+
   const referenceExtensionOption = () =>
     referenceExtension({
       isEnabled: () => referenceEnabledRef.current,
@@ -413,6 +427,26 @@ export function CodeMirrorHost({
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+
+    // 空白窗口另存为：内容与撤销栈都属于同一次编辑，只把语言扩展换到新路径。
+    // 上一次 effect 的清理函数已经根据 preserveViewRef 跳过了销毁。
+    if (preserveViewRef.current) {
+      preserveViewRef.current = false;
+      const kept = viewRef.current;
+      if (!kept) return;
+      let disposed = false;
+      void languageFor(filePath).then((extension) => {
+        if (disposed || viewRef.current !== kept) return;
+        kept.dispatch({ effects: languageRef.current.reconfigure(extension ?? []) });
+      });
+      return () => {
+        disposed = true;
+        if (preserveViewRef.current) return;
+        kept.destroy();
+        viewRef.current = null;
+      };
+    }
+
     let disposed = false;
 
     const view = new EditorView({
@@ -470,6 +504,8 @@ export function CodeMirrorHost({
 
     return () => {
       disposed = true;
+      // 下一次变化是空白窗口另存为：保留实例与撤销历史
+      if (preserveViewRef.current) return;
       view.destroy();
       viewRef.current = null;
     };

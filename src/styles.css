@@ -1039,6 +1039,34 @@ p {
   color: var(--text);
 }
 
+.editor-tab-add {
+  flex: 0 0 auto;
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--faint);
+}
+
+.editor-tab-add:hover {
+  background: #e4e6ec;
+  color: var(--text);
+}
+
+.editor-pane.theme-dark .editor-tab-add {
+  color: #7f8591;
+}
+
+.editor-pane.theme-dark .editor-tab-add:hover {
+  background: #2a2d35;
+  color: #e4e6ea;
+}
+
 .editor-pane.theme-dark .editor-tabs {
   background: #17181d;
   border-bottom-color: #23252b;

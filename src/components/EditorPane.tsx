@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Save, Search, X } from 'lucide-react';
+import { Plus, Save, Search, X } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import { buildTextPatch } from '../diffFromText';
 import { useEditorFiles } from '../useEditorFiles';
 import type { EditorFileState } from '../useEditorFiles';
+import { displayNameFor, isUntitledPath, nextUntitledIndex, untitledPathFor } from '../untitledPath';
+import { SaveAsModal } from './SaveAsModal';
 import { FileTree } from './FileTree';
 import { EditorSidebar } from './EditorSidebar';
 import { OpenEditors } from './OpenEditors';
@@ -17,7 +19,7 @@ import { findModule } from '../modules/catalog';
 import type { EditorModule } from '../modules/catalog';
 import { enqueueMinify, isMinifiable, minifiedName, nextMinifySeq } from '../modules/minify';
 import type { FileClip } from '../fileClipboard';
-import type { Group, GitStatus, SymbolMatch, Tab } from '../types';
+import type { Group, GitStatus, MenuState, SymbolMatch, Tab } from '../types';
 import type { TerminalThemeMode } from '../theme';
 import type { KeyBindingMap } from '../editorKeymap';
 import type { EditorFontFamily } from '../prefs';
@@ -60,6 +62,8 @@ export type EditorPaneProps = {
   showWhitespace: boolean;
   enabledModules: string[];
   onFontSizeDelta: (delta: number) => void;
+  // 页签对应的文件路径变化（空白窗口新建 / 另存为后换真实路径）
+  onFilePathChange?: (relPath: string) => void;
 };
 
 export function EditorPane({
@@ -84,6 +88,7 @@ export function EditorPane({
   showWhitespace,
   enabledModules,
   onFontSizeDelta,
+  onFilePathChange,
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const {
@@ -99,6 +104,7 @@ export function EditorPane({
     closeMany,
     rename,
     setActivePath,
+    saveUntitledAs,
   } = useEditorFiles(group, onError);
 
   const [fileClip, setFileClip] = useState<FileClip | null>(null);
@@ -137,6 +143,9 @@ export function EditorPane({
     y: number;
     relPath: string;
   } | null>(null);
+  // 空白窗口按 Ctrl+S 时打开另存为弹窗，值是被保存的虚拟路径
+  const [saveAsPath, setSaveAsPath] = useState<string | null>(null);
+  const [tabMenu, setTabMenu] = useState<MenuState | null>(null);
 
   const closeDiff = useCallback(() => {
     setDiffSource(null);
@@ -348,6 +357,8 @@ export function EditorPane({
   onTitleChangeRef.current = onTitleChange;
   const onDirtyChangeRef = useRef(onDirtyChange);
   onDirtyChangeRef.current = onDirtyChange;
+  const onFilePathChangeRef = useRef(onFilePathChange);
+  onFilePathChangeRef.current = onFilePathChange;
 
   // 页签的 filePath 会变（上层用同一个编辑器页签顶替新文件），
   // 所以要比对「上次已应用的路径」而不是只在挂载时读一次。
@@ -360,7 +371,7 @@ export function EditorPane({
   }, [tab.filePath, open]);
 
   useEffect(() => {
-    const base = activePath ? activePath.split('/').pop() || '编辑器' : '编辑器';
+    const base = activePath ? displayNameFor(activePath) : '编辑器';
     onTitleChangeRef.current(`${group.name} · ${base}${hasDirty ? ' •' : ''}`);
   }, [activePath, hasDirty, group.name]);
 
@@ -394,6 +405,11 @@ export function EditorPane({
     const current = fileRef.current;
     const target = activePathRef.current;
     if (!target) return;
+    // 空白窗口没有磁盘路径，保存 = 另存为
+    if (isUntitledPath(target)) {
+      setSaveAsPath(target);
+      return;
+    }
     if (current.readOnly) {
       onToast('该文件为只读，无法保存', 'error');
       return;
@@ -404,6 +420,16 @@ export function EditorPane({
     if (outcome === 'saved') onToast('已保存', 'success');
     else if (outcome === 'unchanged') onToast('文件没有改动', 'info');
   }, [onToast, save]);
+
+  // 页签栏的 ＋ 与右键菜单共用：算最小可用编号，建空白窗口并把页签路径同步给上层。
+  // 直接调 open() 建条目；上层回写 filePath 后，appliedPathRef 已指向同一路径，
+  // 挂载时同步路径的 effect 会提前返回，不会重复打开。
+  const createUntitled = useCallback(() => {
+    const relPath = untitledPathFor(nextUntitledIndex(openPaths));
+    appliedPathRef.current = relPath;
+    void open(relPath);
+    onFilePathChangeRef.current?.(relPath);
+  }, [openPaths, open]);
 
   const markResolved = useCallback(async () => {
     const target = activePathRef.current;
@@ -663,7 +689,7 @@ export function EditorPane({
     >
       <header className="pane-header">
         <span className="pane-path" title={activePath || group.path}>
-          {activePath || group.name}
+          {activePath ? displayNameFor(activePath) : group.name}
         </span>
         {conflictCount > 0 ? (
           <span
@@ -683,7 +709,7 @@ export function EditorPane({
           type="button"
           className={`icon-btn${file.saving ? ' is-saving' : ''}`}
           title="保存 (Ctrl+S)"
-          disabled={file.saving || file.readOnly || !file.dirty}
+          disabled={file.saving || file.readOnly}
           onClick={() => void handleSave()}
         >
           {file.saving ? <span className="editor-saving">保存中…</span> : <Save size={14} />}
@@ -707,6 +733,21 @@ export function EditorPane({
             <div
               key={relPath}
               className={cn('editor-tab', relPath === activePath && 'active')}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setTabMenu({
+                  x: event.clientX,
+                  y: event.clientY,
+                  items: [
+                    {
+                      type: 'item',
+                      id: 'new-untitled',
+                      label: '新建空白文件',
+                      onSelect: createUntitled,
+                    },
+                  ],
+                });
+              }}
             >
               <button
                 type="button"
@@ -714,7 +755,7 @@ export function EditorPane({
                 title={relPath}
                 onClick={() => setActivePath(relPath)}
               >
-                {relPath.split('/').pop()}
+                {displayNameFor(relPath)}
                 {files[relPath].dirty ? <span className="editor-tab-dot">•</span> : null}
               </button>
               <button
@@ -727,6 +768,14 @@ export function EditorPane({
               </button>
             </div>
           ))}
+          <button
+            type="button"
+            className="editor-tab-add"
+            title="新建空白文件"
+            onClick={createUntitled}
+          >
+            <Plus size={12} />
+          </button>
         </div>
       ) : null}
 
@@ -903,6 +952,25 @@ export function EditorPane({
           confirmLabel="删除"
           onClose={() => setPendingDelete(null)}
           onConfirm={confirmDelete}
+        />
+      ) : null}
+
+      {tabMenu ? <PopupMenu state={tabMenu} onClose={() => setTabMenu(null)} /> : null}
+
+      {saveAsPath ? (
+        <SaveAsModal
+          suggestedName="untitled.txt"
+          onClose={() => setSaveAsPath(null)}
+          onSubmit={async (relPath) => {
+            const result = await saveUntitledAs(saveAsPath, relPath);
+            if (!result.ok) return result.message || '保存失败';
+            // 先更新 appliedPathRef，避免上层 filePath 变化触发重新 open、
+            // 把刚保存的内容从磁盘读一遍并清掉撤销栈
+            appliedPathRef.current = relPath;
+            onFilePathChangeRef.current?.(relPath);
+            onToast('已保存', 'success');
+            return null;
+          }}
         />
       ) : null}
 

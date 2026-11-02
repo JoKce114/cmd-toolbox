@@ -1,5 +1,6 @@
 import { File } from 'lucide-react';
 import { cn } from '../lib';
+import { displayNameFor } from '../untitledPath';
 
 type OpenEditorsProps = {
   openPaths: string[];
@@ -23,7 +24,7 @@ export function OpenEditors({
   return (
     <div className="open-editors-list">
       {openPaths.map((relPath) => {
-        const name = relPath.split('/').pop() || relPath;
+        const name = displayNameFor(relPath);
         return (
           <button
             key={relPath}
