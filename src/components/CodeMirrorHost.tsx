@@ -373,6 +373,7 @@ export function CodeMirrorHost({
   const displayRef = useRef(new Compartment());
   const diagnosticsRef = useRef(new Compartment());
   const referenceRef = useRef(new Compartment());
+  const readOnlyRef = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   const onCountRef = useRef(onConflictCountChange);
   const onFontDeltaRef = useRef(onFontSizeDelta);
@@ -423,7 +424,8 @@ export function CodeMirrorHost({
       onJump: (match) => jumpRef.current(match),
     });
 
-  // 只在 filePath / readOnly 变化时重建，避免每次按键都销毁编辑器
+  // 只在 filePath 变化时重建，避免每次按键都销毁编辑器。
+  // readOnly 走 Compartment（见下方 effect），不参与重建：保留撤销栈。
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -434,6 +436,11 @@ export function CodeMirrorHost({
       preserveViewRef.current = false;
       const kept = viewRef.current;
       if (!kept) return;
+      // 保留实例时文件可能换了（例如「在编辑器中打开」顶替未触碰的空白页签），
+      // 只读状态不能沿用旧文档的，否则只读文件会变成可编辑。
+      kept.dispatch({
+        effects: readOnlyRef.current.reconfigure(EditorState.readOnly.of(readOnly)),
+      });
       let disposed = false;
       void languageFor(filePath).then((extension) => {
         if (disposed || viewRef.current !== kept) return;
@@ -488,7 +495,7 @@ export function CodeMirrorHost({
               onCountRef.current?.(parseConflicts(update.state.doc.toString()).length);
             }
           }),
-          EditorState.readOnly.of(readOnly),
+          readOnlyRef.current.of(EditorState.readOnly.of(readOnly)),
         ],
       }),
     });
@@ -511,7 +518,19 @@ export function CodeMirrorHost({
     };
     // value 故意不放进依赖：由外部内容变化通过下方 effect 同步
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, readOnly]);
+  }, [filePath]);
+
+  // 只读状态变化只重配这一扩展，不重建编辑器。
+  // readOnly 必须在 Compartment 里：保留实例的路径（空白窗口另存为、
+  // 「在编辑器中打开」顶替空白页签）不会重建视图，只能靠 reconfigure 应用。
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    if (view.state.readOnly === readOnly) return;
+    view.dispatch({
+      effects: readOnlyRef.current.reconfigure(EditorState.readOnly.of(readOnly)),
+    });
+  }, [readOnly]);
 
   // 主题切换只重配主题扩展，不重建编辑器
   useEffect(() => {
@@ -614,9 +633,8 @@ export function CodeMirrorHost({
       lintGutter(),
     ];
     view.dispatch({ effects: diagnosticsRef.current.reconfigure(extension) });
-    // readOnly 变化会重建整个 EditorView（见上方重建 effect），新视图里的
-    // diagnosticsRef 是空的，这里必须跟着重跑，否则诊断会静默消失到下次切文件。
-  }, [filePath, readOnly, diagnosticModule]);
+    // readOnly 已移出重建依赖，切换文件时 filePath 一定会变、这里照样重跑。
+  }, [filePath, diagnosticModule]);
 
   // 符号跳转的总开关变化时，只重配这一块扩展
   useEffect(() => {

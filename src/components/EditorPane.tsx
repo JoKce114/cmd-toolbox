@@ -727,57 +727,56 @@ export function EditorPane({
         </button>
       </header>
 
-      {openPaths.length > 0 ? (
-        <div className="editor-tabs">
-          {openPaths.map((relPath) => (
-            <div
-              key={relPath}
-              className={cn('editor-tab', relPath === activePath && 'active')}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                setTabMenu({
-                  x: event.clientX,
-                  y: event.clientY,
-                  items: [
-                    {
-                      type: 'item',
-                      id: 'new-untitled',
-                      label: '新建空白文件',
-                      onSelect: createUntitled,
-                    },
-                  ],
-                });
-              }}
-            >
-              <button
-                type="button"
-                className="editor-tab-name"
-                title={relPath}
-                onClick={() => setActivePath(relPath)}
-              >
-                {displayNameFor(relPath)}
-                {files[relPath].dirty ? <span className="editor-tab-dot">•</span> : null}
-              </button>
-              <button
-                type="button"
-                className="editor-tab-close"
-                title="关闭该文件"
-                onClick={() => requestCloseTab(relPath)}
-              >
-                <X size={11} />
-              </button>
-            </div>
-          ))}
-          <button
-            type="button"
-            className="editor-tab-add"
-            title="新建空白文件"
-            onClick={createUntitled}
+      {/* 空面板也要保留页签栏：＋ 按钮是新建空白窗口的唯一入口 */}
+      <div className="editor-tabs">
+        {openPaths.map((relPath) => (
+          <div
+            key={relPath}
+            className={cn('editor-tab', relPath === activePath && 'active')}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setTabMenu({
+                x: event.clientX,
+                y: event.clientY,
+                items: [
+                  {
+                    type: 'item',
+                    id: 'new-untitled',
+                    label: '新建空白文件',
+                    onSelect: createUntitled,
+                  },
+                ],
+              });
+            }}
           >
-            <Plus size={12} />
-          </button>
-        </div>
-      ) : null}
+            <button
+              type="button"
+              className="editor-tab-name"
+              title={relPath}
+              onClick={() => setActivePath(relPath)}
+            >
+              {displayNameFor(relPath)}
+              {files[relPath].dirty ? <span className="editor-tab-dot">•</span> : null}
+            </button>
+            <button
+              type="button"
+              className="editor-tab-close"
+              title="关闭该文件"
+              onClick={() => requestCloseTab(relPath)}
+            >
+              <X size={11} />
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="editor-tab-add"
+          title="新建空白文件"
+          onClick={createUntitled}
+        >
+          <Plus size={12} />
+        </button>
+      </div>
 
       {file.readOnly && activePath ? (
         <p className="editor-notice">该文件为只读（二进制、过大或无法解码）</p>
