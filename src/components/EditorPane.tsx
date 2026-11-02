@@ -409,6 +409,11 @@ export function EditorPane({
               bracketMatching={bracketMatching}
               showWhitespace={showWhitespace}
               diagnosticModule={diagnosticModule}
+              // TODO(Task 8): 以下四行是占位值，接入符号跳转时必须替换
+              referenceEnabled={false}
+              projectPath={group.path}
+              onJumpToSymbol={() => {}}
+              gotoLine={null}
               onFontSizeDelta={onFontSizeDelta}
               onChange={(value) => update(activePath, value)}
               onConflictCountChange={setConflictCount}

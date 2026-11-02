@@ -60,19 +60,26 @@ export type CodeMirrorHostProps = {
   // 当前文件命中的诊断模块；null 表示不挂 linter。
   // 由上层按文件扩展名与 enabledModules 算好，避免把数组依赖带进 effect。
   diagnosticModule: EditorModule | null;
-  // Task 8 之前上层仍可不传；未接入时符号跳转保持关闭
-  referenceEnabled?: boolean;
-  projectPath?: string;
-  onJumpToSymbol?: (match: SymbolMatch) => void;
-  gotoLine?: number | null;
+  referenceEnabled: boolean;
+  projectPath: string;
+  onJumpToSymbol: (match: SymbolMatch) => void;
+  gotoLine: number | null;
+  // 定位完成后通知上层把 gotoLine 复位为 null，避免切文件时再次误滚
+  onGotoLineApplied?: () => void;
   onFontSizeDelta?: (delta: number) => void;
   onChange: (value: string) => void;
   onConflictCountChange?: (count: number) => void;
 };
 
-const setCard = StateEffect.define<{ pos: number; card: SymbolCardState } | null>();
+type CardFieldValue = { pos: number; card: SymbolCardState; seq: number } | null;
 
-const cardField = StateField.define<{ pos: number; card: SymbolCardState } | null>({
+// 请求序号全局单调递增：reconfigure 会重建扩展闭包里的局部计数，
+// 用模块级计数才能保证跨扩展重建依然能区分新旧请求。
+let nextCardSeq = 1;
+
+const setCard = StateEffect.define<CardFieldValue>();
+
+const cardField = StateField.define<CardFieldValue>({
   create: () => null,
   update(value, tr) {
     for (const effect of tr.effects) {
@@ -113,25 +120,29 @@ function referenceExtension(options: {
         return false;
       }
       if (!options.isEnabled()) return false;
+      // 只接管左键；Ctrl+右键保留浏览器/系统默认行为
+      if (event.button !== 0) return false;
       const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
       if (pos === null) return false;
       const word = wordAndReceiverAt(view.state, pos);
       if (!word) return false;
 
       event.preventDefault();
+      const seq = nextCardSeq++;
       view.dispatch({
         effects: setCard.of({
           pos: word.from,
           card: { name: word.name, loading: true, truncated: false, matches: [], failed: false },
+          seq,
         }),
       });
 
       void options.lookup(word.name, word.receiver).then((card) => {
         if (view.state.field(cardField, false) === undefined) return;
         const current = view.state.field(cardField);
-        // 期间用户可能已经点了别处或换了词
-        if (!current || current.card.name !== card.name) return;
-        view.dispatch({ effects: setCard.of({ pos: current.pos, card }) });
+        // 序号不一致说明期间又发起了新查询、卡片已关闭或编辑器已重建
+        if (!current || current.seq !== seq) return;
+        view.dispatch({ effects: setCard.of({ pos: current.pos, card, seq }) });
       });
       return true;
     },
@@ -142,6 +153,12 @@ function referenceExtension(options: {
       if (pos === null) return false;
       const word = wordAndReceiverAt(view.state, pos);
       view.dom.classList.toggle('cm-symbol-clickable', Boolean(word));
+      return false;
+    },
+    keyup(event, view) {
+      // 松开 Ctrl/Meta 后立即恢复普通光标，不必等鼠标离开编辑器
+      if (event.ctrlKey || event.metaKey) return false;
+      view.dom.classList.remove('cm-symbol-clickable');
       return false;
     },
     mouseleave(_event, view) {
@@ -158,8 +175,14 @@ function referenceExtension(options: {
           // create 收到的 view 用来关闭卡片：tooltip 的 DOM 挂在编辑器容器里，
           // 从 DOM 反查拿不到 EditorView，必须用它
           create: (view) => {
-            const { dom, destroy } = createCardDom(value.card, options.onJump, () =>
-              view.dispatch({ effects: setCard.of(null) }),
+            const { dom, destroy } = createCardDom(
+              value.card,
+              (match) => {
+                options.onJump(match);
+                // 同文件跳转不会切换 filePath，卡片必须在这里主动收起
+                view.dispatch({ effects: setCard.of(null) });
+              },
+              () => view.dispatch({ effects: setCard.of(null) }),
             );
             return { dom, destroy };
           },
@@ -313,10 +336,11 @@ export function CodeMirrorHost({
   bracketMatching,
   showWhitespace,
   diagnosticModule,
-  referenceEnabled = false,
-  projectPath = '',
-  onJumpToSymbol = () => {},
-  gotoLine = null,
+  referenceEnabled,
+  projectPath,
+  onJumpToSymbol,
+  gotoLine,
+  onGotoLineApplied,
   onFontSizeDelta,
   onChange,
   onConflictCountChange,
@@ -339,6 +363,7 @@ export function CodeMirrorHost({
   const projectPathRef = useRef(projectPath);
   const activeFileRef = useRef(filePath);
   const jumpRef = useRef(onJumpToSymbol);
+  const onGotoLineAppliedRef = useRef(onGotoLineApplied);
   onChangeRef.current = onChange;
   onCountRef.current = onConflictCountChange;
   onFontDeltaRef.current = onFontSizeDelta;
@@ -346,6 +371,7 @@ export function CodeMirrorHost({
   projectPathRef.current = projectPath;
   activeFileRef.current = filePath;
   jumpRef.current = onJumpToSymbol;
+  onGotoLineAppliedRef.current = onGotoLineApplied;
 
   const referenceExtensionOption = () =>
     referenceExtension({
@@ -546,14 +572,26 @@ export function CodeMirrorHost({
     view.dispatch({
       effects: referenceRef.current.reconfigure(referenceExtensionOption()),
     });
+    // 模块关闭后已显示的卡片不能留在屏幕上
+    if (!referenceEnabled) {
+      view.dispatch({ effects: setCard.of(null) });
+    }
     // referenceExtensionOption 只读 ref，依赖里不需要带上它
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [referenceEnabled]);
 
-  // 跳转定位：跨文件时 filePath 变化会触发编辑器重建，这里跟着重跑
+  // 只在 gotoLine 从 null 变成数字时定位一次；filePath 变化不应重复触发，
+  // 否则上层忘记复位时切文件会误滚到同号行并抢焦点。
+  const prevGotoLineRef = useRef<number | null>(null);
   useEffect(() => {
+    if (gotoLine === null) {
+      prevGotoLineRef.current = null;
+      return;
+    }
+    if (prevGotoLineRef.current !== null) return;
     const view = viewRef.current;
-    if (!view || !gotoLine) return;
+    if (!view) return;
+    prevGotoLineRef.current = gotoLine;
     const clamped = Math.min(Math.max(gotoLine, 1), view.state.doc.lines);
     const line = view.state.doc.line(clamped);
     view.dispatch({
@@ -561,6 +599,7 @@ export function CodeMirrorHost({
       effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
     });
     view.focus();
+    onGotoLineAppliedRef.current?.();
   }, [gotoLine, filePath]);
 
   // Ctrl + 滚轮调整字号，与终端行为一致（TerminalPane 用的是同一套判定）。
