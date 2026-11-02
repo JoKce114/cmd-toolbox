@@ -256,3 +256,21 @@ export type LoginItemState = {
 };
 
 export type LoginItemResult = { ok: true } | { ok: false; message: string };
+
+export type SymbolMatch = {
+  relPath: string;
+  line: number;
+  kind: 'function' | 'method' | 'class';
+  name: string;
+  owner: string;
+  namespace: string;
+  signature: string;
+  doc: string;
+};
+
+export type SymbolLookupResult = {
+  ok: boolean;
+  matches: SymbolMatch[];
+  truncated: boolean;
+  scanned: number;
+};

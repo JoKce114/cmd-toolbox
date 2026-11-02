@@ -12,6 +12,7 @@ const git = require('./git');
 const fileApi = require('./file-api');
 const updates = require('./updates');
 const updater = require('./updater');
+const symbols = require('./symbols');
 const { createLoginItem } = require('./login-item');
 const { listShells, listTools, resolveShell } = require('./shells');
 
@@ -196,6 +197,16 @@ function registerIpc() {
   ipcMain.handle('updates:check', (_event, seenVersion) =>
     updates.checkForUpdate(app.getVersion(), seenVersion),
   );
+
+  ipcMain.handle('symbols:lookup', (_event, projectPath, name, options) => {
+    // projectPath 来自渲染进程，直接交给 path.resolve 会抛 TypeError；
+    // 返回与 lookup 相同形状的失败结果，调用方不需要另写一条错误分支。
+    if (typeof projectPath !== 'string' || !projectPath.trim()) {
+      return { ok: false, matches: [], truncated: false, scanned: 0 };
+    }
+    const input = options && typeof options === 'object' ? options : {};
+    return symbols.lookup(projectPath, name, input);
+  });
 
   ipcMain.handle('updater:download', () => updater.startDownload());
   ipcMain.handle('updater:install', () => updater.install());

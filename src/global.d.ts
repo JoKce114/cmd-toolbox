@@ -12,6 +12,7 @@ import type {
   OpenedFile,
   Project,
   StashEntry,
+  SymbolLookupResult,
   UpdateCheckResult,
   UpdaterResult,
   UpdaterState,
@@ -221,6 +222,13 @@ declare global {
       panes: {
         sync: (panes: Array<Record<string, unknown>>) => void;
         attachBrowser: (tabId: string, webContentsId: number) => void;
+      };
+      symbols: {
+        lookup: (
+          projectPath: string,
+          name: string,
+          options?: { currentPath?: string; receiver?: string },
+        ) => Promise<SymbolLookupResult>;
       };
       browser: {
         onOpenUrl: (

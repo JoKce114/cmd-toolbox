@@ -124,6 +124,11 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.send('panes:attach-browser', tabId, webContentsId),
   },
 
+  symbols: {
+    lookup: (projectPath, name, options) =>
+      invoke('symbols:lookup', projectPath, name, options),
+  },
+
   browser: {
     onOpenUrl: (handler) => subscribe('browser:open-url', handler),
   },
