@@ -687,7 +687,49 @@ async function resolveCandidates(root, candidates, target) {
 
 // PHP 局部变量与函数参数只搜当前文件：找赋值点和 `function foo($name, ...)` 的
 // 参数声明。变量没有 docblock，卡片上能提供的信息就是它出现的那一行。
-async function lookupLocalVariable(root, currentPath, name) {
+// 光标所在函数的行范围（1 起，闭区间）。找不到、或光标不在该函数体内时返回 null，
+// 表示光标在顶层代码里，此时变量按整个文件找。
+// 用括号配对定边界：缩进在 PHP/JS 混排的模板里不可靠。
+function enclosingScope(lines, cursorLine) {
+  const limit = Math.min(Math.max(Number(cursorLine) || 0, 1), lines.length);
+
+  // 从光标行往前找最近的函数声明
+  let fnLine = -1;
+  for (let index = limit - 1; index >= 0; index -= 1) {
+    if (/\bfunction\b/.test(lines[index])) {
+      fnLine = index;
+      break;
+    }
+  }
+  if (fnLine < 0) return null;
+
+  // 从声明行开始配对花括号，找到函数体结束行
+  let depth = 0;
+  let started = false;
+  for (let index = fnLine; index < lines.length; index += 1) {
+    for (const ch of lines[index]) {
+      if (ch === '{') {
+        depth += 1;
+        started = true;
+      } else if (ch === '}') {
+        depth -= 1;
+      }
+    }
+    if (started && depth <= 0) {
+      const scope = { start: fnLine + 1, end: index + 1 };
+      // 光标在函数体之后（例如两个方法之间的空白）就不算在作用域里
+      if (limit < scope.start || limit > scope.end) return null;
+      return scope;
+    }
+  }
+  const scope = { start: fnLine + 1, end: lines.length };
+  if (limit < scope.start) return null;
+  return scope;
+}
+
+// PHP 局部变量与函数参数只搜光标所在方法：同名变量在别的方法里出现时，
+// 不该被当成「定义」跳过去。找不到所在方法（顶层代码）时退回整个文件。
+async function lookupLocalVariable(root, currentPath, name, cursorLine) {
   if (!currentPath) return emptyResult();
   if (!PHP_EXT.has(path.extname(currentPath).toLowerCase())) return emptyResult();
 
@@ -704,15 +746,20 @@ async function lookupLocalVariable(root, currentPath, name) {
   const param = new RegExp(`(?:^|[(,])\\s*${escaped}\\s*[,)=]`);
 
   const lines = text.split(/\r?\n/);
-  const matches = [];
-  for (let index = 0; index < lines.length; index += 1) {
+  const scope = enclosingScope(lines, cursorLine);
+  const from = scope ? scope.start - 1 : 0;
+  const to = scope ? scope.end : lines.length;
+
+  const params = [];
+  const assignments = [];
+  for (let index = from; index < to; index += 1) {
     const line = lines[index];
     const isAssign = assign.test(line);
     // 参数只在函数签名行里认，避免把 `foo($categoryId)` 这类调用当成声明
     const isParam = !isAssign && /\bfunction\b/.test(line) && param.test(line);
     if (!isAssign && !isParam) continue;
 
-    matches.push({
+    const match = {
       relPath: currentPath,
       line: index + 1,
       kind: 'variable',
@@ -721,10 +768,14 @@ async function lookupLocalVariable(root, currentPath, name) {
       namespace: '',
       signature: line.trim(),
       doc: '',
-    });
+    };
+    if (isParam) params.push(match);
+    else assignments.push(match);
   }
 
-  return { ok: true, matches, truncated: false, scanned: 1 };
+  // 参数才是变量的声明；赋值只是后续修改。渲染侧会直接跳到第一条，
+  // 所以顺序必须让参数排在前面。
+  return { ok: true, matches: [...params, ...assignments], truncated: false, scanned: 1 };
 }
 
 async function lookup(projectPath, name, options = {}) {
@@ -738,9 +789,9 @@ async function lookup(projectPath, name, options = {}) {
   const root = path.resolve(projectPath);
   const currentPath = normalizeCurrentPath(root, options.currentPath);
 
-  // PHP 变量（`$name`）：只在当前文件里有意义
+  // PHP 变量（`$name`）：只在当前文件、当前方法里有意义
   if (target.startsWith('$')) {
-    return lookupLocalVariable(root, currentPath, target);
+    return lookupLocalVariable(root, currentPath, target, Number(options.line) || 0);
   }
 
   if (!isValidName(target)) return emptyResult();

@@ -130,6 +130,21 @@ function referenceExtension(options: {
 
       event.preventDefault();
       const seq = nextCardSeq++;
+
+      // 变量在所在方法里通常只有一个声明，弹卡片再点一次是多余的一步：
+      // 查到就直接跳过去。查不到才弹卡片给出反馈。
+      if (word.name.startsWith('$')) {
+        void options.lookup(word.name, word.receiver, word.line).then((card) => {
+          if (view.state.field(cardField, false) === undefined) return;
+          if (!card.failed && card.matches.length > 0) {
+            options.onJump(card.matches[0]);
+            return;
+          }
+          view.dispatch({ effects: setCard.of({ pos: word.from, card, seq }) });
+        });
+        return true;
+      }
+
       view.dispatch({
         effects: setCard.of({
           pos: word.from,

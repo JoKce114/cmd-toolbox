@@ -813,4 +813,67 @@ try {
   rmSync(varDir, { recursive: true, force: true });
 }
 
+console.log('\n18b. 变量只在光标所在方法内查找');
+const scopeDir = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-scope-'));
+try {
+  // 两个方法都有 $currency，参数位置不同：
+  // first() 的参数在第 4 行，second() 的参数在第 8 行。
+  writeFileSync(
+    join(scopeDir, 'money.php'),
+    [
+      '<?php',
+      'class Money {',
+      '  public static function first($price) {',
+      '    $currency = "USD";',
+      '    return $currency;',
+      '  }',
+      '  public static function second($currency) {',
+      '    return $currency;',
+      '  }',
+      '}',
+    ].join(NL),
+    'utf8',
+  );
+
+  symbols.resetCache();
+  // 光标在 first() 里（第 5 行）：只应看到 first 的赋值，不能跳到 second 的参数
+  const inFirst = await symbols.lookup(scopeDir, '$currency', {
+    currentPath: 'money.php',
+    line: 5,
+  });
+  assert(inFirst.matches.length === 1, `只命中所在方法内的声明，实际 ${inFirst.matches.length}`);
+  assert(inFirst.matches[0].line === 4, `命中 first() 的赋值行，实际 ${inFirst.matches[0].line}`);
+
+  symbols.resetCache();
+  // 光标在 second() 里（第 8 行）：应命中参数声明
+  const inSecond = await symbols.lookup(scopeDir, '$currency', {
+    currentPath: 'money.php',
+    line: 8,
+  });
+  assert(inSecond.matches.length === 1, `second() 里只命中一处，实际 ${inSecond.matches.length}`);
+  assert(inSecond.matches[0].line === 7, `命中 second() 的参数行，实际 ${inSecond.matches[0].line}`);
+
+  // 参数优先于赋值：同一方法里既有参数又有赋值时，参数排第一（渲染侧直接跳第一条）
+  writeFileSync(
+    join(scopeDir, 'both.php'),
+    [
+      '<?php',
+      'function both($amount) {',
+      '  $amount = $amount * 2;',
+      '  return $amount;',
+      '}',
+    ].join(NL),
+    'utf8',
+  );
+  symbols.resetCache();
+  const both = await symbols.lookup(scopeDir, '$amount', {
+    currentPath: 'both.php',
+    line: 4,
+  });
+  assert(both.matches.length === 2, `参数和赋值各一处，实际 ${both.matches.length}`);
+  assert(both.matches[0].line === 2, `参数排在最前，实际第 ${both.matches[0].line} 行`);
+} finally {
+  rmSync(scopeDir, { recursive: true, force: true });
+}
+
 console.log(`\n全部通过：${passed} 项`);
