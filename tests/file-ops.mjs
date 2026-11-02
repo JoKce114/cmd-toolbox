@@ -11,7 +11,7 @@ import {
   mkdirSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const fileApi = require('../desktop/file-api.js');
@@ -93,13 +93,24 @@ try {
   }
 
   console.log('6. trash 调用注入的 shell');
+  // 回收站语义的代理断言：trash 必须把「仍存在」的文件以绝对路径交给 shell.trashItem。
+  // 若实现退回 fsp.unlink（永久删除），注入的 shell 不会被调用、或调用时文件已不在。
   const calls = [];
-  writeFileSync(join(dir, 'trashme.txt'), 'BYE', 'utf8');
+  const trashTarget = join(dir, 'trashme.txt');
+  writeFileSync(trashTarget, 'BYE', 'utf8');
+  let existedWhenCalled = false;
   await fileApi.trash(dir, 'trashme.txt', async (target) => {
     calls.push(target);
+    existedWhenCalled = existsSync(target);
   });
   assert(calls.length === 1, `shell.trashItem 被调用一次，实际 ${calls.length}`);
   assert(calls[0].endsWith('trashme.txt'), `传入了正确路径，实际 ${calls[0]}`);
+  assert(isAbsolute(calls[0]), `传入了绝对路径，实际 ${calls[0]}`);
+  assert(
+    relative(dir, calls[0]) === 'trashme.txt',
+    `传入了项目根下的路径，实际 ${relative(dir, calls[0])}`,
+  );
+  assert(existedWhenCalled, '交给回收站前文件仍然存在（不是先 unlink）');
 
   console.log('7. move 目录');
   mkdirSync(join(dir, 'd1'), { recursive: true });

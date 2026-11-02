@@ -7,8 +7,20 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
+
+// 端口被占时主进程会直接退出、窗口永远不出现，表现为 firstWindow 超时。
+// 与其让人对着超时堆栈猜，不如在启动前直接报错。
+if (await isPortInUse(17382)) {
+  console.error(
+    '错误：端口 17382 已被占用，请先关闭正在运行的 Cmd Toolbox（或残留 electron 进程）再跑测试。',
+  );
+  process.exit(1);
+}
+
 const dataDir = mkdtempSync(join(tmpdir(), 'cmdtb-ftree-'));
 const projectDir = mkdtempSync(join(tmpdir(), 'cmdtb-ftree-proj-'));
+console.log(`临时数据目录：${dataDir}`);
+console.log(`临时项目目录：${projectDir}`);
 
 let passed = 0;
 function assert(condition, message) {
@@ -26,6 +38,8 @@ delete env.ELECTRON_RUN_AS_NODE;
 env.CMDTOOLBOX_NO_UPDATE = '1';
 
 let app;
+// 记录被移入回收站的文件，finally 里提示用户自行清理（测试不会清空真实回收站）
+let trashedFile = null;
 try {
   app = await electron.launch({
     executablePath: resolve(root, 'node_modules/electron/dist/electron.exe'),
@@ -66,10 +80,13 @@ try {
   const sections = page.locator('.editor-sidebar-section');
   assert((await sections.count()) === 2, '左栏有两个可折叠区');
   assert(
-    (await sections.first().innerText()).includes('打开的编辑器'),
+    (await sections.first().locator('.section-title').innerText()) === '打开的编辑器',
     '第一个区是「打开的编辑器」',
   );
-  assert((await sections.last().innerText()).includes('文件'), '第二个区是「文件」');
+  assert(
+    (await sections.last().locator('.section-title').innerText()) === '文件',
+    '第二个区是「文件」',
+  );
 
   const openEditorsHeader = sections.first().locator('.section-header');
   const fileTreeHeader = sections.last().locator('.section-header');
@@ -130,8 +147,9 @@ try {
     '打开的文件出现在「打开的编辑器」里',
   );
   assert(
-    (await sections.first().innerText()).includes('alpha.php'),
-    '第一个区里能看到 alpha.php',
+    (await sections.first().locator('.open-editors-list .file-row').first().getAttribute('title')) ===
+      'alpha.php',
+    '第一个区里的条目是 alpha.php',
   );
 
   console.log('3. 工具栏新建文件（Modal 输入名字）');
@@ -206,13 +224,19 @@ try {
   const deleteModal = page.locator('.modal-card').filter({ hasText: '删除到回收站' });
   await deleteModal.waitFor({ timeout: 8000 });
   assert(
-    (await deleteModal.innerText()).includes('external.php'),
-    '删除确认里点名了要删除的文件',
+    (await deleteModal.locator('.modal-title').innerText()) === '删除到回收站',
+    '删除确认标题是「删除到回收站」',
+  );
+  assert(
+    (await deleteModal.locator('.confirm-message').innerText()) ===
+      '确定把「external.php」删除到回收站吗？',
+    '删除确认点名了要删除的文件',
   );
   await deleteModal.locator('.btn-danger').click();
   await deleteModal.waitFor({ state: 'detached', timeout: 10000 });
   await waitFor(() => !existsSync(join(projectDir, 'external.php')), 10000, 'external.php 被移走');
   assert(!existsSync(join(projectDir, 'external.php')), '文件已被移走');
+  trashedFile = join(projectDir, 'external.php');
 
   console.log('9. 「打开的编辑器」右键对比：与已保存文件比较');
   // 从文件树重新打开 alpha.php（先前的预览页签在新建 created.php 时被顶替了），
@@ -230,7 +254,10 @@ try {
   await page.keyboard.press('Control+End');
   await page.keyboard.type('\n// changed in memory');
   await page.locator('.editor-tab.active .editor-tab-dot').waitFor({ timeout: 5000 });
-  assert(true, 'alpha.php 进入未保存状态（页签出现圆点）');
+  assert(
+    (await page.locator('.editor-tab.active .editor-tab-dot').count()) === 1,
+    'alpha.php 进入未保存状态（页签出现圆点）',
+  );
 
   await page
     .locator('.open-editors-list .file-row[title="alpha.php"]')
@@ -247,8 +274,8 @@ try {
   const diffPane = page.locator('.editor-diff-pane:has(.diff-pane)');
   await diffPane.locator('.pane-path').waitFor({ timeout: 8000 });
   assert(
-    (await diffPane.locator('.pane-path').innerText()).includes('磁盘版本'),
-    '对比分栏标题是磁盘版本',
+    (await diffPane.locator('.pane-path').innerText()) === 'alpha.php ↔ 磁盘版本',
+    '对比分栏标题是 alpha.php ↔ 磁盘版本',
   );
   await waitFor(
     async () => (await diffPane.innerText()).includes('changed in memory'),
@@ -261,6 +288,13 @@ try {
   );
 } finally {
   await app?.close().catch(() => {});
+  if (trashedFile) {
+    console.log(
+      `  [回收站] ${trashedFile} 已被删除到系统回收站；测试不会清空回收站，需要时请自行处理。`,
+    );
+  }
+  console.log(`  [临时目录] ${dataDir}`);
+  console.log(`  [临时目录] ${projectDir}`);
   for (const dir of [dataDir, projectDir]) {
     try {
       rmSync(dir, { recursive: true, force: true });
@@ -268,13 +302,14 @@ try {
       console.log(`  [cleanup] 临时目录清理失败：${error.message}`);
     }
   }
-  // 残留 electron 会占着 17382 让下一次运行起不来，跑完明确报出端口状态
+  // 残留 electron 会占着 17382 让下一次运行起不来，跑完必须确认端口真的释放了
   const released = await waitForPortRelease(17382, 5000);
-  console.log(
-    released
-      ? '17382 端口已释放，无残留 electron 进程'
-      : '警告：17382 端口仍被占用，可能有残留 electron 进程',
-  );
+  if (released) {
+    console.log('17382 端口已释放，无残留 electron 进程');
+  } else {
+    console.error('错误：17382 端口仍被占用，可能有残留 electron 进程');
+    process.exitCode = 1;
+  }
 }
 
 console.log(`\n全部通过：${passed} 项`);
