@@ -193,4 +193,40 @@ console.log('11. 一万行仅一行相同（有交集，走正常差分）');
   assert(removed.length === size - 1 && inserted.length === size - 1, '其余行全部删除并新增');
 }
 
+console.log('7. 剪贴板粘贴校验');
+const clip = await import('../src/fileClipboard.ts');
+
+const crossProject = clip.canPaste(
+  { kind: 'copy', relPath: 'a.txt', projectPath: 'D:/p1' },
+  'D:/p2',
+);
+assert(crossProject.ok === false, '跨项目粘贴被拒绝');
+assert(crossProject.reason.includes('跨项目'), `拒绝理由说明是跨项目，实际 ${crossProject.reason}`);
+
+const sameProject = clip.canPaste(
+  { kind: 'copy', relPath: 'a.txt', projectPath: 'D:/p1' },
+  'D:/p1',
+);
+assert(sameProject.ok === true, '同项目粘贴允许');
+
+// Windows 路径大小写不敏感，比较时必须归一
+const caseDiff = clip.canPaste(
+  { kind: 'copy', relPath: 'a.txt', projectPath: 'D:/P1' },
+  'd:/p1',
+);
+assert(caseDiff.ok === true, '项目路径大小写不同仍视为同一项目');
+
+const noClip = clip.canPaste(null, 'D:/p1');
+assert(noClip.ok === false, '剪贴板为空时不能粘贴');
+
+assert(
+  clip.pasteTargetDir({ kind: 'copy', relPath: 'dir/a.txt', projectPath: 'D:/p1' }, 'sub') ===
+    'sub/a.txt',
+  '粘贴目标路径拼在目标目录下',
+);
+assert(
+  clip.pasteTargetDir({ kind: 'copy', relPath: 'a.txt', projectPath: 'D:/p1' }, '') === 'a.txt',
+  '粘贴到根目录时没有多余斜杠',
+);
+
 console.log(`\n全部通过：${passed} 项`);
