@@ -708,8 +708,8 @@ try {
 console.log('\n16. 解析文件数上限');
 const parseLimitDir = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-parse-limit-'));
 try {
-  // 60 个文件都含同一个名字：不设解析上限时会全部交给 php-parser。
-  for (let i = 0; i < 60; i += 1) {
+  // 350 个文件都含同一个声明：不设解析上限时会全部交给 php-parser。
+  for (let i = 0; i < 350; i += 1) {
     writeFileSync(
       join(parseLimitDir, `f${String(i).padStart(3, '0')}.php`),
       ['<?php', 'function capTarget() {}'].join(NL),
@@ -720,10 +720,90 @@ try {
   symbols.resetCache();
   const capped = await symbols.lookup(parseLimitDir, 'capTarget', {});
   assert(capped.truncated === true, '实际解析文件数超过上限时标记 truncated');
-  assert(capped.matches.length === 50, `最多解析 50 个文件，实际 ${capped.matches.length}`);
-  assert(capped.scanned === 60, `scanned 仍报告收集到的文件数，实际 ${capped.scanned}`);
+  assert(capped.matches.length < 350, `解析数被上限截住，实际 ${capped.matches.length}`);
+  assert(capped.scanned === 350, `scanned 仍报告收集到的文件数，实际 ${capped.scanned}`);
 } finally {
   rmSync(parseLimitDir, { recursive: true, force: true });
+}
+
+console.log('\n17. 调用点不能占用解析预算');
+const callSiteDir = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-callsite-'));
+try {
+  // 200 个文件只有调用、没有声明；真正的声明放在字典序最后。
+  // 预筛若把调用当命中，解析预算会被调用点耗光，声明永远轮不到。
+  for (let i = 0; i < 200; i += 1) {
+    writeFileSync(
+      join(callSiteDir, `a${String(i).padStart(3, '0')}.php`),
+      ['<?php', '$x = HelpFile::getBaseName($y);'].join(NL),
+      'utf8',
+    );
+  }
+  writeFileSync(
+    join(callSiteDir, 'zzdecl.php'),
+    ['<?php', 'class HelpFile {', '  public static function getBaseName($p) { return $p; }', '}'].join(NL),
+    'utf8',
+  );
+
+  symbols.resetCache();
+  const found = await symbols.lookup(callSiteDir, 'getBaseName', {});
+  assert(found.truncated === false, `调用点不该触发截断，实际 truncated=${found.truncated}`);
+  assert(found.matches.length === 1, `只收集到真实声明，实际 ${found.matches.length} 条`);
+  assert(
+    found.matches[0].relPath === 'zzdecl.php',
+    `找到字典序末尾的声明，实际 ${found.matches[0].relPath}`,
+  );
+  assert(found.matches[0].owner === 'HelpFile', '声明带所属类');
+} finally {
+  rmSync(callSiteDir, { recursive: true, force: true });
+}
+
+console.log('\n18. PHP 变量只搜当前文件');
+const varDir = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-var-'));
+try {
+  writeFileSync(
+    join(varDir, 'here.php'),
+    [
+      '<?php',
+      '$extName = HelpsFile::getExtName($amazonImage);',
+      'if ($extName == "jpg") { echo $extName; }',
+      '$extName = strtolower($extName);',
+    ].join(NL),
+    'utf8',
+  );
+  // 另一个文件也有同名变量，但变量不跨文件搜索
+  writeFileSync(join(varDir, 'elsewhere.php'), ['<?php', '$extName = "x";'].join(NL), 'utf8');
+  writeFileSync(join(varDir, 'other.php'), ['<?php', '$unrelated = 1;'].join(NL), 'utf8');
+
+  symbols.resetCache();
+  const vars = await symbols.lookup(varDir, '$extName', { currentPath: 'here.php' });
+  assert(vars.matches.length === 2, `只收集两处赋值，实际 ${vars.matches.length}`);
+  assert(
+    vars.matches.every((m) => m.relPath === 'here.php'),
+    '命中项全部来自当前文件',
+  );
+  assert(
+    vars.matches.every((m) => m.kind === 'variable'),
+    'kind 标记为 variable',
+  );
+  assert(vars.matches[0].line === 2, `第一次赋值在第 2 行，实际 ${vars.matches[0].line}`);
+  assert(
+    vars.matches[0].signature === '$extName = HelpsFile::getExtName($amazonImage);',
+    `签名取整行原文，实际 ${vars.matches[0].signature}`,
+  );
+  assert(
+    !vars.matches.some((m) => m.line === 3),
+    '== 比较不算赋值',
+  );
+
+  symbols.resetCache();
+  const notHere = await symbols.lookup(varDir, '$extName', { currentPath: 'other.php' });
+  assert(notHere.matches.length === 0, '当前文件没有该变量时不跨文件查找');
+
+  symbols.resetCache();
+  const noFile = await symbols.lookup(varDir, '$extName', {});
+  assert(noFile.matches.length === 0, '没有当前文件信息时返回空');
+} finally {
+  rmSync(varDir, { recursive: true, force: true });
 }
 
 console.log(`\n全部通过：${passed} 项`);

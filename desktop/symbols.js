@@ -421,14 +421,20 @@ async function collectFiles(root) {
   return { files, truncated };
 }
 
-// 文本预筛：文件里出现过这个名字本身才值得解析。
+// 文本预筛：文件里必须出现「声明」这个名字才值得解析。
 // 不预筛直接全量解析，千文件项目要二十秒。
-// 不要求名字紧跟 function/class：箭头函数赋值、PHP 的 `function &x()`、
-// 以及换行/修饰符写法都能命中；精确性交给后面的 AST 判断。
-// 粗筛保持宽松（大小写不敏感），不同大小写的查询不会被提前挡掉；
-// 大小写语义由最终匹配按声明所在文件的语言决定。
+//
+// 只认声明、不认调用是刻意的：`$x = HelpFile::getBaseName($y)` 这类调用点
+// 会命中几乎所有业务文件，把解析预算耗光，真正定义的地方反而轮不到。
+// 三种形态覆盖了我们收集的全部声明——PHP 函数/方法（含 `function &x`）、
+// JS 函数与箭头函数赋值、类。
 function prefilter(text, name) {
-  return text.includes(name) || text.toLowerCase().includes(name.toLowerCase());
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return (
+    new RegExp(`function\\s+&?\\s*${escaped}\\b`, 'i').test(text) ||
+    new RegExp(`(?:const|let|var)\\s+${escaped}\\s*=`, 'i').test(text) ||
+    new RegExp(`class\\s+${escaped}\\b`, 'i').test(text)
+  );
 }
 
 // PHP 标识符不区分大小写，JS 标识符区分。
@@ -572,6 +578,41 @@ function normalizeCurrentPath(root, value) {
   return rel === '.' ? '' : rel;
 }
 
+// PHP 局部变量只搜当前文件：找 `$name =` 的赋值点，把整行当作「签名」。
+// 变量没有 docblock，卡片上能提供的信息就是它被赋成了什么。
+async function lookupLocalVariable(root, currentPath, name) {
+  if (!currentPath) return emptyResult();
+  if (!PHP_EXT.has(path.extname(currentPath).toLowerCase())) return emptyResult();
+
+  let text;
+  try {
+    text = await fsp.readFile(path.join(root, currentPath), 'utf8');
+  } catch {
+    return emptyResult();
+  }
+
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // `=` 后面紧跟 `=` 或 `>` 时是比较/箭头，不是赋值
+  const assign = new RegExp(`${escaped}\\s*=(?!=|>)`);
+  const lines = text.split(/\r?\n/);
+  const matches = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!assign.test(lines[index])) continue;
+    matches.push({
+      relPath: currentPath,
+      line: index + 1,
+      kind: 'variable',
+      name,
+      owner: '',
+      namespace: '',
+      signature: lines[index].trim(),
+      doc: '',
+    });
+  }
+
+  return { ok: true, matches, truncated: false, scanned: 1 };
+}
+
 async function lookup(projectPath, name, options = {}) {
   // name 可能来自外部输入。非字符串经 String() 会变成 "[object Object]"，
   // 长度足够从而在预筛前就触发全项目文件遍历；这里一律视为无效查询。
@@ -582,16 +623,24 @@ async function lookup(projectPath, name, options = {}) {
   if (target.length < 2) {
     return emptyResult();
   }
-  // 关键字和 $ 变量名不可能对应声明，却几乎命中所有 PHP 文件；
+
+  const root = path.resolve(projectPath);
+  const currentPath = normalizeCurrentPath(root, options.currentPath);
+
+  // PHP 变量（`$name`）：只在当前文件里有意义。搜全项目只会命中一堆
+  // 同名但无关的局部变量，而且这类名字在业务文件里出现频率极高，
+  // 会白白耗掉解析预算。所以走独立分支，只读当前文件。
+  if (target.startsWith('$')) {
+    return lookupLocalVariable(root, currentPath, target);
+  }
+
+  // 关键字不可能对应声明，却几乎命中所有 PHP 文件；
   // 在遍历之前挡掉，别让一次 Ctrl+点击拖住主进程。
   if (!isValidName(target)) {
     return emptyResult();
   }
-
-  const root = path.resolve(projectPath);
   const { files, truncated: walkTruncated } = await collectFiles(root);
   let truncated = walkTruncated;
-  const currentPath = normalizeCurrentPath(root, options.currentPath);
   const targetLower = target.toLowerCase();
   const context = {
     currentPath,
