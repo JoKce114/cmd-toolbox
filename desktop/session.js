@@ -32,7 +32,28 @@ function emptySession() {
     rightActiveByGroup: {},
     focusSideByGroup: {},
     splitRatioByGroup: {},
+    untitledContents: {},
   };
+}
+
+// 空白窗口没有磁盘文件可读，内容只能跟着会话一起存。
+// 单个窗口上限 256KB，总数上限 2MB：会话文件不是用来存大文件的地方。
+// 超限的条目静默跳过——这里抛错会让整次会话保存失败，连页签都恢复不了。
+const UNTITLED_MAX_CHARS = 256 * 1024;
+const UNTITLED_TOTAL_MAX_CHARS = 2 * 1024 * 1024;
+
+function normalizeUntitledContents(value) {
+  if (!value || typeof value !== 'object') return {};
+  const out = {};
+  let total = 0;
+  for (const [key, content] of Object.entries(value)) {
+    if (typeof key !== 'string' || typeof content !== 'string') continue;
+    if (content.length > UNTITLED_MAX_CHARS) continue;
+    if (total + content.length > UNTITLED_TOTAL_MAX_CHARS) break;
+    out[key] = content;
+    total += content.length;
+  }
+  return out;
 }
 
 function normalizeDevice(value) {
@@ -205,6 +226,7 @@ function normalizeSession(raw) {
     rightActiveByGroup,
     splitRatioByGroup,
     focusSideByGroup,
+    untitledContents: normalizeUntitledContents(raw.untitledContents),
   };
 }
 

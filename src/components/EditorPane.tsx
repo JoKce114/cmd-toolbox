@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Plus, Save, Search, X } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import { buildTextPatch } from '../diffFromText';
 import { useEditorFiles } from '../useEditorFiles';
 import type { EditorFileState } from '../useEditorFiles';
-import { displayNameFor, isUntitledPath, nextUntitledIndex, untitledPathFor } from '../untitledPath';
+import {
+  displayNameFor,
+  isUntitledPath,
+  nextUntitledIndex,
+  UNTITLED_PREFIX,
+  untitledPathFor,
+} from '../untitledPath';
 import { SaveAsModal } from './SaveAsModal';
 import { FileTree } from './FileTree';
 import { EditorSidebar } from './EditorSidebar';
@@ -64,6 +70,10 @@ export type EditorPaneProps = {
   onFontSizeDelta: (delta: number) => void;
   // 页签对应的文件路径变化（空白窗口新建 / 另存为后换真实路径）
   onFilePathChange?: (relPath: string) => void;
+  // 空白窗口内容快照（键是虚拟路径）：内容只能跟着会话走，没有磁盘副本
+  onUntitledContentsChange?: (contents: Record<string, string>) => void;
+  // 会话恢复时带下来的空白窗口内容（同样以虚拟路径为键）
+  untitledRestore?: Record<string, string>;
 };
 
 export function EditorPane({
@@ -89,6 +99,8 @@ export function EditorPane({
   enabledModules,
   onFontSizeDelta,
   onFilePathChange,
+  onUntitledContentsChange,
+  untitledRestore,
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const {
@@ -105,6 +117,7 @@ export function EditorPane({
     rename,
     setActivePath,
     saveUntitledAs,
+    restoreUntitled,
   } = useEditorFiles(group, onError);
 
   const [fileClip, setFileClip] = useState<FileClip | null>(null);
@@ -367,16 +380,85 @@ export function EditorPane({
   onDirtyChangeRef.current = onDirtyChange;
   const onFilePathChangeRef = useRef(onFilePathChange);
   onFilePathChangeRef.current = onFilePathChange;
+  const onUntitledContentsChangeRef = useRef(onUntitledContentsChange);
+  onUntitledContentsChangeRef.current = onUntitledContentsChange;
+  // 只取挂载时的首值：恢复只在挂载早期做一次，之后父组件传什么都不该再灌一遍
+  const untitledRestoreRef = useRef(untitledRestore);
+  const restoredRef = useRef(false);
 
   // 页签的 filePath 会变（上层用同一个编辑器页签顶替新文件），
   // 所以要比对「上次已应用的路径」而不是只在挂载时读一次。
   const appliedPathRef = useRef('');
+
+  // 会话恢复必须在首次 open(tab.filePath) 之前完成：open() 对空白窗口会补一个
+  // 空条目，晚一步就会把恢复的内容覆盖成空串。用 useLayoutEffect 让 setFiles
+  // 在被动 effect（同步 filePath 的那个）之前提交，open() 就能看到已恢复的条目。
+  useLayoutEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    const saved = untitledRestoreRef.current;
+    if (!saved) return;
+    const entries = Object.entries(saved).filter(([relPath]) => isUntitledPath(relPath));
+    if (!entries.length) return;
+
+    // 编号按最小可用值重新分配：会话里可能只剩 untitled://3，
+    // 恢复成 Untitled-1 才符合「关掉的编号会被复用」的直觉。
+    const ordered = entries
+      .slice()
+      .sort(
+        ([left], [right]) =>
+          Number(left.slice(UNTITLED_PREFIX.length)) -
+          Number(right.slice(UNTITLED_PREFIX.length)),
+      );
+    const remapped = new Map<string, string>();
+    ordered.forEach(([oldPath], index) => remapped.set(oldPath, untitledPathFor(index + 1)));
+    restoreUntitled(
+      ordered.map(([oldPath, content]) => ({
+        relPath: remapped.get(oldPath) as string,
+        content,
+      })),
+    );
+
+    const currentPath = tab.filePath || '';
+    if (isUntitledPath(currentPath)) {
+      const mapped = remapped.get(currentPath);
+      if (mapped) {
+        // 上层稍后会写回新编号，这里先把旧路径记成「已应用」，
+        // 免得同步 filePath 的 effect 用旧编号再 open 一次空条目。
+        appliedPathRef.current = currentPath;
+        onFilePathChangeRef.current?.(mapped);
+        setActivePath(mapped);
+      }
+    } else if (!currentPath) {
+      const first = remapped.get(ordered[0][0]);
+      if (first) setActivePath(first);
+    }
+  }, [restoreUntitled, setActivePath, tab.filePath]);
+
   useEffect(() => {
     const next = tab.filePath || '';
     if (!next || next === appliedPathRef.current) return;
     appliedPathRef.current = next;
     void open(next);
   }, [tab.filePath, open]);
+
+  // 空白窗口内容快照：只把「虚拟路径 + 内容」拼成原始字符串当依赖，
+  // 普通文件每次按键都会换 files 对象，不能因此反复通知父组件。
+  // 恢复 / 编辑 / 关闭空白窗口都会让这个字符串变化，其余情况 effect 不跑。
+  const untitledSnapshot = openPaths
+    .filter((relPath) => isUntitledPath(relPath))
+    .map((relPath) => `${relPath}\u0000${files[relPath]?.content ?? ''}`)
+    .join('\u0001');
+
+  useEffect(() => {
+    const contents: Record<string, string> = {};
+    for (const relPath of Object.keys(files)) {
+      if (!isUntitledPath(relPath)) continue;
+      contents[relPath] = files[relPath].content;
+    }
+    onUntitledContentsChangeRef.current?.(contents);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [untitledSnapshot]);
 
   useEffect(() => {
     const base = activePath ? displayNameFor(activePath) : '编辑器';

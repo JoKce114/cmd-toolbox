@@ -79,10 +79,12 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
           return true;
         }
         setActivePath(relPath);
-        setFiles((previous) => ({
-          ...previous,
-          [relPath]: { ...EMPTY, relPath, content: '', savedContent: '' },
-        }));
+        setFiles((previous) =>
+          // 会话恢复会先把内容灌进来；这里只补空条目，不能覆盖已恢复的内容
+          previous[relPath]
+            ? previous
+            : { ...previous, [relPath]: { ...EMPTY, relPath, content: '', savedContent: '' } },
+        );
         touchedRef.current.add(relPath);
         return true;
       }
@@ -232,6 +234,30 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
       savedByAppRef.current.add(targetRelPath);
       setActivePath(targetRelPath);
       return { ok: true };
+    },
+    [],
+  );
+
+  // 会话恢复用：把存下来的空白窗口内容灌回内存，不读盘。
+  // savedContent 一并设成同样的内容，恢复出来的窗口不该是「未保存」状态——
+  // 它本来就没有磁盘副本，脏标记只会让关闭时弹一个没有意义的确认框。
+  const restoreUntitled = useCallback(
+    (entries: Array<{ relPath: string; content: string }>) => {
+      if (!entries.length) return;
+      setFiles((previous) => {
+        const next = { ...previous };
+        for (const entry of entries) {
+          if (!isUntitledPath(entry.relPath)) continue;
+          next[entry.relPath] = {
+            ...EMPTY,
+            relPath: entry.relPath,
+            content: entry.content,
+            savedContent: entry.content,
+          };
+          touchedRef.current.add(entry.relPath);
+        }
+        return next;
+      });
     },
     [],
   );
@@ -492,7 +518,12 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
     return { synced: true };
   }, []);
 
+  // 只在切项目时清空。挂载时 state 本来就是空的，再清一次会把会话恢复
+  // 刚灌进来的空白窗口内容一起抹掉（恢复发生在 layout 阶段，早于本 effect）。
+  const groupKeyRef = useRef(group.key);
   useEffect(() => {
+    if (groupKeyRef.current === group.key) return;
+    groupKeyRef.current = group.key;
     touchedRef.current = new Set();
     setFiles({});
     setActivePath('');
@@ -542,6 +573,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
     hasDirty,
     open,
     saveUntitledAs,
+    restoreUntitled,
     update,
     save,
     close,

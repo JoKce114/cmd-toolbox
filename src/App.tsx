@@ -138,6 +138,21 @@ function toSessionTab(tab: Tab) {
   };
 }
 
+// 会话里的空白窗口内容以 `${groupKey}|untitled://N` 为键，取出本项目的那一份。
+// 没有内容时返回空对象，EditorPane 会据此跳过恢复。
+function pickGroupUntitled(
+  all: Record<string, string> | undefined,
+  groupKey: string,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!all) return out;
+  const prefix = `${groupKey}|`;
+  for (const [key, value] of Object.entries(all)) {
+    if (key.startsWith(prefix)) out[key.slice(prefix.length)] = value;
+  }
+  return out;
+}
+
 function shellIcon(shellId: string) {
   if (shellId === 'powershell') return <Command size={14} />;
   if (shellId === 'gitbash') return <GitBranch size={14} />;
@@ -244,6 +259,24 @@ export default function App() {
   const splitDragRef = useRef({ x: 0, ratio: 0.5, width: 1 });
   const [splitDragging, setSplitDragging] = useState(false);
 
+  // 空白窗口内容不进 React state：每次按键都同步给父组件会拖慢输入。
+  // EditorPane 只在内容真的变化时回调，这里只换 ref，快照落盘时再读。
+  const untitledContentsRef = useRef<Record<string, string>>({});
+
+  const setGroupUntitledContents = useCallback(
+    (groupKey: string, contents: Record<string, string>) => {
+      const next: Record<string, string> = {};
+      for (const [key, value] of Object.entries(untitledContentsRef.current)) {
+        if (!key.startsWith(`${groupKey}|`)) next[key] = value;
+      }
+      for (const [relPath, content] of Object.entries(contents)) {
+        next[`${groupKey}|${relPath}`] = content;
+      }
+      untitledContentsRef.current = next;
+    },
+    [],
+  );
+
   const buildSessionSnapshot = useCallback(
     () => ({
       activeGroupKey: activeGroupKeyRef.current,
@@ -255,6 +288,7 @@ export default function App() {
       rightActiveByGroup: rightActiveByGroupRef.current,
       focusSideByGroup: focusSideByGroupRef.current,
       splitRatioByGroup: splitRatioByGroupRef.current,
+      untitledContents: untitledContentsRef.current,
     }),
     [],
   );
@@ -674,6 +708,22 @@ export default function App() {
           }));
         }
 
+        // 空白窗口内容跟会话一起恢复。只保留仍有编辑器页签的项目：
+        // 项目被删或编辑器页签已关闭时，残留内容只会被反复写回会话。
+        // 必须在 applyTabs 之前写好 ref：EditorPane 挂载时立刻要用首值。
+        const editorGroupKeys = new Set(
+          Object.values(restoredTabs)
+            .flat()
+            .filter((tab) => isEditorTab(tab))
+            .map((tab) => tab.groupKey),
+        );
+        const seededUntitled: Record<string, string> = {};
+        for (const [key, value] of Object.entries(snapshot.untitledContents || {})) {
+          const separator = key.indexOf('|');
+          const keyGroup = separator >= 0 ? key.slice(0, separator) : '';
+          if (editorGroupKeys.has(keyGroup)) seededUntitled[key] = value;
+        }
+        untitledContentsRef.current = seededUntitled;
         applyTabs(restoredTabs);
         setTabGroupsByGroup(snapshot.tabGroups || {});
         const restoredActive: Record<string, string | null> = {};
@@ -1962,6 +2012,12 @@ export default function App() {
         void window.api.pty.kill(tab.sessionId).catch(() => {});
       }
 
+      // 编辑器页签关掉后，该项目的空白窗口内容就没有展示入口了。
+      // 继续留在会话里，下次重新打开编辑器会莫名其妙地冒出来。
+      if (closing.some((tab) => isEditorTab(tab))) {
+        setGroupUntitledContents(groupKey, {});
+      }
+
       const remaining = currentTabs.filter((tab) => !ids.has(tab.id));
       const nextTabs = { ...tabsRef.current };
       if (remaining.length > 0) nextTabs[groupKey] = remaining;
@@ -1998,7 +2054,7 @@ export default function App() {
       });
       return true;
     },
-    [applyTabs],
+    [applyTabs, setGroupUntitledContents],
   );
 
   const createTabGroup = useCallback(
@@ -3075,6 +3131,10 @@ export default function App() {
           onToast={pushToast}
           onTitleChange={(title) => setTabDescriptor(tab.groupKey, tab.id, title)}
           onFilePathChange={(relPath) => setTabFilePath(tab.groupKey, tab.id, relPath)}
+          onUntitledContentsChange={(contents) =>
+            setGroupUntitledContents(group.key, contents)
+          }
+          untitledRestore={pickGroupUntitled(untitledContentsRef.current, group.key)}
           onDirtyChange={handleDirtyChange}
           themeMode={terminalThemeMode}
           wordWrap={prefs.editorWordWrap}

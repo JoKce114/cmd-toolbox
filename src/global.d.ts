@@ -51,6 +51,8 @@ export interface SessionSnapshot {
   rightActiveByGroup?: Record<string, string | null>;
   focusSideByGroup?: Record<string, 'left' | 'right'>;
   splitRatioByGroup?: Record<string, number>;
+  // 键是 `${groupKey}|untitled://N`，值是空白窗口内容
+  untitledContents?: Record<string, string>;
 }
 
 export interface PtyCreateInput {
