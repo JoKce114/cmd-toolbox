@@ -4,73 +4,208 @@
 
 type Op = { kind: 'equal' | 'insert' | 'delete'; text: string };
 
-// LCS 动态规划。文件是编辑器里的文本，行数上万时 O(n*m) 会吃内存，
-// 所以先剥掉首尾公共部分，只对中间不同的区间做 DP。
-function diffLines(oldLines: string[], newLines: string[]): Op[] {
-  let start = 0;
-  while (
-    start < oldLines.length &&
-    start < newLines.length &&
-    oldLines[start] === newLines[start]
-  ) {
-    start += 1;
-  }
+// 把行映射成整数 id 再比较，避免 Myers 内层循环反复做字符串比较。
+type LineSource = { ids: Int32Array; texts: string[] };
 
-  let oldEnd = oldLines.length;
-  let newEnd = newLines.length;
-  while (oldEnd > start && newEnd > start && oldLines[oldEnd - 1] === newLines[newEnd - 1]) {
-    oldEnd -= 1;
-    newEnd -= 1;
-  }
+// 极端大文件兜底：两侧剩余行数都超过这个值时不再跑差分，直接全删全增。
+// 这是为了避免任何 O(N*M) / O((N+M)^2) 算法在大文件上长时间卡住。
+const LARGE_FILE_LIMIT = 20000;
 
-  const ops: Op[] = [];
-  for (let index = 0; index < start; index += 1) {
-    ops.push({ kind: 'equal', text: oldLines[index] });
-  }
+type Snake = { x: number; y: number };
 
-  const a = oldLines.slice(start, oldEnd);
-  const b = newLines.slice(start, newEnd);
-  const n = a.length;
-  const m = b.length;
+// Myers 线性空间变体：从两端同时按编辑距离向外扩展，找到中间蛇。
+// 返回的是相对 a/b 起点的切分坐标，调用方据此分治。
+function findMiddleSnake(
+  a: LineSource,
+  aStart: number,
+  aEnd: number,
+  b: LineSource,
+  bStart: number,
+  bEnd: number,
+): Snake | null {
+  const n = aEnd - aStart;
+  const m = bEnd - bStart;
+  const aIds = a.ids;
+  const bIds = b.ids;
+  const max = Math.ceil((n + m) / 2);
+  const vLength = 2 * max + 2;
+  const vOffset = max + 1;
 
-  if (n > 0 || m > 0) {
-    // table[i][j] = a[i..] 与 b[j..] 的最长公共子序列长度
-    const table: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-    for (let i = n - 1; i >= 0; i -= 1) {
-      for (let j = m - 1; j >= 0; j -= 1) {
-        table[i][j] =
-          a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
-      }
-    }
+  const v1 = new Int32Array(vLength).fill(-1);
+  const v2 = new Int32Array(vLength).fill(-1);
+  v1[vOffset + 1] = 0;
+  v2[vOffset + 1] = 0;
 
-    let i = 0;
-    let j = 0;
-    while (i < n && j < m) {
-      if (a[i] === b[j]) {
-        ops.push({ kind: 'equal', text: a[i] });
-        i += 1;
-        j += 1;
-      } else if (table[i + 1][j] >= table[i][j + 1]) {
-        ops.push({ kind: 'delete', text: a[i] });
-        i += 1;
+  const delta = n - m;
+  const front = Math.abs(delta) % 2 === 1;
+
+  let k1start = 0;
+  let k1end = 0;
+  let k2start = 0;
+  let k2end = 0;
+
+  for (let d = 0; d < max; d += 1) {
+    // 正向推进
+    for (let k1 = -d + k1start; k1 <= d - k1end; k1 += 2) {
+      const k1Offset = vOffset + k1;
+      let x1: number;
+      if (k1 === -d || (k1 !== d && v1[k1Offset - 1] < v1[k1Offset + 1])) {
+        x1 = v1[k1Offset + 1];
       } else {
-        ops.push({ kind: 'insert', text: b[j] });
-        j += 1;
+        x1 = v1[k1Offset - 1] + 1;
+      }
+      let y1 = x1 - k1;
+      while (x1 < n && y1 < m && aIds[aStart + x1] === bIds[bStart + y1]) {
+        x1 += 1;
+        y1 += 1;
+      }
+      v1[k1Offset] = x1;
+
+      if (x1 > n) {
+        k1end += 2;
+      } else if (y1 > m) {
+        k1start += 2;
+      } else if (front) {
+        const k2Offset = vOffset + delta - k1;
+        if (k2Offset >= 0 && k2Offset < vLength && v2[k2Offset] !== -1) {
+          const x2 = n - v2[k2Offset];
+          if (x1 >= x2) {
+            return { x: aStart + x1, y: bStart + y1 };
+          }
+        }
       }
     }
-    while (i < n) {
-      ops.push({ kind: 'delete', text: a[i] });
-      i += 1;
-    }
-    while (j < m) {
-      ops.push({ kind: 'insert', text: b[j] });
-      j += 1;
+
+    // 反向推进
+    for (let k2 = -d + k2start; k2 <= d - k2end; k2 += 2) {
+      const k2Offset = vOffset + k2;
+      let x2: number;
+      if (k2 === -d || (k2 !== d && v2[k2Offset - 1] < v2[k2Offset + 1])) {
+        x2 = v2[k2Offset + 1];
+      } else {
+        x2 = v2[k2Offset - 1] + 1;
+      }
+      let y2 = x2 - k2;
+      while (
+        x2 < n &&
+        y2 < m &&
+        aIds[aStart + n - x2 - 1] === bIds[bStart + m - y2 - 1]
+      ) {
+        x2 += 1;
+        y2 += 1;
+      }
+      v2[k2Offset] = x2;
+
+      if (x2 > n) {
+        k2end += 2;
+      } else if (y2 > m) {
+        k2start += 2;
+      } else if (!front) {
+        const k1Offset = vOffset + delta - k2;
+        if (k1Offset >= 0 && k1Offset < vLength && v1[k1Offset] !== -1) {
+          const x1 = v1[k1Offset];
+          const y1 = x1 - (k1Offset - vOffset);
+          if (x1 >= n - x2) {
+            return { x: aStart + x1, y: bStart + y1 };
+          }
+        }
+      }
     }
   }
 
-  for (let index = oldEnd; index < oldLines.length; index += 1) {
-    ops.push({ kind: 'equal', text: oldLines[index] });
+  return null;
+}
+
+// 递归分治。每层先剥掉公共前后缀，再用中间蛇把剩余区间一分为二。
+// 复杂度：时间 O((N+M)D)，空间 O(N+M)；全不同时时间退化为 O((N+M)^2) 但内存仍线性。
+function diffRange(
+  a: LineSource,
+  aStart: number,
+  aEnd: number,
+  b: LineSource,
+  bStart: number,
+  bEnd: number,
+  ops: Op[],
+): void {
+  const aIds = a.ids;
+  const bIds = b.ids;
+  // 公共前缀
+  while (aStart < aEnd && bStart < bEnd && aIds[aStart] === bIds[bStart]) {
+    ops.push({ kind: 'equal', text: a.texts[aStart] });
+    aStart += 1;
+    bStart += 1;
   }
+
+  // 公共后缀，留到递归结束后再输出
+  let suffix = 0;
+  while (aStart < aEnd && bStart < bEnd && aIds[aEnd - 1] === bIds[bEnd - 1]) {
+    aEnd -= 1;
+    bEnd -= 1;
+    suffix += 1;
+  }
+
+  if (aStart === aEnd) {
+    for (let index = bStart; index < bEnd; index += 1) {
+      ops.push({ kind: 'insert', text: b.texts[index] });
+    }
+  } else if (bStart === bEnd) {
+    for (let index = aStart; index < aEnd; index += 1) {
+      ops.push({ kind: 'delete', text: a.texts[index] });
+    }
+  } else if (aEnd - aStart > LARGE_FILE_LIMIT && bEnd - bStart > LARGE_FILE_LIMIT) {
+    // 首尾公共部分已经剥掉，中间还各有 2 万行以上：全删全增，不再差分。
+    for (let index = aStart; index < aEnd; index += 1) {
+      ops.push({ kind: 'delete', text: a.texts[index] });
+    }
+    for (let index = bStart; index < bEnd; index += 1) {
+      ops.push({ kind: 'insert', text: b.texts[index] });
+    }
+  } else {
+    const snake = findMiddleSnake(a, aStart, aEnd, b, bStart, bEnd);
+    if (
+      !snake ||
+      (snake.x === aStart && snake.y === bStart) ||
+      (snake.x === aEnd && snake.y === bEnd)
+    ) {
+      // 理论上不会走到这里；兜底成一次替换，保证一定前进、不会死循环。
+      for (let index = aStart; index < aEnd; index += 1) {
+        ops.push({ kind: 'delete', text: a.texts[index] });
+      }
+      for (let index = bStart; index < bEnd; index += 1) {
+        ops.push({ kind: 'insert', text: b.texts[index] });
+      }
+    } else {
+      diffRange(a, aStart, snake.x, b, bStart, snake.y, ops);
+      diffRange(a, snake.x, aEnd, b, snake.y, bEnd, ops);
+    }
+  }
+
+  for (let index = aEnd; index < aEnd + suffix; index += 1) {
+    ops.push({ kind: 'equal', text: a.texts[index] });
+  }
+}
+
+function diffLines(oldLines: string[], newLines: string[]): Op[] {
+  // 同一张表给两侧编号，id 相同即内容相同。
+  const ids = new Map<string, number>();
+  const toSource = (lines: string[]): LineSource => {
+    const lineIds = new Int32Array(lines.length);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      let id = ids.get(line);
+      if (id === undefined) {
+        id = ids.size;
+        ids.set(line, id);
+      }
+      lineIds[index] = id;
+    }
+    return { ids: lineIds, texts: lines };
+  };
+
+  const oldSource = toSource(oldLines);
+  const newSource = toSource(newLines);
+  const ops: Op[] = [];
+  diffRange(oldSource, 0, oldSource.ids.length, newSource, 0, newSource.ids.length, ops);
   return ops;
 }
 
@@ -143,5 +278,6 @@ export function buildTextPatch(
   const hunks = buildHunks(ops);
   if (!hunks.length) return '';
 
-  return [`--- ${oldName}`, `+++ ${newName}`, ...hunks].join('\n');
+  // git 生成的 patch 末尾带换行
+  return [`--- ${oldName}`, `+++ ${newName}`, ...hunks].join('\n') + '\n';
 }
