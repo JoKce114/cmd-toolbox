@@ -876,11 +876,17 @@ p {
   background: var(--surface);
 }
 
-/* 对比分栏：左编辑器 / 可拖拽分界线 / 右 DiffPane */
+/* 对比分栏：默认单编辑器（纵向），is-comparing 时变成左右分栏。
+   两种状态共用同一层容器，CodeMirrorHost 不会因为开关对比而卸载。 */
 .editor-diff-split {
   display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
+}
+
+.editor-diff-split.is-comparing {
+  flex-direction: row;
 }
 
 /* DiffPane 的 .terminal-pane 是 absolute inset，必须由这里定位约束在右半栏内 */

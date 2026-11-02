@@ -567,16 +567,34 @@ async function diffCommand(projectPath, filePath, changeStatus) {
   return { command: `git --no-pager diff -- ${quoted}` };
 }
 
-// 返回统一格式的 patch 文本，由渲染侧解析成彩色视图
-async function fileDiff(projectPath, filePath, changeStatus) {
+const REVISION = /^[0-9A-Za-z][0-9A-Za-z._/^~@{}-]*$/;
+
+function assertRevision(value) {
+  const revision = String(value || '').trim();
+  if (!revision) throw new Error('对比基准不合法');
+  if (!REVISION.test(revision)) throw new Error('对比基准不合法');
+  return revision;
+}
+
+// 文件是否还没进索引（未跟踪）。带 base 比较 HEAD 时用它决定走「全部新增」，
+// 否则 git 会报 unknown revision 或直接输出空 patch。
+async function isUntracked(projectPath, relative) {
+  const result = await runGit(projectPath, ['ls-files', '--error-unmatch', '--', relative]);
+  return !result.ok;
+}
+
+// 返回统一格式的 patch 文本，由渲染侧解析成彩色视图。
+// base 省略时保持原有语义（暂存区 vs 工作区）；传 'HEAD' 等修订号时比较该修订与工作区。
+async function fileDiff(projectPath, filePath, changeStatus, base) {
   const root = path.resolve(projectPath);
   const target = resolveWithin(root, String(filePath || ''));
   const relative = path.relative(root, target);
   if (!relative) throw new Error('文件路径不在项目目录内');
+  const revision = base ? assertRevision(base) : '';
 
   // 未跟踪文件没有可对比的 HEAD 版本。`--no-index` 搭配 NUL 在 Windows 的
   // execFile 下会 ENOENT，因此直接读文件内容，拼一份「全部新增」的 patch。
-  if (changeStatus === 'untracked') {
+  if (changeStatus === 'untracked' || (revision && (await isUntracked(projectPath, relative)))) {
     const content = await fsp.readFile(target, 'utf8').catch(() => '');
     const lines = content.split(/\r?\n/);
     if (lines.length && lines[lines.length - 1] === '') lines.pop();
@@ -588,20 +606,24 @@ async function fileDiff(projectPath, filePath, changeStatus) {
       `@@ -0,0 +1,${lines.length} @@`,
     ];
     const patch = [...header, ...lines.map((line) => `+${line}`), ''].join('\n');
-    return { patch, untracked: true };
+    return { patch, untracked: true, baseContent: '' };
   }
 
-  const result = await runGit(projectPath, [
-    '--no-pager',
-    'diff',
-    '--no-color',
-    '--no-ext-diff',
-    '-U3',
-    '--',
-    relative,
-  ]);
+  const args = ['--no-pager', 'diff', '--no-color', '--no-ext-diff', '-U3'];
+  if (revision) args.push(revision);
+  args.push('--', relative);
+  const result = await runGit(projectPath, args);
   if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
-  return { patch: result.stdout, untracked: false };
+
+  // 同时取出基准版本的内容，渲染侧据此在内存编辑时实时重算 patch。
+  // git 的 object path 用正斜杠，Windows 的 path.relative 给的是反斜杠。
+  let baseContent = '';
+  if (revision) {
+    const objectPath = relative.split(path.sep).join('/');
+    const shown = await runGit(projectPath, ['--no-pager', 'show', `${revision}:${objectPath}`]);
+    if (shown.ok) baseContent = shown.stdout;
+  }
+  return { patch: result.stdout, untracked: false, baseContent };
 }
 
 // 最近的提交列表，供面板展示

@@ -320,8 +320,8 @@ function registerIpc() {
     git.push(assertProjectPath(projectPath), options),
   );
 
-  ipcMain.handle('git:file-diff', (_event, projectPath, filePath, changeStatus) =>
-    git.fileDiff(assertProjectPath(projectPath), filePath, changeStatus),
+  ipcMain.handle('git:file-diff', (_event, projectPath, filePath, changeStatus, base) =>
+    git.fileDiff(assertProjectPath(projectPath), filePath, changeStatus, base),
   );
 
   ipcMain.handle('git:log', (_event, projectPath, limit) =>

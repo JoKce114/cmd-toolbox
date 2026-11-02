@@ -16,7 +16,7 @@ import { findModule } from '../modules/catalog';
 import type { EditorModule } from '../modules/catalog';
 import { enqueueMinify, isMinifiable, minifiedName, nextMinifySeq } from '../modules/minify';
 import type { FileClip } from '../fileClipboard';
-import type { Group, SymbolMatch, Tab } from '../types';
+import type { Group, GitStatus, SymbolMatch, Tab } from '../types';
 import type { TerminalThemeMode } from '../theme';
 import type { KeyBindingMap } from '../editorKeymap';
 import type { EditorFontFamily } from '../prefs';
@@ -29,6 +29,13 @@ const ENCODING_LABEL: Record<string, string> = {
   utf16be: 'UTF-16 BE',
   gbk: 'GBK',
 };
+
+// 对比的「另一端」是什么。存原始基准文本而不是算好的 patch，
+// 这样编辑器内容变化时可以实时重算，不必重新读磁盘 / git。
+type DiffSource =
+  | { kind: 'disk'; relPath: string; baseText: string }
+  | { kind: 'pair'; left: string; right: string }
+  | { kind: 'head'; relPath: string; baseText: string };
 
 export type EditorPaneProps = {
   tab: Tab;
@@ -111,17 +118,26 @@ export function EditorPane({
   // 等内容真正加载完再交给 CodeMirrorHost，否则会被 clamp 到空文档的第 1 行。
   const pendingGotoRef = useRef<{ relPath: string; line: number } | null>(null);
 
+  const [diffSource, setDiffSource] = useState<DiffSource | null>(null);
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
   // 「选择以进行比较」暂存的左侧文件；为空时菜单项退化为「选择以进行比较」
   const [diffCompareWith, setDiffCompareWith] = useState<string | null>(null);
   const [diffRatio, setDiffRatio] = useState(0.5);
   const diffDragRef = useRef<{ x: number; ratio: number; width: number } | null>(null);
   const [diffDragging, setDiffDragging] = useState(false);
+  // 右键时才查一次 git 状态，只用于把「与 Git HEAD 比较」在未跟踪文件上置灰
+  const [editorGitStatus, setEditorGitStatus] = useState<GitStatus | null>(null);
+  const menuStatusSeqRef = useRef(0);
   const [editorMenu, setEditorMenu] = useState<{
     x: number;
     y: number;
     relPath: string;
   } | null>(null);
+
+  const closeDiff = useCallback(() => {
+    setDiffSource(null);
+    setDiffTarget(null);
+  }, []);
 
   // 与磁盘版本比较：左旧（磁盘）右新（内存）。参数顺序不能反。
   const compareWithDisk = useCallback(
@@ -130,6 +146,8 @@ export function EditorPane({
       if (!entry) return;
       try {
         const disk = await window.api.files.read(group.path, relPath);
+        setActivePath(relPath);
+        setDiffSource({ kind: 'disk', relPath, baseText: disk.content });
         setDiffTarget({
           kind: 'text',
           title: `${relPath} ↔ 磁盘版本`,
@@ -140,7 +158,7 @@ export function EditorPane({
         onToast(toErrorMessage(error), 'error');
       }
     },
-    [files, group.path, onToast],
+    [files, group.path, onToast, setActivePath],
   );
 
   // 两个已打开文件互比
@@ -149,6 +167,9 @@ export function EditorPane({
       const left = files[leftRel];
       const right = files[rightRel];
       if (!left || !right) return;
+      // 编辑器始终显示其中一侧，否则切换文件后的自动关闭会立刻触发
+      if (activePath !== leftRel && activePath !== rightRel) setActivePath(leftRel);
+      setDiffSource({ kind: 'pair', left: leftRel, right: rightRel });
       setDiffTarget({
         kind: 'text',
         title: `${leftRel} ↔ ${rightRel}`,
@@ -156,35 +177,115 @@ export function EditorPane({
       });
       setDiffCompareWith(null);
     },
-    [files],
+    [files, activePath, setActivePath],
   );
 
-  // 与 Git HEAD 比较：直接用 git 后端算好的 patch
+  // 与 Git HEAD 比较：git 后端给出基准文本，patch 由渲染侧生成以便随编辑实时重算
   const compareWithHead = useCallback(
     async (relPath: string) => {
+      const entry = files[relPath];
+      if (!entry) return;
       try {
-        const result = await window.api.git.fileDiff(group.path, relPath, 'modified');
+        const result = await window.api.git.fileDiff(group.path, relPath, 'modified', 'HEAD');
+        const baseText = result.baseContent ?? '';
+        setActivePath(relPath);
+        setDiffSource({ kind: 'head', relPath, baseText });
         setDiffTarget({
           kind: 'text',
           title: `${relPath} ↔ Git HEAD`,
-          patch: result.patch || '',
+          patch: buildTextPatch('Git HEAD', baseText, '当前编辑', entry.content),
         });
         setDiffCompareWith(null);
       } catch (error) {
         onToast(toErrorMessage(error), 'error');
       }
     },
-    [group.path, onToast],
+    [files, group.path, onToast, setActivePath],
   );
 
-  const openOpenEditorMenu = useCallback((event: React.MouseEvent, relPath: string) => {
-    event.preventDefault();
-    setEditorMenu({
-      x: event.clientX,
-      y: event.clientY,
-      relPath,
-    });
-  }, []);
+  const openOpenEditorMenu = useCallback(
+    (event: React.MouseEvent, relPath: string) => {
+      event.preventDefault();
+      setEditorMenu({
+        x: event.clientX,
+        y: event.clientY,
+        relPath,
+      });
+      setEditorGitStatus(null);
+      const seq = menuStatusSeqRef.current + 1;
+      menuStatusSeqRef.current = seq;
+      void window.api.git
+        .status(group.path)
+        .then((next) => {
+          if (seq === menuStatusSeqRef.current) setEditorGitStatus(next);
+        })
+        .catch(() => {
+          if (seq === menuStatusSeqRef.current) setEditorGitStatus(null);
+        });
+    },
+    [group.path],
+  );
+
+  // 实时重算只依赖原始字符串：object/state 作为依赖会在每次渲染时换身份，
+  // 既容易触发多余计算，也容易写出无限循环。
+  const diffPrimaryPath = diffSource?.kind === 'pair' ? diffSource.left : diffSource?.relPath ?? '';
+  const diffSecondaryPath = diffSource?.kind === 'pair' ? diffSource.right : '';
+  const diffPrimaryContent = diffPrimaryPath ? files[diffPrimaryPath]?.content : undefined;
+  const diffSecondaryContent = diffSecondaryPath ? files[diffSecondaryPath]?.content : undefined;
+
+  // 对比打开期间编辑器仍可编辑，patch 必须跟着内存内容走（300ms 防抖）。
+  useEffect(() => {
+    if (!diffSource) return;
+    const timer = window.setTimeout(() => {
+      let patch = '';
+      if (diffSource.kind === 'pair') {
+        patch = buildTextPatch(
+          diffSource.left,
+          diffPrimaryContent ?? '',
+          diffSource.right,
+          diffSecondaryContent ?? '',
+        );
+      } else if (diffSource.kind === 'disk') {
+        patch = buildTextPatch(
+          '磁盘版本',
+          diffSource.baseText,
+          '当前编辑',
+          diffPrimaryContent ?? '',
+        );
+      } else {
+        patch = buildTextPatch(
+          'Git HEAD',
+          diffSource.baseText,
+          '当前编辑',
+          diffPrimaryContent ?? '',
+        );
+      }
+      setDiffTarget((previous) =>
+        previous && previous.kind === 'text' && previous.patch !== patch
+          ? { ...previous, patch }
+          : previous,
+      );
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [diffSource, diffPrimaryContent, diffSecondaryContent]);
+
+  // 切到对比之外的文件、或对比涉及的文件被关掉时，自动回到单编辑器。
+  // 显示另一边已经过期的 diff 比直接关掉更危险。
+  useEffect(() => {
+    if (!diffSource) return;
+    const paths =
+      diffSource.kind === 'pair' ? [diffSource.left, diffSource.right] : [diffSource.relPath];
+    if (paths.some((relPath) => !files[relPath])) {
+      closeDiff();
+      return;
+    }
+    if (!activePath || !paths.includes(activePath)) closeDiff();
+  }, [activePath, diffSource, files, closeDiff]);
+
+  // 「与 xxx 比较」指向的文件被关闭后，菜单项必须退回「选择以进行比较」
+  useEffect(() => {
+    if (diffCompareWith && !files[diffCompareWith]) setDiffCompareWith(null);
+  }, [diffCompareWith, files]);
 
   const handleDiffPointerDown = useCallback(
     (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -489,6 +590,16 @@ export function EditorPane({
 
   const encodingLabel = ENCODING_LABEL[file.encoding] || file.encoding;
 
+  const menuFile = editorMenu ? files[editorMenu.relPath] : undefined;
+  // git status 拿不到时保持可点：点击后由后端识别未跟踪并显示「全部新增」
+  const menuUntracked = Boolean(
+    editorMenu &&
+      editorGitStatus?.ok &&
+      editorGitStatus.changes.some(
+        (change) => change.path === editorMenu.relPath && change.worktreeStatus === 'untracked',
+      ),
+  );
+
   // 诊断模块按当前文件扩展名与开关状态挑一个。
   // findModule 返回清单里的同一对象，引用稳定，可以安全作为 effect 依赖；
   // 这样父组件每次渲染产生新的 enabledModules 数组也不会反复重配 linter。
@@ -657,88 +768,72 @@ export function EditorPane({
           }
         />
         <div className="editor-main">
-          {diffTarget ? (
-            <div className={`editor-diff-split${diffDragging ? ' is-resizing' : ''}`}>
-              <div className="editor-diff-pane" style={{ flex: `${diffRatio} 1 0` }}>
-                {activePath ? (
-                  <CodeMirrorHost
-                    value={file.content}
-                    filePath={activePath}
-                    readOnly={file.readOnly}
-                    themeMode={themeMode}
-                    wordWrap={wordWrap}
-                    tabSize={tabSize}
-                    indentWithSpaces={indentWithSpaces}
-                    keybindings={keybindings}
-                    fontSize={fontSize}
-                    lineHeight={lineHeight}
-                    fontFamily={fontFamily}
-                    showLineNumbers={showLineNumbers}
-                    highlightActiveLine={highlightActiveLine}
-                    bracketMatching={bracketMatching}
-                    showWhitespace={showWhitespace}
-                    diagnosticModule={diagnosticModule}
-                    referenceEnabled={Boolean(referenceModule)}
-                    projectPath={group.path}
-                    onJumpToSymbol={jumpToSymbol}
-                    gotoLine={gotoLine}
-                    onGotoLineApplied={() => setGotoLine(null)}
-                    onFontSizeDelta={onFontSizeDelta}
-                    onChange={(value) => update(activePath, value)}
-                    onConflictCountChange={setConflictCount}
-                  />
-                ) : (
-                  <p className="editor-placeholder">从左侧选择文件</p>
-                )}
-              </div>
-              <button
-                type="button"
-                className={`split-resizer${diffDragging ? ' is-dragging' : ''}`}
-                aria-label="调整对比宽度"
-                onPointerDown={handleDiffPointerDown}
-                onPointerMove={handleDiffPointerMove}
-                onPointerUp={handleDiffPointerUp}
-                onPointerCancel={handleDiffPointerUp}
-              />
-              <div className="editor-diff-pane" style={{ flex: `${1 - diffRatio} 1 0` }}>
-                <DiffPane
-                  projectPath={group.path}
+          {activePath ? (
+            // CodeMirrorHost 始终挂在同一位置：开关对比只改变父容器布局，
+            // 不卸载编辑器，撤销栈、光标与滚动位置都保留。
+            <div
+              className={cn(
+                'editor-diff-split',
+                diffTarget && 'is-comparing',
+                diffDragging && 'is-resizing',
+              )}
+            >
+              <div
+                className="editor-diff-pane"
+                style={{ flex: diffTarget ? `${diffRatio} 1 0` : '1 1 0' }}
+              >
+                <CodeMirrorHost
+                  value={file.content}
+                  filePath={activePath}
+                  readOnly={file.readOnly}
+                  themeMode={themeMode}
                   wordWrap={wordWrap}
-                  target={diffTarget}
-                  active
-                  onClose={() => setDiffTarget(null)}
-                  onOpenFile={requestOpen}
-                  onToast={onToast}
+                  tabSize={tabSize}
+                  indentWithSpaces={indentWithSpaces}
+                  keybindings={keybindings}
+                  fontSize={fontSize}
+                  lineHeight={lineHeight}
+                  fontFamily={fontFamily}
+                  showLineNumbers={showLineNumbers}
+                  highlightActiveLine={highlightActiveLine}
+                  bracketMatching={bracketMatching}
+                  showWhitespace={showWhitespace}
+                  diagnosticModule={diagnosticModule}
+                  referenceEnabled={Boolean(referenceModule)}
+                  projectPath={group.path}
+                  onJumpToSymbol={jumpToSymbol}
+                  gotoLine={gotoLine}
+                  onGotoLineApplied={() => setGotoLine(null)}
+                  onFontSizeDelta={onFontSizeDelta}
+                  onChange={(value) => update(activePath, value)}
+                  onConflictCountChange={setConflictCount}
                 />
               </div>
+              {diffTarget ? (
+                <>
+                  <button
+                    type="button"
+                    className={`split-resizer${diffDragging ? ' is-dragging' : ''}`}
+                    aria-label="调整对比宽度"
+                    onPointerDown={handleDiffPointerDown}
+                    onPointerMove={handleDiffPointerMove}
+                    onPointerUp={handleDiffPointerUp}
+                    onPointerCancel={handleDiffPointerUp}
+                  />
+                  <div className="editor-diff-pane" style={{ flex: `${1 - diffRatio} 1 0` }}>
+                    <DiffPane
+                      projectPath={group.path}
+                      wordWrap={wordWrap}
+                      target={diffTarget}
+                      active
+                      onClose={closeDiff}
+                      onOpenFile={requestOpen}
+                      onToast={onToast}
+                    />
+                  </div>
+                </>
+              ) : null}
             </div>
-          ) : activePath ? (
-            <CodeMirrorHost
-              value={file.content}
-              filePath={activePath}
-              readOnly={file.readOnly}
-              themeMode={themeMode}
-              wordWrap={wordWrap}
-              tabSize={tabSize}
-              indentWithSpaces={indentWithSpaces}
-              keybindings={keybindings}
-              fontSize={fontSize}
-              lineHeight={lineHeight}
-              fontFamily={fontFamily}
-              showLineNumbers={showLineNumbers}
-              highlightActiveLine={highlightActiveLine}
-              bracketMatching={bracketMatching}
-              showWhitespace={showWhitespace}
-              diagnosticModule={diagnosticModule}
-              referenceEnabled={Boolean(referenceModule)}
-              projectPath={group.path}
-              onJumpToSymbol={jumpToSymbol}
-              gotoLine={gotoLine}
-              onGotoLineApplied={() => setGotoLine(null)}
-              onFontSizeDelta={onFontSizeDelta}
-              onChange={(value) => update(activePath, value)}
-              onConflictCountChange={setConflictCount}
-            />
           ) : (
             <p className="editor-placeholder">从左侧选择文件</p>
           )}
@@ -795,6 +890,7 @@ export function EditorPane({
                 type: 'item',
                 id: 'diff-disk',
                 label: '与已保存文件比较',
+                disabled: !menuFile?.dirty,
                 onSelect: () => {
                   void compareWithDisk(editorMenu.relPath);
                   setEditorMenu(null);
@@ -804,6 +900,7 @@ export function EditorPane({
                 type: 'item',
                 id: 'diff-pick',
                 label: diffCompareWith ? `与 ${diffCompareWith} 比较` : '选择以进行比较',
+                disabled: diffCompareWith === editorMenu.relPath,
                 onSelect: () => {
                   if (!diffCompareWith) {
                     setDiffCompareWith(editorMenu.relPath);
@@ -817,6 +914,7 @@ export function EditorPane({
                 type: 'item',
                 id: 'diff-head',
                 label: '与 Git HEAD 比较',
+                disabled: menuUntracked,
                 onSelect: () => {
                   void compareWithHead(editorMenu.relPath);
                   setEditorMenu(null);

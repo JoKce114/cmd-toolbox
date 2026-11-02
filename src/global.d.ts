@@ -121,7 +121,8 @@ declare global {
           projectPath: string,
           filePath: string,
           changeStatus: string,
-        ) => Promise<{ patch: string; untracked: boolean }>;
+          base?: string,
+        ) => Promise<{ patch: string; untracked: boolean; baseContent: string }>;
         log: (
           projectPath: string,
           limit?: number,

@@ -45,17 +45,15 @@ export function DiffPane({
       : '';
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
     setSelectedPath('');
     // text 变体的 patch 是上层算好的，直接渲染，不发起任何 IPC
     if (isText) {
-      setPatch(textPatch);
       setLoading(false);
-      return () => {
-        cancelled = true;
-      };
+      setPatch(textPatch);
+      return;
     }
+    let cancelled = false;
+    setLoading(true);
     const load = async () => {
       const result = commitHash
         ? await window.api.git.commitDiff(projectPath, commitHash)
@@ -84,25 +82,23 @@ export function DiffPane({
   const activeFile = files.find((file) => file.path === selectedPath) ?? files[0] ?? null;
   const parsed = parsePatch(commitHash ? activeFile?.patch || '' : patch);
 
-  const title = isText
-    ? target.kind === 'text'
-      ? target.title
-      : ''
-    : commitHash
-      ? `${target.kind === 'commit' ? target.commit.short : ''} · ${
-          target.kind === 'commit' ? target.commit.subject : ''
-        }`
-      : target.kind === 'change' && target.change.origPath
-        ? `${target.change.origPath} → ${target.change.path}`
-        : changePath;
+  let title = changePath;
+  if (target.kind === 'text') {
+    title = target.title;
+  } else if (target.kind === 'commit') {
+    title = `${target.commit.short} · ${target.commit.subject}`;
+  } else if (target.change.origPath) {
+    title = `${target.change.origPath} → ${target.change.path}`;
+  }
 
   const openPath = commitHash ? activeFile?.path || '' : changePath;
   // text 变体对应两段内存文本，没有可单独打开的磁盘文件
-  const openDisabled = isText
-    ? true
-    : commitHash
-      ? !activeFile || activeFile.status === 'deleted'
-      : false;
+  const openDisabled =
+    target.kind === 'text'
+      ? true
+      : target.kind === 'commit'
+        ? !activeFile || activeFile.status === 'deleted'
+        : false;
 
   return (
     <section className={`terminal-pane diff-pane${active ? '' : ' is-hidden'}`}>
@@ -155,7 +151,7 @@ export function DiffPane({
         {loading ? (
           <p className="diff-placeholder">正在读取差异…</p>
         ) : parsed.isEmpty ? (
-          <p className="diff-placeholder">没有可显示的差异</p>
+          <p className="diff-placeholder">{isText ? '两处内容一致' : '没有可显示的差异'}</p>
         ) : (
           parsed.hunks.map((hunk, hunkIndex) => (
             <div className="diff-hunk" key={`${hunk.header}:${hunkIndex}`}>
