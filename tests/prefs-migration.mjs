@@ -175,5 +175,41 @@ ok(fresh.editorShowWhitespace === false, 'defaultPrefs 显示空白字符 false'
 ok(fresh.editorTabSize === 4, 'defaultPrefs 缩进宽度 4');
 ok(fresh.editorIndentWithSpaces === false, 'defaultPrefs 用制表符');
 
+console.log('7. 老用户缺少新增默认模块时补齐，并随保存落盘');
+await seedAndOpenSettings({ enabledModules: ['diag-php'] }, '模块');
+const migratedLegacy = await saveAndReadPrefs();
+ok(
+  migratedLegacy.enabledModules.includes('ref-php'),
+  '老用户升级后 enabledModules 包含 ref-php',
+);
+ok(
+  migratedLegacy.enabledModules.includes('ref-js'),
+  '老用户升级后 enabledModules 包含 ref-js',
+);
+ok(
+  Array.isArray(migratedLegacy.seenDefaultModules) &&
+    migratedLegacy.seenDefaultModules.includes('ref-php') &&
+    migratedLegacy.seenDefaultModules.includes('ref-js'),
+  '保存时 seenDefaultModules 一并落盘（保存链路透传 ...prefs）',
+);
+
+console.log('8. 已记为见过的默认模块不会因缺失被重新打开');
+await seedAndOpenSettings(
+  {
+    enabledModules: ['diag-php', 'ref-js'],
+    seenDefaultModules: ['diag-php', 'ref-php', 'ref-js'],
+  },
+  '模块',
+);
+const manuallyOff = await saveAndReadPrefs();
+ok(
+  !manuallyOff.enabledModules.includes('ref-php'),
+  'seenDefaultModules 已含 ref-php 时不会重新打开',
+);
+ok(
+  manuallyOff.seenDefaultModules.includes('ref-php'),
+  '保存后 seenDefaultModules 仍保留 ref-php',
+);
+
 console.log(`\n全部通过：${passed} 项`);
 await app.close();
