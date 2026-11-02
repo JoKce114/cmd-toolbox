@@ -2021,7 +2021,7 @@ export default function App() {
           .map((tab) => tab.descriptor || tab.filePath || tab.id)
           .join('\n');
         const ok = window.confirm(
-          `以下文件有未保存的修改，关闭将丢失：\n${names}\n\n是否继续？`,
+          `以下页签有未保存的修改或只存在于会话中的内容，关闭将丢失：\n${names}\n\n是否继续？`,
         );
         if (!ok) return false;
       }

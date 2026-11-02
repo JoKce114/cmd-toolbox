@@ -39,6 +39,13 @@ const ENCODING_LABEL: Record<string, string> = {
   gbk: 'GBK',
 };
 
+// 会话恢复出来但内容为空的窗口没有可丢失的内容，关闭时不必弹确认；
+// 用户编辑过（dirty）仍按未保存修改处理，不能绕过确认。
+function losesSessionContent(entry: EditorFileState | undefined): boolean {
+  if (!entry?.sessionOnly) return false;
+  return entry.content !== '';
+}
+
 // 对比的「另一端」是什么。存原始基准文本而不是算好的 patch，
 // 这样编辑器内容变化时可以实时重算，不必重新读磁盘 / git。
 type DiffSource =
@@ -393,6 +400,10 @@ export function EditorPane({
   const untitledRestoreRef = useRef(untitledRestore);
   const untitledDroppedRef = useRef(untitledDropped);
   const restoredRef = useRef(false);
+  // 首次挂载时恢复是 layout effect 写入的，紧随其后的被动 effect 仍可能读到
+  // 旧的空 files。只有「确实出现过内容」之后才允许清理 filePath，否则会把
+  // 刚恢复的绑定清成空串，下次启动这个窗口就不会被激活。
+  const hadContentRef = useRef(false);
 
   // 页签的 filePath 会变（上层用同一个编辑器页签顶替新文件），
   // 所以要比对「上次已应用的路径」而不是只在挂载时读一次。
@@ -476,6 +487,12 @@ export function EditorPane({
   // 否则会话里仍留着旧虚拟路径，下次启动会照着它重新开出一个空窗口。
   // 只处理虚拟路径：普通文件的 filePath 同步是既有行为，不在本次改动范围。
   useEffect(() => {
+    // 首次挂载时 files 可能还是空的（见 hadContentRef 的声明）。
+    // 此时不能把恢复的 filePath 清掉；先记录「曾经有过内容」再放开清理。
+    if (!hadContentRef.current) {
+      if (Object.keys(files).length > 0) hadContentRef.current = true;
+      return;
+    }
     const current = tab.filePath || '';
     if (!isUntitledPath(current) || files[current]) return;
     const next = activePath && files[activePath] ? activePath : '';
@@ -507,7 +524,7 @@ export function EditorPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [untitledSnapshot]);
 
-  const hasSessionOnly = openPaths.some((relPath) => Boolean(files[relPath].sessionOnly));
+  const hasSessionOnly = openPaths.some((relPath) => losesSessionContent(files[relPath]));
 
   useEffect(() => {
     const base = activePath ? displayNameFor(activePath) : '编辑器';
@@ -615,8 +632,9 @@ export function EditorPane({
   const requestCloseTab = (relPath: string) => {
     if (!relPath) return;
     const target = filesRef.current[relPath];
-    // sessionOnly：内容只存在于会话里，关掉就永久丢失，必须确认
-    if (target?.dirty || target?.sessionOnly) {
+    // sessionOnly：内容只存在于会话里，关掉就永久丢失，必须确认。
+    // 恢复出来但内容为空的窗口没有可丢的内容，不必打扰用户。
+    if (target?.dirty || losesSessionContent(target)) {
       setPendingClose(relPath);
       return;
     }
@@ -769,9 +787,14 @@ export function EditorPane({
 
   // 单个页签的关闭确认文案：sessionOnly 的条目要点明「只存在于会话」，
   // 否则用户会把它当成普通空白窗口，确认框看起来像在问一个空文件。
+  // 恢复后又编辑过时 dirty 与 sessionOnly 同时成立，两种后果都要说清楚。
   const closeConfirmMessage = (relPath: string) => {
     const name = displayNameFor(relPath);
-    if (files[relPath]?.sessionOnly) {
+    const entry = files[relPath];
+    if (losesSessionContent(entry)) {
+      if (entry?.dirty) {
+        return `「${name}」有未保存的修改，且内容只存在于会话中，关闭后不可恢复。是否继续？`;
+      }
       return `「${name}」的内容只存在于会话中，关闭后不可恢复。是否继续？`;
     }
     return `「${name}」有未保存的修改，关闭将丢失。是否继续？`;
@@ -779,19 +802,26 @@ export function EditorPane({
 
   const requestClose = () => {
     const blocking = openPaths.filter(
-      (item) => files[item].dirty || files[item].sessionOnly,
+      (item) => files[item].dirty || losesSessionContent(files[item]),
     );
     if (blocking.length > 0) {
       const dirtyNames = blocking
-        .filter((item) => files[item].dirty)
+        .filter((item) => files[item].dirty && !losesSessionContent(files[item]))
+        .map((item) => `「${displayNameFor(item)}」`)
+        .join('、');
+      const bothNames = blocking
+        .filter((item) => files[item].dirty && losesSessionContent(files[item]))
         .map((item) => `「${displayNameFor(item)}」`)
         .join('、');
       const sessionNames = blocking
-        .filter((item) => !files[item].dirty && files[item].sessionOnly)
+        .filter((item) => !files[item].dirty && losesSessionContent(files[item]))
         .map((item) => `「${displayNameFor(item)}」`)
         .join('、');
       const reasons: string[] = [];
       if (dirtyNames) reasons.push(`${dirtyNames}有未保存的修改，关闭将丢失`);
+      if (bothNames) {
+        reasons.push(`${bothNames}有未保存的修改，且内容只存在于会话中，关闭后不可恢复`);
+      }
       if (sessionNames) {
         reasons.push(`${sessionNames}的内容只存在于会话中，关闭后不可恢复`);
       }
