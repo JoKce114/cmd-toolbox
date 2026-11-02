@@ -176,6 +176,7 @@ node tests/status.mjs         # AI 状态分类、未读状态迁移
 node tests/symbols.mjs        # 符号提取、项目查询、排序（离线）
 node tests/file-ops.mjs       # 新建/复制/移动/删除到回收站（临时目录，不碰真实回收站）
 node tests/diff-from-text.mjs # 文本差异生成 unified diff
+node tests/untitled-path.mjs  # 虚拟路径判断与编号分配（离线）
 ```
 
 - `tests/login-item.mjs` 用假 `app` 对象，**不会**读写真实注册表。
@@ -203,6 +204,7 @@ node tests/tab-groups.mjs        # 标签组：建组/改名/改色/折叠/拖�
 node tests/editor-modules.mjs    # 压缩、语法诊断、外部改动自动重载
 node tests/editor-goto-def.mjs   # Ctrl+点击弹卡片与跳转
 node tests/editor-file-tree.mjs  # 文件树工具栏、右键操作、侧栏拖拽与对比
+node tests/editor-untitled.mjs   # 空白窗口新建、另存为、编号复用、对比置灰与重启恢复
 node tests/module-catalog.mjs    # 模块清单与默认开关（离线）
 node tests/clipboard-image.mjs   # 剪贴板图片识别（会占用系统剪贴板）
 node tests/device-emulation-probe.mjs
@@ -447,6 +449,37 @@ node tests/device-emulation-probe.mjs
   此时设置 `gotoLine` 会被 clamp 到第 1 行且不会重跑。必须等目标文件
   `loading` 变 `false` 后再设置 `gotoLine`。
 - 模块关闭时 Ctrl+点击**不拦截**，保持 CodeMirror 原生多光标行为。
+
+### 空白窗口（Untitled）
+
+- **空白窗口用虚拟路径 `untitled://N` 当 `files` 的键**，对上层完全透明：
+  `activePath`、对比、打开的编辑器列表都当普通 `relPath` 用。判断只有一处
+  `src/untitledPath.ts` 的 `isUntitledPath()`，**所有碰磁盘或 mtime 的地方必须先过它**
+  （`open` / `save` / `reloadFromDisk` / 2 秒轮询 / 自动压缩）。不要在调用方各自
+  `startsWith`——漏一处就会拿伪路径去读磁盘，表现是每 2 秒报一次错。
+- **新建入口只有两个**：页签栏右侧的 ＋（`.editor-tab-add`）和页签右键菜单
+  「新建空白文件」。页签标题、顶部路径和「打开的编辑器」都走
+  `displayNameFor()`，虚拟路径显示成 `Untitled-N`；顶部路径展示的是文件名，
+  不是完整相对路径。
+- **保存 = 另存为**：`save()` 对虚拟路径直接返回 `'unchanged'`，拦截在 `handleSave` 里。
+  `saveUntitledAs` 必须**先 `createFile` 写盘成功、再原子换键**；反过来一旦写盘失败
+  会留下指向不存在文件的页签。
+- **换路径后不能重新 `open()`**：`EditorPane` 要先改 `appliedPathRef.current` 再调
+  `onFilePathChange`，否则上层 `tab.filePath` 变化会触发重新读盘，撤销栈全丢。
+  `CodeMirrorHost` 会识别 `untitled://N → 真实路径` 并保留同一个 `EditorView`。
+- **`readOnly` 走 CodeMirror 的 Compartment，不参与 `EditorView` 重建**（Task 5 改的）。
+  不要把它加回重建依赖：另存为换路径时重建实例会丢掉撤销栈和光标。
+- **编号复用最小可用值**：关掉 `Untitled-1` 再新建拿到的还是 `Untitled-1`。
+- **空白窗口不能与磁盘版本或 Git HEAD 比较**（没有对应版本），菜单置灰 + 函数内兜底。
+  两个空白窗口互比允许。
+- **内容要进会话**：空白窗口没有磁盘文件可读，`session.json` 的 `untitledContents`
+  按 `groupKey|untitled://N` 存内容，单窗口 256K 字符、总计 2M 字符上限
+  （`desktop/session.js` 按字符数计，不是字节）。超限条目丢弃并记进 `untitledDropped`，
+  恢复成空窗口但保留编号；会话文件不是存大文件的地方。
+- **恢复出来的窗口带 `sessionOnly` 标记**：它不算 dirty，但内容只存在于会话里，
+  关闭时必须确认（`losesSessionContent()`）。另存为落盘后清掉这个标记；恢复后又
+  编辑过时 `dirty` 与 `sessionOnly` 同时成立，关闭文案要把两种后果都说清楚。
+- **另存为用 `SaveAsModal`，不要用 `window.prompt`**——Electron 渲染进程里它直接抛错。
 
 ### 文件树与对比
 
