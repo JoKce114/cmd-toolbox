@@ -430,7 +430,10 @@ try {
   // 右键菜单删掉后，这是创建第一个 .min.js 的唯一入口。
   // 用 fresh.js，它此前没有任何产物。
   assert(!existsSync(join(projectDir, 'fresh.min.js')), 'fresh.min.js 一开始不存在');
-  await page.locator('.file-row').filter({ hasText: /^fresh\.js$/ }).click({ button: 'right' });
+  await page
+    .locator('.file-tree .file-row')
+    .filter({ hasText: /^fresh\.js$/ })
+    .click({ button: 'right' });
   await page.locator('.popup-menu').waitFor({ timeout: 8000 });
   assert(
     (await page.locator('.popup-menu').getByText('生成 fresh.min.js').count()) > 0,
@@ -448,17 +451,22 @@ try {
 
   console.log('13. .min.js 自身没有压缩菜单');
   // 用测试开始前就已存在的 self.min.js：刚生成的 fresh.min.js 不在文件树缓存里，
-  // 树不会自动刷新，拿它测会等不到元素
+  // 树不会自动刷新，拿它测会等不到元素。
+  // 文件树现在对所有条目都有通用右键菜单，所以这里断言的是「菜单里没有生成项」，
+  // 不能再断言菜单本身不出现。
   await page
-    .locator('.file-row')
+    .locator('.file-tree .file-row')
     .filter({ hasText: 'self.min.js' })
     .first()
     .click({ button: 'right' });
-  await page.waitForTimeout(800);
+  const selfMinMenu = page.locator('.popup-menu');
+  await selfMinMenu.waitFor({ timeout: 8000 });
   assert(
-    (await page.locator('.popup-menu').count()) === 0,
-    '.min.js 右键不弹压缩菜单',
+    (await selfMinMenu.getByText(/生成/).count()) === 0,
+    '.min.js 右键没有「生成压缩版」菜单项',
   );
+  await page.keyboard.press('Escape');
+  await selfMinMenu.waitFor({ state: 'detached', timeout: 5000 });
 
   console.log('14. 诊断：默认不开 JS 诊断，开启后出现波浪线');
   await openFile(page, 'diag-bad.js');
@@ -699,7 +707,7 @@ try {
   // 上一条用例的设置面板在慢机器上可能还没完全卸载，会挡住文件树的右键点击
   await page.locator('.modal-overlay').waitFor({ state: 'detached', timeout: 10000 }).catch(() => {});
   await page
-    .locator('.file-row')
+    .locator('.file-tree .file-row')
     .filter({ hasText: /^regress\.js$/ })
     .click({ button: 'right' });
   await page.locator('.popup-menu').waitFor({ timeout: 8000 });
