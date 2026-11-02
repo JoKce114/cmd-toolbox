@@ -1,9 +1,4 @@
 // 空白窗口的虚拟路径：判断、编号分配、显示名。纯函数，离线可跑。
-import { createRequire } from 'node:module';
-
-const require = createRequire(import.meta.url);
-void require;
-
 let passed = 0;
 function assert(condition, message) {
   if (!condition) throw new Error('断言失败：' + message);
@@ -19,6 +14,11 @@ assert(mod.isUntitledPath('untitled://42') === true, '多位数编号也识别')
 assert(mod.isUntitledPath('app/a.php') === false, '普通路径不是虚拟路径');
 assert(mod.isUntitledPath('') === false, '空字符串不是虚拟路径');
 assert(mod.isUntitledPath('untitled:/x') === false, '少一个斜杠不算（前缀严格匹配）');
+assert(mod.isUntitledPath('untitled://') === false, '空编号不是虚拟路径');
+assert(mod.isUntitledPath('untitled://0') === false, '编号 0 不是虚拟路径');
+assert(mod.isUntitledPath('untitled://01') === false, '前导零不是 untitledPathFor 能产出的形式');
+assert(mod.isUntitledPath('untitled://abc') === false, '非数字编号不是虚拟路径');
+assert(mod.isUntitledPath('UNTITLED://1') === false, '大小写敏感');
 
 console.log('2. untitledPathFor');
 assert(mod.untitledPathFor(1) === 'untitled://1', '编号 1 拼出正确路径');
@@ -43,5 +43,9 @@ assert(mod.displayNameFor('untitled://1') === 'Untitled-1', '虚拟路径显示�
 assert(mod.displayNameFor('untitled://12') === 'Untitled-12', '两位数编号');
 assert(mod.displayNameFor('app/service/a.php') === 'a.php', '普通路径取文件名');
 assert(mod.displayNameFor('') === '编辑器', '空路径给兜底名');
+assert(
+  mod.displayNameFor('untitled://') === 'untitled://',
+  '空编号不产出 Untitled-，走普通路径分支回退为原路径',
+);
 
 console.log(`\n全部通过：${passed} 项`);

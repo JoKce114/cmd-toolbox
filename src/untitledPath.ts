@@ -4,8 +4,13 @@
 
 export const UNTITLED_PREFIX = 'untitled://';
 
+// 前缀之后必须是非零正整数：untitledPathFor() 只会产出这种形式，
+// 空的 / 0 / 前导零 / 非数字都不是合法虚拟路径。
 export function isUntitledPath(relPath: string): boolean {
-  return String(relPath || '').startsWith(UNTITLED_PREFIX);
+  const value = String(relPath || '');
+  if (!value.startsWith(UNTITLED_PREFIX)) return false;
+  const index = value.slice(UNTITLED_PREFIX.length);
+  return /^[1-9]\d*$/.test(index);
 }
 
 export function untitledPathFor(index: number): string {
