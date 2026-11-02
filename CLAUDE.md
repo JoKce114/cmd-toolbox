@@ -97,7 +97,12 @@ Windows Defender 实时保护也是关闭的（`RealTimeProtectionEnabled: False
 - `node-pty`
 - `php-parser` / `acorn` / `acorn-jsx`（`desktop/symbols.js` 用）
 
-放进 devDependencies 的后果是打包后启动即崩，报 `Cannot find module 'xxx'`。
+放进 devDependencies 的后果：只有 `iconv-lite` 在模块顶部 `require`，打包后
+**启动即崩**，报 `Cannot find module 'xxx'`。`electron-updater` / `node-pty`
+是懒加载且有 `try/catch` 兜底，表现为对应功能静默不可用；
+`php-parser` / `acorn` / `acorn-jsx` 也是懒 `require`（`loadPhpEngine()` /
+`parseJsSymbols()` 内部），**第一次点击符号时**才报错——PHP 路径直接抛出，
+JS 路径被 `catch` 吞成空结果，更难发现。
 
 `npmRebuild: false`，不要打开——node-pty 在 CI 上预编译有风险。
 node-pty 1.1.0 用的是 node-addon-api（Node-API，ABI 稳定），已在 Electron 45
@@ -376,11 +381,9 @@ node tests/device-emulation-probe.mjs
   它会全局文本替换所有依赖里的 `process.*`，影响 xterm 之类按平台分支的库。
 - **`ts`/`tsx` 不挂诊断**：acorn 不认识类型注解，挂上会满屏误报。设置项因此叫
   「JS / JSX 语法检查」而不是「JS / TS」。
-- **模块依赖按使用方分开放**：只被前端 `import` 的放 `devDependencies`
-  （vite 打进前端 bundle，运行时不从 node_modules 读）；主进程也 `require` 的
-  必须放 `dependencies`——`php-parser` / `acorn` / `acorn-jsx` 就属于后者。
-  放进 `devDependencies` 会被 `electron-builder` 剥掉，打包后主进程启动即报
-  `Cannot find module 'xxx'`。
+- **模块依赖按使用方分开放**：只被前端 `import` 的放 `devDependencies`（vite 打进
+  bundle，运行时不从 node_modules 读），主进程也 `require` 的必须放 `dependencies`；
+  后果见「打包 → 依赖必须放对位置」。
 
 ### 编辑器自动重新加载
 
@@ -395,19 +398,25 @@ node tests/device-emulation-probe.mjs
 
 - **解析在主进程**（`desktop/symbols.js`），不在渲染进程。要遍历文件系统，
   且全量解析会卡住编辑器输入。
-- **不做常驻索引**：点击时才遍历，先用 `function name` / `class name` 文本预筛，
-  只对命中文件跑 `php-parser` / `acorn`。实测 `php-parser` 约 22ms/文件，
+- **不做常驻索引**：点击时才遍历，用**名字子串包含**（`text.includes(name)`，
+  大小写不敏感兜底）做文本预筛，只对命中文件跑 `php-parser` / `acorn`。
+  **不能用 `function name` / `class name` 前缀正则**——箭头函数赋值
+  （`const foo = () => …`）、PHP 的 `function &x()`、以及修饰符和换行写法都命中不了，
+  会漏掉真实声明；精确性交给后面的 AST 判断。实测 `php-parser` 约 22ms/文件，
   千文件项目全量解析要二十秒，预筛是必需的。
-- **缓存按 `relPath + mtime`**，文件改动自动失效。注意它是「解析过的文件清单」，
+- **缓存按「项目根 + relPath」分键，再比 mtime 失效**（key 是
+  `${root}\u0000${relPath}`，`mtimeMs` 一致才复用），按项目隔离。**不能只按 `relPath`**：
+  两个项目都有 `app/a.php` 时会互相读到对方的声明。注意它只是「解析过的文件清单」，
   不是项目级符号表——不要在此基础上做全局补全，会把内存吃光。
 - **`php-parser` 的 `name` 是 Identifier 对象**（`{ name: 'foo' }`），不是字符串；
   类的 docblock 挂在类节点的 `leadingComments`，方法的挂在自己节点上，要分开取。
-- **签名用源码切片**（`loc.start.offset` 到 `end.offset`，遇到 `{` 截断），
-  不要用 AST 重拼参数——重拼会丢默认值写法和类型原样。
-- **`getWebContentsId()` 无关**，这里没有 webview；卡片用 CodeMirror 的
-  `showTooltip` facet 承载 React 节点，`create(view)` 拿到的 view 用来关闭卡片。
-- **`php-parser` / `acorn` / `acorn-jsx` 必须在 `dependencies`**，因为主进程
-  `require` 它们；放进 devDependencies 会让打包后的应用启动即崩。
+- **签名用源码切片，PHP 和 JS 的截断规则不同**：PHP 切到第一个 `{` 或 `;`
+  （`sourceSignature(..., ['{', ';'])`）；JS 按括号配对找到参数列表的 `)`
+  （`jsSignature`），箭头函数没有参数括号时退到 `=>`。不要用 AST 重拼参数——
+  重拼会丢默认值写法和类型原样；也**不要对 JS 用 `{` 截断**，解构参数和默认值里的
+  `{` 在括号内部，按第一个 `{` 切会把签名切坏。
+- **卡片用 CodeMirror 的 `showTooltip` facet 承载 React 节点**，`create(view)`
+  拿到的 view 用来关闭卡片。
 - **`onGotoLineApplied` 是 `CodeMirrorHost` 的必填 prop**：定位完成后调用它，
   上层必须据此把 `gotoLine` 复位成 `null`。漏传会让 `prevGotoLineRef` 一直停在
   上一次的值，从第二次跳转起全部静默失效。
