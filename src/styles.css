@@ -4644,12 +4644,12 @@ p {
   max-height: 420px;
   overflow: auto;
   padding: 10px 12px;
-  border: 1px solid #e3e4ea;
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
   font-size: 12px;
-  color: #24292f;
+  color: var(--text);
 }
 
 .symbol-card-head {
@@ -4662,7 +4662,7 @@ p {
 
 .symbol-card-name {
   font-weight: 600;
-  color: #57606a;
+  color: var(--text-secondary);
 }
 
 .symbol-card-close {
@@ -4674,18 +4674,18 @@ p {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #8b949e;
+  color: var(--muted);
   cursor: pointer;
 }
 
 .symbol-card-close:hover {
-  background: #f1f2f6;
-  color: #24292f;
+  background: var(--bg);
+  color: var(--text);
 }
 
 .symbol-card-where {
   margin: 0 0 6px;
-  color: #8b949e;
+  color: var(--muted);
 }
 
 .symbol-card-signature,
@@ -4693,7 +4693,7 @@ p {
   margin: 0;
   padding: 8px 10px;
   border-radius: 6px;
-  background: #f6f8fa;
+  background: var(--bg);
   font-family: inherit;
   white-space: pre-wrap;
   word-break: break-word;
@@ -4701,7 +4701,7 @@ p {
 
 .symbol-card-doc {
   margin-top: 6px;
-  color: #4b5563;
+  color: var(--text-secondary);
   line-height: 1.55;
 }
 
@@ -4711,15 +4711,15 @@ p {
   gap: 6px;
   margin-top: 8px;
   padding: 4px 8px;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
-  background: #ffffff;
-  color: #0969da;
+  background: var(--surface);
+  color: var(--accent);
   cursor: pointer;
 }
 
 .symbol-card-jump:hover {
-  background: #f3f8ff;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
 
 .symbol-card-list {
@@ -4742,25 +4742,86 @@ p {
 }
 
 .symbol-card-item:hover {
-  background: #f3f4f8;
+  background: var(--bg);
 }
 
 .symbol-card-item-file {
-  color: #0969da;
+  color: var(--accent);
 }
 
 .symbol-card-item-sig {
-  color: #57606a;
+  color: var(--text-secondary);
   font-size: 11px;
 }
 
 .symbol-card-empty,
 .symbol-card-note {
   margin: 0;
-  color: #8b949e;
+  color: var(--muted);
 }
 
 .symbol-card-note {
   margin-top: 8px;
   font-size: 11px;
+}
+
+/* 编辑器深色主题：tooltip 挂在 .editor-pane 内，和页签、查找面板同一套覆盖方式 */
+.editor-pane.theme-dark .symbol-card {
+  border-color: #2a2d35;
+  background: #1e1f25;
+  color: #e4e6ea;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+.editor-pane.theme-dark .symbol-card-name {
+  color: #c8ccd4;
+}
+
+.editor-pane.theme-dark .symbol-card-close {
+  color: #8b8f98;
+}
+
+.editor-pane.theme-dark .symbol-card-close:hover {
+  background: #2a2d35;
+  color: #e4e6ea;
+}
+
+.editor-pane.theme-dark .symbol-card-where {
+  color: #8b8f98;
+}
+
+.editor-pane.theme-dark .symbol-card-signature,
+.editor-pane.theme-dark .symbol-card-doc {
+  background: #17181d;
+}
+
+.editor-pane.theme-dark .symbol-card-doc {
+  color: #a8adb8;
+}
+
+.editor-pane.theme-dark .symbol-card-jump {
+  border-color: #3c3f47;
+  background: #24262d;
+  color: #9db4ff;
+}
+
+.editor-pane.theme-dark .symbol-card-jump:hover {
+  background: #2c3040;
+}
+
+.editor-pane.theme-dark .symbol-card-item:hover {
+  background: #262932;
+}
+
+.editor-pane.theme-dark .symbol-card-item-file {
+  color: #9db4ff;
+}
+
+.editor-pane.theme-dark .symbol-card-item-sig {
+  color: #a8adb8;
+}
+
+.editor-pane.theme-dark .symbol-card-empty,
+.editor-pane.theme-dark .symbol-card-note {
+  color: #8b8f98;
 }

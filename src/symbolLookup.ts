@@ -8,9 +8,11 @@ export function wordAndReceiverAt(
   state: EditorState,
   pos: number,
 ): { name: string; receiver: string; from: number; to: number } | null {
-  const line = state.doc.lineAt(pos);
+  // 调用方可能给出越界位置（例如文档刚被替换），先夹到合法区间再取行
+  const safePos = Math.max(0, Math.min(pos, state.doc.length));
+  const line = state.doc.lineAt(safePos);
   const text = line.text;
-  const column = pos - line.from;
+  const column = safePos - line.from;
 
   let start = column;
   let end = column;
@@ -35,11 +37,11 @@ export async function lookupSymbol(
   options: { currentPath?: string; receiver?: string },
 ): Promise<SymbolLookupResult> {
   const bridge = window.api?.symbols;
-  if (!bridge) return { ok: false, matches: [], truncated: false, scanned: 0 };
+  if (!bridge) return { ok: false, failed: true, matches: [], truncated: false, scanned: 0 };
   try {
     return await bridge.lookup(projectPath, name, options);
   } catch {
-    return { ok: false, matches: [], truncated: false, scanned: 0 };
+    return { ok: false, failed: true, matches: [], truncated: false, scanned: 0 };
   }
 }
 

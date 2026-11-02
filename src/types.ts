@@ -270,6 +270,8 @@ export type SymbolMatch = {
 
 export type SymbolLookupResult = {
   ok: boolean;
+  /** 查询链路本身失败（桥缺失 / 抛异常），区别于 ok:true + 空 matches 的「没找到」 */
+  failed?: boolean;
   matches: SymbolMatch[];
   truncated: boolean;
   scanned: number;

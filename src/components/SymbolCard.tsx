@@ -5,6 +5,8 @@ import type { SymbolMatch } from '../types';
 export type SymbolCardState = {
   name: string;
   loading: boolean;
+  /** 桥缺失或查询抛异常：功能不可用，与「确实没有定义」区分开 */
+  failed: boolean;
   truncated: boolean;
   matches: SymbolMatch[];
 };
@@ -16,7 +18,9 @@ type SymbolCardProps = {
 };
 
 export function SymbolCard({ card, onJump, onClose }: SymbolCardProps) {
-  const single = card.matches.length === 1 ? card.matches[0] : null;
+  // 加载中不渲染上一轮的候选，避免上层复用状态对象时闪旧内容
+  const matches = card.loading ? [] : card.matches;
+  const single = matches.length === 1 ? matches[0] : null;
 
   return (
     <div className="symbol-card">
@@ -29,7 +33,11 @@ export function SymbolCard({ card, onJump, onClose }: SymbolCardProps) {
 
       {card.loading ? <p className="symbol-card-empty">正在查找定义…</p> : null}
 
-      {!card.loading && card.matches.length === 0 ? (
+      {!card.loading && card.failed ? (
+        <p className="symbol-card-empty">暂时无法查询定义，请稍后重试</p>
+      ) : null}
+
+      {!card.loading && !card.failed && matches.length === 0 ? (
         <p className="symbol-card-empty">没有找到「{card.name}」的定义</p>
       ) : null}
 
@@ -49,9 +57,9 @@ export function SymbolCard({ card, onJump, onClose }: SymbolCardProps) {
         </div>
       ) : null}
 
-      {!single && card.matches.length > 1 ? (
+      {!single && matches.length > 1 ? (
         <div className="symbol-card-list">
-          {card.matches.map((match) => (
+          {matches.map((match) => (
             <button
               type="button"
               key={`${match.relPath}:${match.line}:${match.name}`}
@@ -67,7 +75,7 @@ export function SymbolCard({ card, onJump, onClose }: SymbolCardProps) {
         </div>
       ) : null}
 
-      {card.truncated ? (
+      {!card.loading && card.truncated ? (
         <p className="symbol-card-note">已扫描前 4000 个文件，结果可能不完整</p>
       ) : null}
     </div>
