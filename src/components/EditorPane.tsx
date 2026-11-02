@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Save, Search, X } from 'lucide-react';
+import { ChevronsDownUp, FilePlus, FolderPlus, Plus, RefreshCw, Save, Search, X } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import { buildTextPatch } from '../diffFromText';
 import { useEditorFiles } from '../useEditorFiles';
@@ -13,6 +13,7 @@ import {
 } from '../untitledPath';
 import { SaveAsModal } from './SaveAsModal';
 import { FileTree } from './FileTree';
+import type { FileTreeHandle } from './FileTree';
 import { EditorSidebar } from './EditorSidebar';
 import { OpenEditors } from './OpenEditors';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -134,6 +135,8 @@ export function EditorPane({
   // 文件树的刷新信号：删除成功后自增，让 FileTree 重新列目录。
   // 页签关闭由本组件负责，但树的行只有 FileTree 自己知道怎么刷新。
   const [treeRefreshToken, setTreeRefreshToken] = useState(0);
+  // 工具栏按钮挂在「文件」分区标题行上，动作仍由 FileTree 自己实现
+  const fileTreeRef = useRef<FileTreeHandle>(null);
   // 确认框弹出前就把受影响的页签和 dirty 状态定格：
   // 弹窗期间用户无法编辑，但删除目录时 files[relPath] 恒为 undefined，
   // 必须提前收集其下未保存的页签，否则会静默丢内容。
@@ -1030,6 +1033,46 @@ export function EditorPane({
 
       <div className="editor-body">
         <EditorSidebar
+          fileActions={
+            <>
+              <button
+                type="button"
+                className="icon-btn"
+                title="新建文件夹"
+                aria-label="新建文件夹"
+                onClick={() => fileTreeRef.current?.createFolder()}
+              >
+                <FolderPlus size={13} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                title="新建文件"
+                aria-label="新建文件"
+                onClick={() => fileTreeRef.current?.createFile()}
+              >
+                <FilePlus size={13} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                title="刷新"
+                aria-label="刷新"
+                onClick={() => fileTreeRef.current?.reloadAll()}
+              >
+                <RefreshCw size={13} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                title="全部折叠"
+                aria-label="全部折叠"
+                onClick={() => fileTreeRef.current?.collapseAll()}
+              >
+                <ChevronsDownUp size={13} />
+              </button>
+            </>
+          }
           openEditors={
             <OpenEditors
               openPaths={openPaths}
@@ -1051,6 +1094,7 @@ export function EditorPane({
               />
             ) : (
               <FileTree
+                ref={fileTreeRef}
                 group={group}
                 activePath={activePath}
                 onOpen={requestOpen}

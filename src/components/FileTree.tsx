@@ -1,15 +1,13 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import type { FormEvent, ReactElement, ReactNode } from 'react';
+import { useCallback, useEffect, useId, useImperativeHandle, useRef, useState } from 'react';
+import type { FormEvent, ReactElement, ReactNode, Ref } from 'react';
 import {
   ChevronRight,
-  ChevronsDownUp,
   File,
   FilePlus,
   Folder,
   FolderOpen,
   FolderPlus,
   Pencil,
-  RefreshCw,
 } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import { canPaste, pasteTargetDir } from '../fileClipboard';
@@ -20,6 +18,15 @@ import { PopupMenu } from './PopupMenu';
 import type { ToastKind } from './Toast';
 import { minifiedName } from '../modules/minify';
 import { isUntitledPath } from '../untitledPath';
+
+// 工具栏按钮挂在「文件」分区标题行里（见 EditorSidebar），
+// 由上层通过 ref 调用这几个动作，避免把整棵树的内部状态提升出去。
+export type FileTreeHandle = {
+  createFile: () => void;
+  createFolder: () => void;
+  reloadAll: () => void;
+  collapseAll: () => void;
+};
 
 type FileTreeProps = {
   group: Group;
@@ -36,6 +43,7 @@ type FileTreeProps = {
   onAfterRename: (fromRel: string, toRel: string) => void;
   // 外部（编辑器删除等）改盘后通知文件树重列；数值变化即触发一次 reloadAll。
   refreshToken: number;
+  ref?: Ref<FileTreeHandle>;
 };
 
 type DirState = Record<string, FileEntry[] | undefined>;
@@ -79,6 +87,7 @@ export function FileTree({
   onRequestDelete,
   onAfterRename,
   refreshToken,
+  ref,
 }: FileTreeProps) {
   const [children, setChildren] = useState<DirState>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']));
@@ -204,6 +213,17 @@ export function FileTree({
   const createFolder = useCallback((relDir: string) => {
     setPendingCreate({ kind: 'directory', relDir });
   }, []);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      createFile: () => createFile(createTargetDir()),
+      createFolder: () => createFolder(createTargetDir()),
+      reloadAll: () => void reloadAll(),
+      collapseAll,
+    }),
+    [collapseAll, createFile, createFolder, createTargetDir, reloadAll],
+  );
 
   // 重命名也走输入弹窗：Electron 渲染进程不支持 window.prompt（实测会抛错）。
   // 用独立状态而不是复用 pendingCreate，因为两者语义与校验规则不同：
@@ -497,44 +517,6 @@ export function FileTree({
 
   return (
     <div className="file-tree-wrap">
-      <div className="file-tree-toolbar">
-        <button
-          type="button"
-          className="icon-btn"
-          title="新建文件夹"
-          aria-label="新建文件夹"
-          onClick={() => createFolder(createTargetDir())}
-        >
-          <FolderPlus size={13} />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title="新建文件"
-          aria-label="新建文件"
-          onClick={() => createFile(createTargetDir())}
-        >
-          <FilePlus size={13} />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title="刷新"
-          aria-label="刷新"
-          onClick={() => void reloadAll()}
-        >
-          <RefreshCw size={13} />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title="全部折叠"
-          aria-label="全部折叠"
-          onClick={collapseAll}
-        >
-          <ChevronsDownUp size={13} />
-        </button>
-      </div>
       <div className="file-tree" onContextMenu={openBlankMenu}>
         {renderDir('', 0)}
         {menu ? <PopupMenu state={menu} onClose={() => setMenu(null)} /> : null}

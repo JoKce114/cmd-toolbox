@@ -45,29 +45,49 @@ type SidebarSectionProps = {
   id: string;
   title: string;
   grow?: boolean;
+  // 放在标题行右侧的操作按钮（文件区的新建/刷新/折叠）
+  actions?: ReactNode;
   children: ReactNode;
 };
 
 // 与侧栏其它折叠区同一套样式：section-header 是 <button>，
 // 带 aria-expanded 和 .section-caret.is-open 箭头
-function SidebarSection({ id, title, grow, children }: SidebarSectionProps): ReactElement {
+function SidebarSection({
+  id,
+  title,
+  grow,
+  actions,
+  children,
+}: SidebarSectionProps): ReactElement {
   const [collapsed, toggle] = useCollapsedSection(id);
+
+  const header = (
+    <button
+      type="button"
+      className="section-header"
+      aria-expanded={!collapsed}
+      title={collapsed ? `展开${title}` : `收起${title}`}
+      onClick={toggle}
+    >
+      <ChevronRight
+        size={12}
+        className={cn('section-caret', !collapsed && 'is-open')}
+      />
+      <span className="section-title">{title}</span>
+    </button>
+  );
 
   return (
     <div className={`editor-sidebar-section${grow ? ' is-grow' : ''}`}>
-      <button
-        type="button"
-        className="section-header"
-        aria-expanded={!collapsed}
-        title={collapsed ? `展开${title}` : `收起${title}`}
-        onClick={toggle}
-      >
-        <ChevronRight
-          size={12}
-          className={cn('section-caret', !collapsed && 'is-open')}
-        />
-        <span className="section-title">{title}</span>
-      </button>
+      {actions ? (
+        // button 不能嵌套 button：有操作按钮时标题与它们并排成一行
+        <div className="section-header-row">
+          {header}
+          <div className="section-actions">{actions}</div>
+        </div>
+      ) : (
+        header
+      )}
       {collapsed ? null : children}
     </div>
   );
@@ -76,9 +96,10 @@ function SidebarSection({ id, title, grow, children }: SidebarSectionProps): Rea
 type EditorSidebarProps = {
   openEditors: ReactNode;
   fileTree: ReactNode;
+  fileActions?: ReactNode;
 };
 
-export function EditorSidebar({ openEditors, fileTree }: EditorSidebarProps) {
+export function EditorSidebar({ openEditors, fileTree, fileActions }: EditorSidebarProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(readStoredWidth);
   const widthRef = useRef(width);
@@ -182,7 +203,7 @@ export function EditorSidebar({ openEditors, fileTree }: EditorSidebarProps) {
         <SidebarSection id="editor-open-editors" title="打开的编辑器">
           {openEditors}
         </SidebarSection>
-        <SidebarSection id="editor-file-tree" title="文件" grow>
+        <SidebarSection id="editor-file-tree" title="文件" grow actions={fileActions}>
           {fileTree}
         </SidebarSection>
       </div>
