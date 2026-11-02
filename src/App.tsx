@@ -274,20 +274,6 @@ export default function App() {
   // 只在 EditorPane 挂载时读一次，之后编辑内容变化不会再触发。
   const untitledDroppedRef = useRef<Record<string, string[]>>({});
 
-  const setGroupUntitledContents = useCallback(
-    (groupKey: string, contents: Record<string, string>) => {
-      const next: Record<string, string> = {};
-      for (const [key, value] of Object.entries(untitledContentsRef.current)) {
-        if (!key.startsWith(`${groupKey}|`)) next[key] = value;
-      }
-      for (const [relPath, content] of Object.entries(contents)) {
-        next[`${groupKey}|${relPath}`] = content;
-      }
-      untitledContentsRef.current = next;
-    },
-    [],
-  );
-
   const buildSessionSnapshot = useCallback(
     () => ({
       activeGroupKey: activeGroupKeyRef.current,
@@ -303,6 +289,46 @@ export default function App() {
     }),
     [],
   );
+
+  // 空白窗口内容只进 ref，打字本身不触发 App state，200ms 的常规防抖落盘
+  // 永远不会跑。这里单独给内容变化挂一个 2 秒低频落盘，兜住强杀/崩溃时
+  // 「上次 App 状态变化以来」丢失的编辑；不引入 state，避免每次按键重渲染 App。
+  const untitledSaveTimerRef = useRef<number | null>(null);
+  const scheduleUntitledSave = useCallback(() => {
+    if (!sessionReadyRef.current) return;
+    if (untitledSaveTimerRef.current !== null) {
+      window.clearTimeout(untitledSaveTimerRef.current);
+    }
+    untitledSaveTimerRef.current = window.setTimeout(() => {
+      untitledSaveTimerRef.current = null;
+      if (!sessionReadyRef.current) return;
+      void window.api.session.save(buildSessionSnapshot()).catch(() => {});
+    }, 2000);
+  }, [buildSessionSnapshot]);
+
+  const setGroupUntitledContents = useCallback(
+    (groupKey: string, contents: Record<string, string>) => {
+      const next: Record<string, string> = {};
+      for (const [key, value] of Object.entries(untitledContentsRef.current)) {
+        if (!key.startsWith(`${groupKey}|`)) next[key] = value;
+      }
+      for (const [relPath, content] of Object.entries(contents)) {
+        next[`${groupKey}|${relPath}`] = content;
+      }
+      untitledContentsRef.current = next;
+      scheduleUntitledSave();
+    },
+    [scheduleUntitledSave],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (untitledSaveTimerRef.current !== null) {
+        window.clearTimeout(untitledSaveTimerRef.current);
+        untitledSaveTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // 分屏比例变化后延迟落盘：只靠关闭窗口时保存，异常退出会丢掉刚拖过的宽度
   useEffect(() => {
