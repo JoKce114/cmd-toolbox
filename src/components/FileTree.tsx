@@ -19,6 +19,7 @@ import { Modal } from './Modal';
 import { PopupMenu } from './PopupMenu';
 import type { ToastKind } from './Toast';
 import { minifiedName } from '../modules/minify';
+import { isUntitledPath } from '../untitledPath';
 
 type FileTreeProps = {
   group: Group;
@@ -171,7 +172,8 @@ export function FileTree({
   // 新建按钮的落点：activePath 是当前打开的文件，新建条目与它同级；
   // 没有打开文件时落在项目根目录。
   const createTargetDir = useCallback(() => {
-    if (!activePath) return '';
+    // 空白窗口的虚拟路径没有所在目录，落点退回项目根。
+    if (!activePath || isUntitledPath(activePath)) return '';
     return ancestorsOf(activePath).pop() || '';
   }, [activePath]);
 
@@ -232,6 +234,11 @@ export function FileTree({
   // 打开深层文件时，把沿途目录逐层展开，让它在树里可见。
   useEffect(() => {
     if (!activePath) return;
+    // 空白窗口没有真实路径，展开目录的逻辑对它没有意义。
+    if (isUntitledPath(activePath)) {
+      pendingRevealRef.current = '';
+      return;
+    }
     const dirs = ancestorsOf(activePath);
     if (dirs.length <= 1) return;
 
