@@ -3,6 +3,7 @@ import { Save, Search, X } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import { buildTextPatch } from '../diffFromText';
 import { useEditorFiles } from '../useEditorFiles';
+import type { EditorFileState } from '../useEditorFiles';
 import { FileTree } from './FileTree';
 import { EditorSidebar } from './EditorSidebar';
 import { OpenEditors } from './OpenEditors';
@@ -101,6 +102,9 @@ export function EditorPane({
   } = useEditorFiles(group, onError);
 
   const [fileClip, setFileClip] = useState<FileClip | null>(null);
+  // 文件树的刷新信号：删除成功后自增，让 FileTree 重新列目录。
+  // 页签关闭由本组件负责，但树的行只有 FileTree 自己知道怎么刷新。
+  const [treeRefreshToken, setTreeRefreshToken] = useState(0);
   // 确认框弹出前就把受影响的页签和 dirty 状态定格：
   // 弹窗期间用户无法编辑，但删除目录时 files[relPath] 恒为 undefined，
   // 必须提前收集其下未保存的页签，否则会静默丢内容。
@@ -139,11 +143,24 @@ export function EditorPane({
     setDiffTarget(null);
   }, []);
 
+  // 只读 / 二进制 / 超大文件的内容是空串，拿它做对比只会得到「全部删除」
+  // 或「两处内容一致」这类假结果，比报错更误导。菜单置灰之外，这里再兜底一次：
+  // 菜单不是唯一入口，将来也可能有别的调用路径。
+  const rejectReadOnlyCompare = useCallback(
+    (entries: Array<EditorFileState | undefined>): boolean => {
+      if (!entries.some((entry) => entry?.readOnly)) return false;
+      onToast('该文件为只读或二进制，无法对比', 'error');
+      return true;
+    },
+    [onToast],
+  );
+
   // 与磁盘版本比较：左旧（磁盘）右新（内存）。参数顺序不能反。
   const compareWithDisk = useCallback(
     async (relPath: string) => {
       const entry = files[relPath];
       if (!entry) return;
+      if (rejectReadOnlyCompare([entry])) return;
       try {
         const disk = await window.api.files.read(group.path, relPath);
         setActivePath(relPath);
@@ -158,7 +175,7 @@ export function EditorPane({
         onToast(toErrorMessage(error), 'error');
       }
     },
-    [files, group.path, onToast, setActivePath],
+    [files, group.path, onToast, rejectReadOnlyCompare, setActivePath],
   );
 
   // 两个已打开文件互比
@@ -167,6 +184,7 @@ export function EditorPane({
       const left = files[leftRel];
       const right = files[rightRel];
       if (!left || !right) return;
+      if (rejectReadOnlyCompare([left, right])) return;
       // 编辑器始终显示其中一侧，否则切换文件后的自动关闭会立刻触发
       if (activePath !== leftRel && activePath !== rightRel) setActivePath(leftRel);
       setDiffSource({ kind: 'pair', left: leftRel, right: rightRel });
@@ -177,7 +195,7 @@ export function EditorPane({
       });
       setDiffCompareWith(null);
     },
-    [files, activePath, setActivePath],
+    [files, activePath, rejectReadOnlyCompare, setActivePath],
   );
 
   // 与 Git HEAD 比较：git 后端给出基准文本，patch 由渲染侧生成以便随编辑实时重算
@@ -185,6 +203,7 @@ export function EditorPane({
     async (relPath: string) => {
       const entry = files[relPath];
       if (!entry) return;
+      if (rejectReadOnlyCompare([entry])) return;
       try {
         const result = await window.api.git.fileDiff(group.path, relPath, 'modified', 'HEAD');
         const baseText = result.baseContent ?? '';
@@ -200,7 +219,7 @@ export function EditorPane({
         onToast(toErrorMessage(error), 'error');
       }
     },
-    [files, group.path, onToast, setActivePath],
+    [files, group.path, onToast, rejectReadOnlyCompare, setActivePath],
   );
 
   const openOpenEditorMenu = useCallback(
@@ -562,6 +581,7 @@ export function EditorPane({
       await window.api.files.trash(group.path, relPath);
       // 必须等真正删掉之后再关页签：trash 失败时用户既没删成文件、又丢了页签。
       if (doomed.length > 0) closeMany(doomed);
+      setTreeRefreshToken((token) => token + 1);
       onToast(`已删除 ${relPath}`, 'success');
     } catch (error) {
       onToast(toErrorMessage(error), 'error');
@@ -599,6 +619,11 @@ export function EditorPane({
         (change) => change.path === editorMenu.relPath && change.worktreeStatus === 'untracked',
       ),
   );
+
+  // 只读 / 二进制 / 超大文件读出来是空串，三个对比入口全部置灰：
+  // 对比只会给出假结果（设计稿要求「二进制文件对比入口置灰」）。
+  const menuReadOnly = Boolean(menuFile?.readOnly);
+  const pickedReadOnly = Boolean(diffCompareWith && files[diffCompareWith]?.readOnly);
 
   // 诊断模块按当前文件扩展名与开关状态挑一个。
   // findModule 返回清单里的同一对象，引用稳定，可以安全作为 effect 依赖；
@@ -763,6 +788,7 @@ export function EditorPane({
                 onClipChange={setFileClip}
                 onRequestDelete={requestDelete}
                 onAfterRename={handleAfterRename}
+                refreshToken={treeRefreshToken}
               />
             )
           }
@@ -890,7 +916,7 @@ export function EditorPane({
                 type: 'item',
                 id: 'diff-disk',
                 label: '与已保存文件比较',
-                disabled: !menuFile?.dirty,
+                disabled: menuReadOnly || !menuFile?.dirty,
                 onSelect: () => {
                   void compareWithDisk(editorMenu.relPath);
                   setEditorMenu(null);
@@ -900,7 +926,8 @@ export function EditorPane({
                 type: 'item',
                 id: 'diff-pick',
                 label: diffCompareWith ? `与 ${diffCompareWith} 比较` : '选择以进行比较',
-                disabled: diffCompareWith === editorMenu.relPath,
+                disabled:
+                  menuReadOnly || pickedReadOnly || diffCompareWith === editorMenu.relPath,
                 onSelect: () => {
                   if (!diffCompareWith) {
                     setDiffCompareWith(editorMenu.relPath);
@@ -914,7 +941,7 @@ export function EditorPane({
                 type: 'item',
                 id: 'diff-head',
                 label: '与 Git HEAD 比较',
-                disabled: menuUntracked,
+                disabled: menuReadOnly || menuUntracked,
                 onSelect: () => {
                   void compareWithHead(editorMenu.relPath);
                   setEditorMenu(null);

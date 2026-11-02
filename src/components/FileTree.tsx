@@ -33,6 +33,8 @@ type FileTreeProps = {
   onRequestDelete: (relPath: string) => void;
   // 文件操作只负责改磁盘；页签路径属于编辑器状态，由上层同步。
   onAfterRename: (fromRel: string, toRel: string) => void;
+  // 外部（编辑器删除等）改盘后通知文件树重列；数值变化即触发一次 reloadAll。
+  refreshToken: number;
 };
 
 type DirState = Record<string, FileEntry[] | undefined>;
@@ -75,6 +77,7 @@ export function FileTree({
   onClipChange,
   onRequestDelete,
   onAfterRename,
+  refreshToken,
 }: FileTreeProps) {
   const [children, setChildren] = useState<DirState>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']));
@@ -86,14 +89,16 @@ export function FileTree({
   const reloadingRef = useRef(false);
 
   const loadDir = useCallback(
-    async (relDir: string) => {
+    // silent：刷新时不弹错误。目录在刷新过程中被删掉（例如刚删除的目录仍在
+    // expanded 里）属于正常情况，树里让它消失即可，不该打断用户。
+    async (relDir: string, silent = false): Promise<FileEntry[] | null> => {
       try {
         const result = await window.api.files.list(group.path, relDir);
         setChildren((previous) => ({ ...previous, [relDir]: result.entries }));
         return result.entries;
       } catch (error) {
-        onError(toErrorMessage(error));
-        return [];
+        if (!silent) onError(toErrorMessage(error));
+        return null;
       }
     },
     [group.path, onError],
@@ -101,6 +106,7 @@ export function FileTree({
 
   // 刷新：先清掉符号索引（外部改动后立即重扫），再重新列所有已展开的目录。
   // 不清空 children，避免整树闪白；并发限制在 4 个；重复点击直接忽略。
+  // 列不出来的目录（已被删除）连同缓存一起清掉，避免残留 key 和反复报错。
   const reloadAll = useCallback(async () => {
     if (reloadingRef.current) return;
     reloadingRef.current = true;
@@ -111,21 +117,52 @@ export function FileTree({
         // 索引清理失败不影响刷新：过期索引在下次查询时也会自动重建。
       }
       const dirs = Array.from(expanded);
+      const missing: string[] = [];
       let next = 0;
       const worker = async () => {
         while (next < dirs.length) {
           const dir = dirs[next];
           next += 1;
-          await loadDir(dir);
+          const entries = await loadDir(dir, true);
+          if (entries === null && dir) missing.push(dir);
         }
       };
       await Promise.all(
         Array.from({ length: Math.min(4, dirs.length) }, () => worker()),
       );
+      if (missing.length > 0) {
+        // 连同已删除目录的子目录缓存一起清掉。renderDir 只从根往下遍历，
+        // 残留的 key 虽然看不见，但 dirs 仍可能在 expanded 里，下次刷新会再报错。
+        const gone = (dir: string) =>
+          missing.some((item) => dir === item || dir.startsWith(`${item}/`));
+        setChildren((previous) => {
+          const nextState = { ...previous };
+          Object.keys(nextState)
+            .filter(gone)
+            .forEach((dir) => delete nextState[dir]);
+          return nextState;
+        });
+        setExpanded((previous) => {
+          const nextSet = new Set(previous);
+          Array.from(nextSet)
+            .filter(gone)
+            .forEach((dir) => nextSet.delete(dir));
+          return nextSet;
+        });
+      }
     } finally {
       reloadingRef.current = false;
     }
   }, [expanded, group.path, loadDir]);
+
+  // 外部删除（编辑器右键删除）后由上层自增 refreshToken，这里重列整棵树。
+  // 用 ref 记住上次处理的值，挂载和 refreshToken 未变化的重渲染都不会重复刷新。
+  const appliedRefreshRef = useRef(refreshToken);
+  useEffect(() => {
+    if (appliedRefreshRef.current === refreshToken) return;
+    appliedRefreshRef.current = refreshToken;
+    void reloadAll();
+  }, [refreshToken, reloadAll]);
 
   const collapseAll = useCallback(() => {
     setExpanded(new Set(['']));

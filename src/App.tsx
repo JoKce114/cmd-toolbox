@@ -589,6 +589,18 @@ export default function App() {
           }
 
           if (saved.shellId === 'editor') {
+            // 同一项目只保留一个编辑器页签。旧会话（或修复前存下的会话）里
+            // 可能已经有两个，各自持有一份 useEditorFiles 状态，删除 / 重命名
+            // 无法互通。丢弃第二个；第一个没有文件路径时借它的路径补上。
+            const firstEditor = existing.find((item) => item.shellId === 'editor');
+            if (firstEditor) {
+              if (!firstEditor.filePath && saved.filePath) {
+                restoredTabs[saved.groupKey] = existing.map((item) =>
+                  item.id === firstEditor.id ? { ...item, filePath: saved.filePath } : item,
+                );
+              }
+              continue;
+            }
             restoredTabs[saved.groupKey] = [
               ...existing,
               {
@@ -1669,6 +1681,29 @@ export default function App() {
         return;
       }
       const groupTabs = tabsRef.current[group.key] || [];
+      // 同一项目只允许一个编辑器页签：再点「打开编辑器」切到已有的那个。
+      // 两个编辑器页签各自持有一份 useEditorFiles 状态，删除 / 重命名时
+      // 只同步自己这一份，会在另一个页签留下死路径和看不见的未保存内容。
+      // 需要并排看两个文件时应该用「对比」，而不是开两个编辑器。
+      const existingEditor = groupTabs.find((item) => isEditorTab(item));
+      if (existingEditor) {
+        if (filePath && existingEditor.filePath !== filePath) {
+          applyTabs({
+            ...tabsRef.current,
+            [group.key]: groupTabs.map((item) =>
+              item.id === existingEditor.id ? { ...item, filePath } : item,
+            ),
+          });
+        }
+        setActiveGroupKey(group.key);
+        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: existingEditor.id }));
+        // 页签在右栏时激活的必须是右栏自己的页签
+        if ((rightIdsByGroupRef.current[group.key] || []).includes(existingEditor.id)) {
+          setRightActiveByGroup((previous) => ({ ...previous, [group.key]: existingEditor.id }));
+          setFocusSideByGroup((previous) => ({ ...previous, [group.key]: 'right' }));
+        }
+        return;
+      }
       const tabGroupId = inheritedTabGroupId(group.key);
       const tab: Tab = {
         id: crypto.randomUUID(),
