@@ -7,10 +7,19 @@ import {
   highlightWhitespace,
   Decoration,
   WidgetType,
+  showTooltip,
+  ViewPlugin,
 } from '@codemirror/view';
-import type { DecorationSet } from '@codemirror/view';
-import { EditorState, Compartment, StateField, RangeSetBuilder, Transaction } from '@codemirror/state';
-import type { EditorState as EditorStateType } from '@codemirror/state';
+import type { DecorationSet, Tooltip } from '@codemirror/view';
+import {
+  EditorState,
+  Compartment,
+  StateField,
+  StateEffect,
+  RangeSetBuilder,
+  Transaction,
+} from '@codemirror/state';
+import type { EditorState as EditorStateType, Extension } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { bracketMatching as bracketMatchingExtension, indentUnit } from '@codemirror/language';
 import { bindingsExtension } from '../editorKeymap';
@@ -27,6 +36,10 @@ import { parseConflicts, resolveConflict } from '../conflictParser';
 import type { ConflictBlock, ConflictChoice } from '../conflictParser';
 import { ConflictBar } from './ConflictBar';
 import type { EditorModule } from '../modules/catalog';
+import { SymbolCard } from './SymbolCard';
+import type { SymbolCardState } from './SymbolCard';
+import { lookupSymbol, wordAndReceiverAt } from '../symbolLookup';
+import type { SymbolMatch } from '../types';
 
 export type CodeMirrorHostProps = {
   value: string;
@@ -47,10 +60,137 @@ export type CodeMirrorHostProps = {
   // 当前文件命中的诊断模块；null 表示不挂 linter。
   // 由上层按文件扩展名与 enabledModules 算好，避免把数组依赖带进 effect。
   diagnosticModule: EditorModule | null;
+  // Task 8 之前上层仍可不传；未接入时符号跳转保持关闭
+  referenceEnabled?: boolean;
+  projectPath?: string;
+  onJumpToSymbol?: (match: SymbolMatch) => void;
+  gotoLine?: number | null;
   onFontSizeDelta?: (delta: number) => void;
   onChange: (value: string) => void;
   onConflictCountChange?: (count: number) => void;
 };
+
+const setCard = StateEffect.define<{ pos: number; card: SymbolCardState } | null>();
+
+const cardField = StateField.define<{ pos: number; card: SymbolCardState } | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setCard)) return effect.value;
+    }
+    // 内容改动或用户显式关闭时收起卡片
+    if (tr.docChanged) return null;
+    return value;
+  },
+});
+
+// 卡片用 React 渲染，卸载交给 tooltip 的 destroy
+function createCardDom(
+  card: SymbolCardState,
+  onJump: (match: SymbolMatch) => void,
+  onClose: () => void,
+): { dom: HTMLElement; destroy: () => void } {
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  root.render(<SymbolCard card={card} onJump={onJump} onClose={onClose} />);
+  return { dom: host, destroy: () => root.unmount() };
+}
+
+function referenceExtension(options: {
+  isEnabled: () => boolean;
+  lookup: (name: string, receiver: string) => Promise<SymbolCardState>;
+  onJump: (match: SymbolMatch) => void;
+}): Extension {
+  const handlers = EditorView.domEventHandlers({
+    mousedown(event, view) {
+      if (!event.ctrlKey && !event.metaKey) {
+        // 点卡片本身不算「点别处」，否则按钮会在 click 触发前被卸载
+        const onCard =
+          event.target instanceof Element && event.target.closest('.cm-tooltip');
+        if (!onCard && view.state.field(cardField, false)) {
+          view.dispatch({ effects: setCard.of(null) });
+        }
+        return false;
+      }
+      if (!options.isEnabled()) return false;
+      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (pos === null) return false;
+      const word = wordAndReceiverAt(view.state, pos);
+      if (!word) return false;
+
+      event.preventDefault();
+      view.dispatch({
+        effects: setCard.of({
+          pos: word.from,
+          card: { name: word.name, loading: true, truncated: false, matches: [], failed: false },
+        }),
+      });
+
+      void options.lookup(word.name, word.receiver).then((card) => {
+        if (view.state.field(cardField, false) === undefined) return;
+        const current = view.state.field(cardField);
+        // 期间用户可能已经点了别处或换了词
+        if (!current || current.card.name !== card.name) return;
+        view.dispatch({ effects: setCard.of({ pos: current.pos, card }) });
+      });
+      return true;
+    },
+    mouseover(event, view) {
+      if (!event.ctrlKey && !event.metaKey) return false;
+      if (!options.isEnabled()) return false;
+      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (pos === null) return false;
+      const word = wordAndReceiverAt(view.state, pos);
+      view.dom.classList.toggle('cm-symbol-clickable', Boolean(word));
+      return false;
+    },
+    mouseleave(_event, view) {
+      view.dom.classList.remove('cm-symbol-clickable');
+      return false;
+    },
+  });
+
+  const tooltipFromField = showTooltip.from(cardField, (value) =>
+    value
+      ? ({
+          pos: value.pos,
+          above: true,
+          // create 收到的 view 用来关闭卡片：tooltip 的 DOM 挂在编辑器容器里，
+          // 从 DOM 反查拿不到 EditorView，必须用它
+          create: (view) => {
+            const { dom, destroy } = createCardDom(value.card, options.onJump, () =>
+              view.dispatch({ effects: setCard.of(null) }),
+            );
+            return { dom, destroy };
+          },
+        } satisfies Tooltip)
+      : null,
+  );
+
+  // 编辑器之外的点击（文件树、页签栏等）不会经过 domEventHandlers，
+  // 这里在 document 捕获阶段兜住；编辑器内部的点击交给上面的 mousedown。
+  const outsideClick = ViewPlugin.fromClass(
+    class {
+      private readonly view: EditorView;
+      private readonly onMouseDown = (event: MouseEvent) => {
+        if (!this.view.state.field(cardField, false)) return;
+        if (event.target instanceof Node && this.view.dom.contains(event.target)) return;
+        this.view.dispatch({ effects: setCard.of(null) });
+      };
+
+      constructor(view: EditorView) {
+        this.view = view;
+        view.dom.ownerDocument.addEventListener('mousedown', this.onMouseDown, true);
+      }
+
+      destroy() {
+        this.view.dom.ownerDocument.removeEventListener('mousedown', this.onMouseDown, true);
+      }
+    },
+  );
+
+  return [cardField, tooltipFromField, handlers, outsideClick];
+}
 
 class ConflictWidget extends WidgetType {
   constructor(readonly block: ConflictBlock) {
@@ -173,6 +313,10 @@ export function CodeMirrorHost({
   bracketMatching,
   showWhitespace,
   diagnosticModule,
+  referenceEnabled = false,
+  projectPath = '',
+  onJumpToSymbol = () => {},
+  gotoLine = null,
   onFontSizeDelta,
   onChange,
   onConflictCountChange,
@@ -187,12 +331,40 @@ export function CodeMirrorHost({
   const appearanceRef = useRef(new Compartment());
   const displayRef = useRef(new Compartment());
   const diagnosticsRef = useRef(new Compartment());
+  const referenceRef = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   const onCountRef = useRef(onConflictCountChange);
   const onFontDeltaRef = useRef(onFontSizeDelta);
+  const referenceEnabledRef = useRef(referenceEnabled);
+  const projectPathRef = useRef(projectPath);
+  const activeFileRef = useRef(filePath);
+  const jumpRef = useRef(onJumpToSymbol);
   onChangeRef.current = onChange;
   onCountRef.current = onConflictCountChange;
   onFontDeltaRef.current = onFontSizeDelta;
+  referenceEnabledRef.current = referenceEnabled;
+  projectPathRef.current = projectPath;
+  activeFileRef.current = filePath;
+  jumpRef.current = onJumpToSymbol;
+
+  const referenceExtensionOption = () =>
+    referenceExtension({
+      isEnabled: () => referenceEnabledRef.current,
+      lookup: async (name, receiver) => {
+        const result = await lookupSymbol(projectPathRef.current, name, {
+          currentPath: activeFileRef.current,
+          receiver,
+        });
+        return {
+          name,
+          loading: false,
+          truncated: result.truncated,
+          matches: result.matches,
+          failed: !result.ok,
+        };
+      },
+      onJump: (match) => jumpRef.current(match),
+    });
 
   // 只在 filePath / readOnly 变化时重建，避免每次按键都销毁编辑器
   useEffect(() => {
@@ -232,6 +404,7 @@ export function CodeMirrorHost({
           conflictField,
           languageRef.current.of([]),
           diagnosticsRef.current.of([]),
+          referenceRef.current.of(referenceExtensionOption()),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               onChangeRef.current(update.state.doc.toString());
@@ -365,6 +538,30 @@ export function CodeMirrorHost({
     // readOnly 变化会重建整个 EditorView（见上方重建 effect），新视图里的
     // diagnosticsRef 是空的，这里必须跟着重跑，否则诊断会静默消失到下次切文件。
   }, [filePath, readOnly, diagnosticModule]);
+
+  // 符号跳转的总开关变化时，只重配这一块扩展
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: referenceRef.current.reconfigure(referenceExtensionOption()),
+    });
+    // referenceExtensionOption 只读 ref，依赖里不需要带上它
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [referenceEnabled]);
+
+  // 跳转定位：跨文件时 filePath 变化会触发编辑器重建，这里跟着重跑
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !gotoLine) return;
+    const clamped = Math.min(Math.max(gotoLine, 1), view.state.doc.lines);
+    const line = view.state.doc.line(clamped);
+    view.dispatch({
+      selection: { anchor: line.from },
+      effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+    });
+    view.focus();
+  }, [gotoLine, filePath]);
 
   // Ctrl + 滚轮调整字号，与终端行为一致（TerminalPane 用的是同一套判定）。
   // passive 必须为 false，否则 preventDefault 无效，Chromium 会连带缩放整页。

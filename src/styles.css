@@ -4825,3 +4825,8 @@ p {
 .editor-pane.theme-dark .symbol-card-note {
   color: #8b8f98;
 }
+
+/* Ctrl+悬停可跳转的符号时显示手型 */
+.cm-editor.cm-symbol-clickable .cm-content {
+  cursor: pointer;
+}
