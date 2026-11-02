@@ -151,6 +151,63 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
     [onError],
   );
 
+  // 空白窗口另存为：先写盘、成功后再原子换键。
+  // 反过来（先换键再写盘）一旦写盘失败，就会留下指向不存在文件的页签。
+  // 换键时保留 content / dirty 之外的编辑状态，撤销栈在 CodeMirror 实例里，不受影响。
+  const saveUntitledAs = useCallback(
+    async (
+      virtualPath: string,
+      targetRelPath: string,
+    ): Promise<{ ok: boolean; message?: string }> => {
+      const state = filesRef.current[virtualPath];
+      if (!state) return { ok: false, message: '空白窗口已关闭' };
+      if (!isUntitledPath(virtualPath)) {
+        return { ok: false, message: '该页签不是空白窗口' };
+      }
+      if (isUntitledPath(targetRelPath)) {
+        return { ok: false, message: '目标路径无效' };
+      }
+      if (filesRef.current[targetRelPath]) {
+        return { ok: false, message: '该文件已在编辑器中打开' };
+      }
+
+      try {
+        await window.api.files.createFile(
+          groupRef.current.path,
+          targetRelPath,
+          state.content,
+        );
+      } catch (error) {
+        return { ok: false, message: toErrorMessage(error) };
+      }
+
+      const next: EditorFileState = {
+        ...state,
+        relPath: targetRelPath,
+        savedContent: state.content,
+        dirty: false,
+        saving: false,
+        loading: false,
+        mtime: 0,
+        readOnly: false,
+        failedPath: '',
+      };
+
+      setFiles((previous) => {
+        const merged = { ...previous };
+        delete merged[virtualPath];
+        merged[targetRelPath] = next;
+        return merged;
+      });
+      touchedRef.current.delete(virtualPath);
+      touchedRef.current.add(targetRelPath);
+      savedByAppRef.current.add(targetRelPath);
+      setActivePath(targetRelPath);
+      return { ok: true };
+    },
+    [],
+  );
+
   const update = useCallback(
     (relPath: string, content: string) => {
       setFiles((previous) => {
@@ -456,6 +513,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
     active: active ?? EMPTY,
     hasDirty,
     open,
+    saveUntitledAs,
     update,
     save,
     close,
