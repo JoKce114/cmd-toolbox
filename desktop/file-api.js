@@ -239,14 +239,39 @@ async function createDir(projectPath, relPath) {
 async function move(projectPath, fromRel, toRel) {
   const from = resolveWithin(projectPath, fromRel);
   const to = resolveWithin(projectPath, toRel);
-  try {
-    await fsp.lstat(to);
-    throw new Error('目标位置已有同名项');
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+  // Windows 文件系统大小写不敏感：a.txt -> A.txt 时 lstat(to) 命中的就是源文件本身。
+  // 不能据此判定「目标已存在」，否则仅改大小写的重命名会永远失败。
+  const caseOnly =
+    from !== to && path.resolve(from).toLowerCase() === path.resolve(to).toLowerCase();
+  if (!caseOnly) {
+    try {
+      await fsp.lstat(to);
+      throw new Error('目标位置已有同名项');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
   }
   await fsp.mkdir(path.dirname(to), { recursive: true });
-  await fsp.rename(from, to);
+  // TOCTOU：lstat 与 rename 之间仍有竞态窗口，Windows 的 rename 会替换已存在的文件。
+  // 这是有意保留的权衡——本应用是单用户、目录树操作，该窗口不可达；改用
+  // COPYFILE_EXCL + 删源会丢失目录属性，也牺牲大文件性能。不要改成 COPYFILE_EXCL。
+  if (caseOnly) {
+    // Windows 的 rename 不支持一步完成同一定位的大小写变化，先改到临时名再改到目标名。
+    const temp = path.join(
+      path.dirname(from),
+      `${path.basename(from)}.${process.pid}.${Date.now()}.${(Math.random() * 1e6) | 0}.rename.tmp`,
+    );
+    try {
+      await renameWithRetry(from, temp);
+      await renameWithRetry(temp, to);
+    } catch (error) {
+      // 第二步失败时尽量把文件改回原名，别让用户文件停在临时名下
+      await renameWithRetry(temp, from).catch(() => {});
+      throw error;
+    }
+  } else {
+    await renameWithRetry(from, to);
+  }
   return { ok: true };
 }
 

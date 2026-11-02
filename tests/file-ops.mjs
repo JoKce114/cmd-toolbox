@@ -1,7 +1,15 @@
 // 文件操作层：新建、新建目录、移动、删除。
 // 全部使用临时目录，不碰真实项目与真实回收站。
 import { createRequire } from 'node:module';
-import { mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -69,6 +77,7 @@ try {
   for (const [label, fn] of [
     ['createFile ../evil', () => fileApi.createFile(dir, '../evil.txt', 'x')],
     ['createDir ../evil', () => fileApi.createDir(dir, '../evildir')],
+    ['move 源路径越界', () => fileApi.move(dir, '../evil.txt', 'ok.txt')],
     ['move 目标越界', () => fileApi.move(dir, 'dst.txt', '../evil.txt')],
     ['trash 越界', () => fileApi.trash(dir, '../evil.txt', async () => {})],
   ]) {
@@ -96,6 +105,26 @@ try {
   await fileApi.move(dir, 'd1', 'd2');
   assert(existsSync(join(dir, 'd2/f.txt')), '目录移动后内容仍在');
   assert(!existsSync(join(dir, 'd1')), '原目录消失');
+
+  console.log('8. move 仅改大小写');
+  writeFileSync(join(dir, 'case.txt'), 'CASE_DATA', 'utf8');
+  await fileApi.move(dir, 'case.txt', 'CASE.txt');
+  assert(readFileSync(join(dir, 'CASE.txt'), 'utf8') === 'CASE_DATA', '大小写重命名后内容不变');
+  const names = readdirSync(dir);
+  assert(names.includes('CASE.txt'), '目录项已使用新的大小写');
+  assert(!names.includes('case.txt'), '旧大小写不再出现');
+
+  console.log('9. move 目标为已存在目录时报错');
+  mkdirSync(join(dir, 'targetDir'));
+  writeFileSync(join(dir, 'file-for-dir.txt'), 'X', 'utf8');
+  let dirTarget = false;
+  try {
+    await fileApi.move(dir, 'file-for-dir.txt', 'targetDir');
+  } catch {
+    dirTarget = true;
+  }
+  assert(dirTarget, '目标为目录时移动报错');
+  assert(existsSync(join(dir, 'file-for-dir.txt')), '源文件保持原位');
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
