@@ -595,12 +595,21 @@ export function CodeMirrorHost({
     prevGotoLineRef.current = gotoLine;
     const clamped = Math.min(Math.max(gotoLine, 1), view.state.doc.lines);
     const line = view.state.doc.line(clamped);
-    view.dispatch({
-      selection: { anchor: line.from },
-      effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+    const target = line.from;
+    // 推迟到下一帧再 dispatch：跳转通常由卡片上的按钮点击触发，
+    // 那一刻编辑器可能正处在自己的更新循环里，同步 dispatch 会抛
+    // 「Calls to EditorView.update are not allowed while an update is in progress」，
+    // React 19 没有 ErrorBoundary 会因此把整棵树卸载，表现为窗口白屏。
+    const frame = requestAnimationFrame(() => {
+      if (viewRef.current !== view) return;
+      view.dispatch({
+        selection: { anchor: target },
+        effects: EditorView.scrollIntoView(target, { y: 'center' }),
+      });
+      view.focus();
+      onGotoLineAppliedRef.current();
     });
-    view.focus();
-    onGotoLineAppliedRef.current();
+    return () => cancelAnimationFrame(frame);
   }, [gotoLine, filePath]);
 
   // Ctrl + 滚轮调整字号，与终端行为一致（TerminalPane 用的是同一套判定）。

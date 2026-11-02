@@ -56,6 +56,17 @@ writeFileSync(
   ['<?php', 'namespace App;', 'class Second {', '  public function sharedMethod() {}', '}'].join(NL),
   'utf8',
 );
+// PHP 变量：只在当前文件里找赋值行
+writeFileSync(
+  join(projectDir, 'app', 'vars.php'),
+  [
+    '<?php',
+    '$amazonImage = $_GET["img"];',
+    '$extName = HelpsFile::getExtName($amazonImage);',
+    'echo $extName;',
+  ].join(NL),
+  'utf8',
+);
 
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -180,6 +191,27 @@ try {
 
   // 恢复开关，避免这个用例留下「模块关闭」的状态影响后续运行
   await setReferenceModule(page, true);
+
+  console.log('5. PHP 变量跳到赋值行且不白屏');
+  // 回归：跳转按钮的点击发生在 CodeMirror 自身的更新循环里，同步 dispatch
+  // 会抛「update in progress」，React 19 没有 ErrorBoundary 时整棵树被卸载，
+  // 表现为整个窗口白屏。这里断言跳转后界面还在。
+  await openFile(page, 'app/vars.php');
+  await ctrlClickWord(page, 2, '$extName');
+  const varCard = page.locator('.symbol-card');
+  await varCard.waitFor({ timeout: 10000 });
+  const varText = await varCard.innerText();
+  assert(varText.includes('$extName = HelpsFile::getExtName'), '卡片显示赋值行原文');
+  await varCard.locator('.symbol-card-jump').click();
+  await page.waitForTimeout(1200);
+
+  assert((await page.locator('.app').count()) === 1, '跳转后界面没有白屏');
+  const varActiveLine = await page.evaluate(() => {
+    const lines = [...document.querySelectorAll('.cm-line')];
+    return lines.findIndex((el) => el.classList.contains('cm-activeLine'));
+  });
+  assert(varActiveLine === 2, `光标落在赋值行（0 起 2），实际 ${varActiveLine}`);
+  assert((await page.locator('.symbol-card').count()) === 0, '跳转后卡片自动关闭');
 } finally {
   // app.close() 自己可能抛错，不能让它跳过后面的清理和端口检查
   await app?.close().catch(() => {});
