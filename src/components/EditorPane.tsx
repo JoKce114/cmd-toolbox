@@ -167,6 +167,10 @@ export function EditorPane({
   // 与磁盘版本比较：左旧（磁盘）右新（内存）。参数顺序不能反。
   const compareWithDisk = useCallback(
     async (relPath: string) => {
+      if (isUntitledPath(relPath)) {
+        onToast('空白窗口没有磁盘版本，无法比较', 'error');
+        return;
+      }
       const entry = files[relPath];
       if (!entry) return;
       if (rejectReadOnlyCompare([entry])) return;
@@ -210,6 +214,10 @@ export function EditorPane({
   // 与 Git HEAD 比较：git 后端给出基准文本，patch 由渲染侧生成以便随编辑实时重算
   const compareWithHead = useCallback(
     async (relPath: string) => {
+      if (isUntitledPath(relPath)) {
+        onToast('空白窗口没有磁盘版本，无法比较', 'error');
+        return;
+      }
       const entry = files[relPath];
       if (!entry) return;
       if (rejectReadOnlyCompare([entry])) return;
@@ -649,6 +657,7 @@ export function EditorPane({
   // 只读 / 二进制 / 超大文件读出来是空串，三个对比入口全部置灰：
   // 对比只会给出假结果（设计稿要求「二进制文件对比入口置灰」）。
   const menuReadOnly = Boolean(menuFile?.readOnly);
+  const menuUntitled = editorMenu ? isUntitledPath(editorMenu.relPath) : false;
   const pickedReadOnly = Boolean(diffCompareWith && files[diffCompareWith]?.readOnly);
 
   // 诊断模块按当前文件扩展名与开关状态挑一个。
@@ -983,7 +992,7 @@ export function EditorPane({
                 type: 'item',
                 id: 'diff-disk',
                 label: '与已保存文件比较',
-                disabled: menuReadOnly || !menuFile?.dirty,
+                disabled: menuReadOnly || menuUntitled || !menuFile?.dirty,
                 onSelect: () => {
                   void compareWithDisk(editorMenu.relPath);
                   setEditorMenu(null);
@@ -1008,7 +1017,7 @@ export function EditorPane({
                 type: 'item',
                 id: 'diff-head',
                 label: '与 Git HEAD 比较',
-                disabled: menuReadOnly || menuUntracked,
+                disabled: menuReadOnly || menuUntitled || menuUntracked,
                 onSelect: () => {
                   void compareWithHead(editorMenu.relPath);
                   setEditorMenu(null);
