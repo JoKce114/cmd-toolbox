@@ -247,9 +247,17 @@ async function copy(projectPath, fromRel, toRel) {
     if (error.code !== 'ENOENT') throw error;
   }
   await fsp.mkdir(path.dirname(to), { recursive: true });
-  // force: false + errorOnExist: true：即使 lstat 与 cp 之间有竞态，
-  // 也绝不允许覆盖目标位置已有的内容。
-  await fsp.cp(from, to, { recursive: true, errorOnExist: true, force: false });
+  try {
+    // force: false + errorOnExist: true：即使 lstat 与 cp 之间有竞态，
+    // 也绝不允许覆盖目标位置已有的内容。
+    await fsp.cp(from, to, { recursive: true, errorOnExist: true, force: false });
+  } catch (error) {
+    // 复制失败时目标位置可能已经留下半成品（目录树里先复制成功的部分文件）。
+    // 上面的 lstat 已确认目标原本不存在，所以整个删掉是安全的；
+    // 父目录可能是本来就存在的，不要清理。
+    await fsp.rm(to, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
   return { ok: true };
 }
 

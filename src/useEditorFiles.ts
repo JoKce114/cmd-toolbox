@@ -352,12 +352,21 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   }, []);
 
   const rename = useCallback((from: string, to: string) => {
-    if (touchedRef.current.delete(from)) touchedRef.current.add(to);
+    if (from === to) return;
+    const targetExists = Boolean(filesRef.current[to]);
+    // 目标已存在时不接收来源页签的「占位」标记，目标页签保持自己的状态。
+    if (touchedRef.current.delete(from) && !targetExists) touchedRef.current.add(to);
     setFiles((previous) => {
-      if (from === to || !previous[from] || previous[to]) return previous;
+      if (!previous[from]) return previous;
       const next = { ...previous };
-      next[to] = { ...next[from], relPath: to };
-      delete next[from];
+      if (previous[to]) {
+        // 目标页签已存在：该页签展示的是目标位置真实内容，不能覆盖；
+        // 但旧路径的编辑器已指向不存在的文件，必须关掉而不是静默留下。
+        delete next[from];
+      } else {
+        next[to] = { ...next[from], relPath: to };
+        delete next[from];
+      }
       return next;
     });
     setActivePath((current) => (current === from ? to : current));

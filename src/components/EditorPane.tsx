@@ -88,7 +88,13 @@ export function EditorPane({
   } = useEditorFiles(group, onError);
 
   const [fileClip, setFileClip] = useState<FileClip | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  // 确认框弹出前就把受影响的页签和 dirty 状态定格：
+  // 弹窗期间用户无法编辑，但删除目录时 files[relPath] 恒为 undefined，
+  // 必须提前收集其下未保存的页签，否则会静默丢内容。
+  const [pendingDelete, setPendingDelete] = useState<{
+    relPath: string;
+    dirtyPaths: string[];
+  } | null>(null);
   const [conflictCount, setConflictCount] = useState(0);
   const [hadConflict, setHadConflict] = useState(false);
   const [markingResolved, setMarkingResolved] = useState(false);
@@ -310,22 +316,47 @@ export function EditorPane({
     [files, rename],
   );
 
+  // 点删除时就确定这次操作会波及哪些已打开页签，以及其中哪些有未保存修改。
+  // 目录的 dirty 状态不能只看 files[目录路径]——那个键根本不存在。
+  const requestDelete = useCallback(
+    (relPath: string) => {
+      const affected = openPaths.filter(
+        (openPath) => openPath === relPath || openPath.startsWith(`${relPath}/`),
+      );
+      const dirtyPaths = affected.filter((openPath) => files[openPath]?.dirty);
+      setPendingDelete({ relPath, dirtyPaths });
+    },
+    [openPaths, files],
+  );
+
   const confirmDelete = useCallback(async () => {
-    const relPath = pendingDelete;
-    if (!relPath) return;
+    const pending = pendingDelete;
+    if (!pending) return;
+    const { relPath } = pending;
     setPendingDelete(null);
-    // 删除目录时，目录里已打开的页签也要一并关掉，否则会指向不存在的路径
     const doomed = openPaths.filter(
       (openPath) => openPath === relPath || openPath.startsWith(`${relPath}/`),
     );
-    if (doomed.length > 0) closeMany(doomed);
     try {
       await window.api.files.trash(group.path, relPath);
+      // 必须等真正删掉之后再关页签：trash 失败时用户既没删成文件、又丢了页签。
+      if (doomed.length > 0) closeMany(doomed);
       onToast(`已删除 ${relPath}`, 'success');
     } catch (error) {
       onToast(toErrorMessage(error), 'error');
     }
   }, [pendingDelete, openPaths, closeMany, group.path, onToast]);
+
+  // 删除确认文案：目录里有未保存文件时必须点名数量，否则用户会以为只是删个空目录。
+  const deleteConfirmMessage = (pending: { relPath: string; dirtyPaths: string[] }) => {
+    const { relPath, dirtyPaths } = pending;
+    if (dirtyPaths.length === 0) return `确定把「${relPath}」删除到回收站吗？`;
+    const isDirectory = dirtyPaths.some((item) => item.startsWith(`${relPath}/`));
+    if (isDirectory) {
+      return `「${relPath}」目录下有 ${dirtyPaths.length} 个未保存的文件，删除后不可恢复。确定删除到回收站吗？`;
+    }
+    return `「${relPath}」有未保存的修改，删除后不可恢复。确定删除到回收站吗？`;
+  };
 
   const requestClose = () => {
     if (hasDirty) {
@@ -489,7 +520,7 @@ export function EditorPane({
             onToast={onToast}
             clip={fileClip}
             onClipChange={setFileClip}
-            onRequestDelete={setPendingDelete}
+            onRequestDelete={requestDelete}
             onAfterRename={handleAfterRename}
           />
         )}
@@ -560,11 +591,7 @@ export function EditorPane({
       {pendingDelete ? (
         <ConfirmDialog
           title="删除到回收站"
-          message={
-            files[pendingDelete]?.dirty
-              ? `「${pendingDelete}」有未保存的修改，删除后不可恢复。确定删除到回收站吗？`
-              : `确定把「${pendingDelete}」删除到回收站吗？`
-          }
+          message={deleteConfirmMessage(pendingDelete)}
           confirmLabel="删除"
           onClose={() => setPendingDelete(null)}
           onConfirm={confirmDelete}

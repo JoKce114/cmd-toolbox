@@ -163,6 +163,30 @@ try {
     '源文件未被破坏',
   );
   assert(existsSync(join(dir, 'copy-blocked.txt')), '冲突时源文件仍在原位');
+
+  console.log('13. copy 到不存在的深层路径');
+  await fileApi.copy(dir, 'copy-src.txt', 'deep/a/b/copied.txt');
+  assert(existsSync(join(dir, 'deep/a/b/copied.txt')), '父目录被自动创建');
+  assert(
+    readFileSync(join(dir, 'deep/a/b/copied.txt'), 'utf8') === 'COPY_DATA',
+    '深层路径副本内容一致',
+  );
+
+  console.log('14. copy 失败后目标原有内容不变');
+  mkdirSync(join(dir, 'copy-existing-dir'), { recursive: true });
+  writeFileSync(join(dir, 'copy-existing-dir/keep.txt'), 'KEEP_DIR', 'utf8');
+  let copyDirDup = false;
+  try {
+    await fileApi.copy(dir, 'copy-dir', 'copy-existing-dir');
+  } catch {
+    copyDirDup = true;
+  }
+  assert(copyDirDup, '目标目录已存在时复制报错');
+  assert(
+    readFileSync(join(dir, 'copy-existing-dir/keep.txt'), 'utf8') === 'KEEP_DIR',
+    '目标目录原有内容未被改动',
+  );
+  assert(!existsSync(join(dir, 'copy-existing-dir/a.txt')), '未在目标目录里留下半拷贝');
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
