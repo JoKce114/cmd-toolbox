@@ -69,4 +69,82 @@ assert(fn.doc === '全局函数说明', '全局函数 docblock 正确');
 assert(!phpDecls.some((d) => d.name === 'commentedOut'), '注释掉的函数不算声明');
 assert(!phpDecls.some((d) => d.name === 'insideString'), '字符串里的同名不算声明');
 
+console.log('\n2. 注释类型校验');
+const commentSource = [
+  '<?php',
+  '// 普通行注释',
+  'class LooseComment {',
+  '  /**',
+  '   * 方法说明',
+  '   */',
+  '  public function withDoc() {}',
+  '',
+  '  // 方法前的普通注释',
+  '  public function withLineComment() {}',
+  '',
+  '  /* 块注释 */',
+  '  public function withBlockComment() {}',
+  '}',
+].join(NL);
+
+const commentDecls = symbols.parsePhpSymbols(commentSource);
+const looseClass = commentDecls.find((d) => d.kind === 'class' && d.name === 'LooseComment');
+assert(Boolean(looseClass), '识别出类 LooseComment');
+assert(looseClass.doc === '', `// 行注释不当 docblock，实际 ${JSON.stringify(looseClass.doc)}`);
+
+const withDoc = commentDecls.find((d) => d.kind === 'method' && d.name === 'withDoc');
+assert(withDoc.doc === '方法说明', `正常 docblock 仍然生效，实际 ${JSON.stringify(withDoc.doc)}`);
+
+const withLine = commentDecls.find((d) => d.kind === 'method' && d.name === 'withLineComment');
+assert(withLine.doc === '', `// 方法注释不当 docblock，实际 ${JSON.stringify(withLine.doc)}`);
+
+const withBlock = commentDecls.find((d) => d.kind === 'method' && d.name === 'withBlockComment');
+assert(withBlock.doc === '', `/* */ 块注释不当 docblock，实际 ${JSON.stringify(withBlock.doc)}`);
+
+assert(symbols.cleanDoc('/**/') === '', `空 docblock 不残留定界符，实际 ${JSON.stringify(symbols.cleanDoc('/**/'))}`);
+
+console.log('\n3. interface / trait 签名');
+const kindsSource = [
+  '<?php',
+  'interface Fooable {',
+  '  public function foo();',
+  '}',
+  'trait BarTrait {',
+  '  public function bar() {}',
+  '}',
+  'class Baz {}',
+].join(NL);
+
+const kindDecls = symbols.parsePhpSymbols(kindsSource);
+const iface = kindDecls.find((d) => d.kind === 'class' && d.name === 'Fooable');
+assert(Boolean(iface), '识别出 interface Fooable');
+assert(iface.signature === 'interface Fooable', `interface 签名反映真实种类，实际 ${iface.signature}`);
+
+const trait = kindDecls.find((d) => d.kind === 'class' && d.name === 'BarTrait');
+assert(Boolean(trait), '识别出 trait BarTrait');
+assert(trait.signature === 'trait BarTrait', `trait 签名反映真实种类，实际 ${trait.signature}`);
+
+const plainClass = kindDecls.find((d) => d.kind === 'class' && d.name === 'Baz');
+assert(plainClass.signature === 'class Baz', `普通 class 签名保持不变，实际 ${plainClass.signature}`);
+
+console.log('\n4. 函数体内的嵌套声明');
+const nestedSource = [
+  '<?php',
+  'function outerFn($a) {',
+  '  function innerFn($b) {}',
+  '  $closure = function ($c) {};',
+  '  return $a;',
+  '}',
+  'function afterFn() {}',
+].join(NL);
+
+const nestedDecls = symbols.parsePhpSymbols(nestedSource);
+const outerFns = nestedDecls.filter((d) => d.kind === 'function').map((d) => d.name).sort();
+assert(
+  JSON.stringify(outerFns) === JSON.stringify(['afterFn', 'outerFn']),
+  `只收集外层函数，实际 ${outerFns.join(', ')}`,
+);
+assert(!nestedDecls.some((d) => d.name === 'innerFn'), '函数体内的具名函数不被收集');
+assert(!nestedDecls.some((d) => d.kind === 'function' && d.name === ''), '闭包（匿名函数）不被收集');
+
 console.log(`\n全部通过：${passed} 项`);

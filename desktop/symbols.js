@@ -1,6 +1,5 @@
-const path = require('path');
-
 // 扫描时跳过的目录：依赖和产物目录里同名声明太多，还会把扫描拖慢
+// （Task 3 扫描项目时使用，本文件目前未引用）
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'vendor', 'dist', 'release', 'release-build']);
 
 let phpEngine = null;
@@ -18,9 +17,12 @@ function loadPhpEngine() {
 // php-parser 给的 value 是带 /** 和 */ 的原文，这里只留正文，
 // 并去掉每行开头的「 * 」，卡片里可以直接按行渲染
 function cleanDoc(raw) {
-  return String(raw || '')
+  const text = String(raw || '')
     .replace(/^\/\*+/, '')
-    .replace(/\*+\/$/, '')
+    .replace(/\*+\/$/, '');
+  // /**/ 这类空注释的起止定界符共用中间那颗星，去掉开头后只剩 /，直接清空
+  if (/^[*/]*$/.test(text)) return '';
+  return text
     .split(/\r?\n/)
     .map((line) => line.replace(/^\s*\*?\s?/, '').trimEnd())
     .join('\n')
@@ -49,7 +51,9 @@ function sourceSignature(text, node, stops) {
 function docOf(node) {
   const list = Array.isArray(node && node.leadingComments) ? node.leadingComments : [];
   const last = list.filter((item) => item && typeof item.value === 'string').pop();
-  return last ? cleanDoc(last.value) : '';
+  // 只有紧贴在声明前的 /** */ 才算 docblock；//、#、/* */ 都不是
+  if (!last || !last.value.trimStart().startsWith('/**')) return '';
+  return cleanDoc(last.value);
 }
 
 function lineOf(node) {
@@ -82,7 +86,7 @@ function walkPhp(node, text, namespace, owner, out) {
         owner: '',
         namespace,
         line: lineOf(node),
-        signature: `class ${name}`,
+        signature: `${node.kind} ${name}`,
         doc: docOf(node),
       });
     }
