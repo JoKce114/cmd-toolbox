@@ -389,9 +389,19 @@ async function collectFiles(root) {
 // 不预筛直接全量解析，千文件项目要二十秒。
 // 不要求名字紧跟 function/class：箭头函数赋值、PHP 的 `function &x()`、
 // 以及换行/修饰符写法都能命中；精确性交给后面的 AST 判断。
-// 大小写不敏感，与最终匹配一致（PHP 函数名不敏感），避免不同大小写的查询被粗筛挡掉。
+// 粗筛保持宽松（大小写不敏感），不同大小写的查询不会被提前挡掉；
+// 大小写语义由最终匹配按声明所在文件的语言决定。
 function prefilter(text, name) {
   return text.includes(name) || text.toLowerCase().includes(name.toLowerCase());
+}
+
+// PHP 标识符不区分大小写，JS 标识符区分。
+// 判断依据是声明所在文件的扩展名：同一个查询名在两种语言里的语义不同。
+function nameMatches(declName, relPath, target, targetLower) {
+  if (PHP_EXT.has(path.extname(relPath).toLowerCase())) {
+    return declName.toLowerCase() === targetLower;
+  }
+  return declName === target;
 }
 
 async function declsFor(root, relPath, name) {
@@ -518,8 +528,8 @@ async function lookup(projectPath, name, options = {}) {
   for (const relPath of files) {
     const decls = await declsFor(root, relPath, target);
     for (const decl of decls) {
-      // PHP 函数名大小写不敏感；保留 decl.name 的原始写法返回给调用方。
-      if (decl.name.toLowerCase() !== targetLower) continue;
+      // PHP 大小写不敏感、JS 大小写敏感；保留 decl.name 的原始写法返回给调用方。
+      if (!nameMatches(decl.name, relPath, target, targetLower)) continue;
       matches.push({ ...decl, relPath });
     }
   }
@@ -528,4 +538,4 @@ async function lookup(projectPath, name, options = {}) {
   return { ok: true, matches, truncated, scanned: files.length };
 }
 
-module.exports = { parsePhpSymbols, parseJsSymbols, cleanDoc, lookup, resetCache };
+module.exports = { parsePhpSymbols, parseJsSymbols, cleanDoc, lookup, resetCache, compareMatches };

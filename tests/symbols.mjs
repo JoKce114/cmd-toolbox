@@ -560,18 +560,22 @@ try {
     `路径浅的优先，实际 ${byDepth.matches.map((m) => m.relPath).join(', ')}`,
   );
 
-  // 字典序：同深度、同命名空间（都为空）、无当前文件与接收者，只剩最后一条规则。
-  mkdirSync(join(orderDir, 'lex'), { recursive: true });
-  writeFileSync(join(orderDir, 'lex', 'zeta.php'), ['<?php', 'function lexTarget() {}'].join(NL), 'utf8');
-  writeFileSync(join(orderDir, 'lex', 'middle.php'), ['<?php', 'function lexTarget() {}'].join(NL), 'utf8');
-  writeFileSync(join(orderDir, 'lex', 'alpha.php'), ['<?php', 'function lexTarget() {}'].join(NL), 'utf8');
-
-  symbols.resetCache();
-  const byLex = await symbols.lookup(orderDir, 'lexTarget', {});
+  // 字典序与深度直接测排序函数：NTFS 的 readdir 本身就返回字母序，
+  // 靠临时目录的写入顺序构造「反字典序」并不可靠，用例会恒真。
+  // 现在传入构造好的 match 对象，去掉 localeCompare 或深度规则都会立刻失败。
+  const shallowMatch = { relPath: 'a.php', owner: '', namespace: '' };
+  const deepMatch = { relPath: 'dir/b.php', owner: '', namespace: '' };
   assert(
-    JSON.stringify(byLex.matches.map((m) => m.relPath)) ===
-      JSON.stringify(['lex/alpha.php', 'lex/middle.php', 'lex/zeta.php']),
-    `同深度时按字典序，实际 ${byLex.matches.map((m) => m.relPath).join(', ')}`,
+    symbols.compareMatches(shallowMatch, deepMatch, {}) < 0,
+    '纯函数：浅路径排在深路径前',
+  );
+  assert(
+    symbols.compareMatches(deepMatch, shallowMatch, {}) > 0,
+    '纯函数：反向输入时深路径排在浅路径后',
+  );
+  assert(
+    symbols.compareMatches({ relPath: 'zeta.php' }, { relPath: 'alpha.php' }, {}) > 0,
+    '纯函数：同深度按字典序，倒序输入仍是 alpha 在前',
   );
 } finally {
   rmSync(orderDir, { recursive: true, force: true });
@@ -624,6 +628,40 @@ try {
   );
 } finally {
   rmSync(escapeParent, { recursive: true, force: true });
+}
+
+console.log('\n15. 大小写规则按语言区分');
+const caseDir = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-case-'));
+try {
+  // JS 里 Foo 与 foo 是两个不同的标识符
+  writeFileSync(
+    join(caseDir, 'names.js'),
+    ['function Foo() {}', 'function foo() {}'].join(NL),
+    'utf8',
+  );
+
+  symbols.resetCache();
+  const jsLower = await symbols.lookup(caseDir, 'foo', {});
+  assert(
+    jsLower.matches.length === 1 &&
+      jsLower.matches[0].name === 'foo' &&
+      jsLower.matches[0].relPath === 'names.js',
+    `JS 区分大小写：查 foo 只命中 foo，实际 ${jsLower.matches.map((m) => `${m.name}@${m.relPath}`).join(', ')}`,
+  );
+
+  // PHP 里的 Foo 对大小写不敏感，同一个查询应同时命中它和 JS 的 foo
+  writeFileSync(join(caseDir, 'legacy.php'), ['<?php', 'function Foo() {}'].join(NL), 'utf8');
+
+  symbols.resetCache();
+  const withPhp = await symbols.lookup(caseDir, 'foo', {});
+  const hitJsLower = withPhp.matches.some((m) => m.relPath === 'names.js' && m.name === 'foo');
+  const hitJsUpper = withPhp.matches.some((m) => m.relPath === 'names.js' && m.name === 'Foo');
+  const hitPhpUpper = withPhp.matches.some((m) => m.relPath === 'legacy.php' && m.name === 'Foo');
+  assert(hitJsLower, 'PHP 存在时 JS 的 foo 仍被命中');
+  assert(!hitJsUpper, 'PHP 存在时 JS 的 Foo 仍不被 foo 命中');
+  assert(hitPhpUpper, 'PHP 大小写不敏感：查 foo 命中 PHP 的 Foo');
+} finally {
+  rmSync(caseDir, { recursive: true, force: true });
 }
 
 console.log(`\n全部通过：${passed} 项`);
