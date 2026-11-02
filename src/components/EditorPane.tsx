@@ -239,7 +239,14 @@ export function EditorPane({
         return;
       }
       pendingGotoRef.current = { relPath: match.relPath, line: match.line };
-      void open(match.relPath);
+      void open(match.relPath).then((opened) => {
+        if (opened) return;
+        // 打开失败时 files 里不会有这个条目，effect 等不到 loading 变 false；
+        // 在这里清掉 pending，避免用户以后手动打开该文件时被莫名跳到这一行。
+        if (pendingGotoRef.current?.relPath === match.relPath) {
+          pendingGotoRef.current = null;
+        }
+      });
     },
     [open],
   );

@@ -199,10 +199,15 @@ function registerIpc() {
   );
 
   ipcMain.handle('symbols:lookup', (_event, projectPath, name, options) => {
-    // projectPath 来自渲染进程，直接交给 path.resolve 会抛 TypeError；
-    // 返回与 lookup 相同形状的失败结果，调用方不需要另写一条错误分支。
-    if (typeof projectPath !== 'string' || !projectPath.trim()) {
-      return { ok: false, matches: [], truncated: false, scanned: 0 };
+    // projectPath 来自渲染进程，只允许查询已保存项目：否则传 `C:\` 就能
+    // 递归扫描整个盘并取回源码签名/docblock。
+    let knownPath;
+    try {
+      knownPath = assertProjectPath(projectPath);
+    } catch {
+      // 未保存的项目不是错误：Ctrl+点击只该表现为「没有找到定义」，
+      // 不能让卡片变成红色错误提示。
+      return { ok: true, matches: [], truncated: false, scanned: 0 };
     }
     // name 同样来自渲染进程。非字符串经 String() 会变成 "[object Object]"，
     // 长度足够长，从而白白触发一次全项目扫描；这里提前拦截。
@@ -210,7 +215,7 @@ function registerIpc() {
       return { ok: true, matches: [], truncated: false, scanned: 0 };
     }
     const input = options && typeof options === 'object' ? options : {};
-    return symbols.lookup(projectPath, name, input);
+    return symbols.lookup(knownPath, name, input);
   });
 
   ipcMain.handle('updater:download', () => updater.startDownload());

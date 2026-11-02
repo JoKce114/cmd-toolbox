@@ -63,13 +63,13 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   }, []);
 
   const open = useCallback(
-    async (relPath: string) => {
-      if (!relPath) return;
+    async (relPath: string): Promise<boolean> => {
+      if (!relPath) return false;
 
       // 已经打开过就直接切过去，保留未保存的修改
       if (filesRef.current[relPath]) {
         setActivePath(relPath);
-        return;
+        return true;
       }
 
       // 顶替一个没被动过的内页签：当前激活的优先，其次最近打开的。
@@ -115,6 +115,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
             },
           };
         });
+        return true;
       } catch (error) {
         onError(toErrorMessage(error));
         setFiles((previous) => {
@@ -123,6 +124,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
           return next;
         });
         setActivePath((current) => (current === relPath ? '' : current));
+        return false;
       }
     },
     [onError],

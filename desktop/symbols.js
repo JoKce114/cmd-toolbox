@@ -327,13 +327,42 @@ function parseJsSymbols(text, lang) {
 }
 
 const MAX_FILES = 4000;
+// 目录项（含目录、图片、压缩包等非源码条目）的总数上限：
+// 只统计已收集的源码文件时，遍历仍会走完整棵目录树，巨型目录/依赖目录能拖很久。
+const MAX_ENTRIES = 20000;
+// 实际交给解析器的文件数上限。短名（return、function 这类）几乎命中所有 PHP 文件，
+// 没有这个上限时 22ms/文件能拖到几十秒，期间主进程一直卡着。
+const MAX_PARSE_FILES = 50;
+const MAX_NAME_LENGTH = 100;
+// 关键字不可能对应声明，命中面却几乎覆盖全项目。PHP 关键字不区分大小写，
+// 所以统一按小写比较；列表取 PHP/JS 的常见集合，不必穷举。
+const RESERVED_NAMES = new Set([
+  'return', 'function', 'class', 'const', 'let', 'var', 'if', 'else', 'for', 'while',
+  'echo', 'new', 'static', 'public', 'private', 'protected', 'use', 'namespace',
+  'true', 'false', 'null', 'undefined', 'this', 'self', 'parent',
+  'interface', 'trait', 'extends', 'implements', 'abstract', 'final', 'switch', 'case',
+  'break', 'continue', 'do', 'try', 'catch', 'finally', 'throw', 'instanceof', 'typeof',
+  'delete', 'in', 'export', 'import', 'default', 'super', 'void', 'with', 'enum',
+]);
 const MAX_FILE_BYTES = 1024 * 1024;
 const PHP_EXT = new Set(['.php']);
 const JS_EXT = new Set(['.js', '.mjs', '.cjs', '.jsx']);
 
-// `${项目根}\0${relPath}` → { mtime, decls }。
+function emptyResult() {
+  return { ok: true, matches: [], truncated: false, scanned: 0 };
+}
+
+function isValidName(name) {
+  if (name.length > MAX_NAME_LENGTH) return false;
+  if (name.startsWith('$')) return false;
+  return !RESERVED_NAMES.has(name.toLowerCase());
+}
+
+// `${项目根}\0${relPath}` → { mtime, decls, misses }。
 // 只装被实际解析过的文件，不是项目级索引。key 必须带项目根：
 // 两个项目都有 app/a.php 时，只按 relPath 会互相读到对方的声明。
+// misses 记「该名字在这个 mtime 下预筛未命中」，避免同名查询反复 stat + 读全文；
+// 它必须按名字分开记，否则换一个名字查询时会把别的名字的声明也漏掉。
 const declCache = new Map();
 // 缓存只是省一次解析，重建成本只是重新读并解析少量文件；条目多到这个量级时
 // 清空重来比维护 LRU 简单且足够，也让这张表不会跨项目无限长成常驻索引。
@@ -354,6 +383,7 @@ function shouldSkipDir(name) {
 async function collectFiles(root) {
   const files = [];
   let truncated = false;
+  let entriesSeen = 0;
 
   async function walk(relDir) {
     if (truncated) return;
@@ -365,6 +395,12 @@ async function collectFiles(root) {
     }
     for (const entry of entries) {
       if (truncated) return;
+      // 目录、图片、压缩包和跳过目录都算一条：这里封的是遍历本身，不是收集结果。
+      entriesSeen += 1;
+      if (entriesSeen > MAX_ENTRIES) {
+        truncated = true;
+        return;
+      }
       if (entry.isSymbolicLink()) continue;
       const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
@@ -404,36 +440,64 @@ function nameMatches(declName, relPath, target, targetLower) {
   return declName === target;
 }
 
-async function declsFor(root, relPath, name) {
+// 写缓存。decls 为 undefined 表示这只是「该名字预筛未命中」的负记录。
+function storeEntry(root, relPath, mtime, decls, missName) {
+  const key = cacheKey(root, relPath);
+  const previous = declCache.get(key);
+  const sameFile = previous && previous.mtime === mtime;
+  // 保持原有 500 条上限的行为：满了就整体清空重建，不做 LRU。
+  if (!sameFile && declCache.size >= MAX_CACHE_ENTRIES) declCache.clear();
+  const misses = new Set(sameFile && previous.misses ? previous.misses : []);
+  if (missName) misses.add(missName);
+  declCache.set(key, {
+    mtime,
+    decls: decls === undefined ? (sameFile ? previous.decls : null) : decls,
+    misses,
+  });
+}
+
+// 返回 { decls, limited }。limited 表示解析预算已用完，这个文件本该解析却被跳过：
+// 调用方据此把 truncated 置 true 并停止遍历。
+async function declsFor(root, relPath, name, budget) {
   let stat;
   try {
     stat = await fsp.stat(path.join(root, relPath));
   } catch {
-    return [];
+    return { decls: [], limited: false };
   }
-  if (stat.size > MAX_FILE_BYTES) return [];
+  if (stat.size > MAX_FILE_BYTES) return { decls: [], limited: false };
 
   const key = cacheKey(root, relPath);
   const cached = declCache.get(key);
-  if (cached && cached.mtime === stat.mtimeMs) return cached.decls;
+  if (cached && cached.mtime === stat.mtimeMs) {
+    // 负缓存只对同一个名字有效；换名字查询仍要重新读文件判断。
+    if (cached.misses && cached.misses.has(name)) return { decls: [], limited: false };
+    if (cached.decls) return { decls: cached.decls, limited: false };
+  }
 
   let text;
   try {
     text = await fsp.readFile(path.join(root, relPath), 'utf8');
   } catch {
-    return [];
+    return { decls: [], limited: false };
   }
-  // 预筛未命中的结果不能缓存：同一个文件换一个名字查询时，
-  // 「没为这个名字解析」不等于「文件里没有声明」。
-  if (!prefilter(text, name)) return [];
+  if (!prefilter(text, name)) {
+    // 「该文件在该 mtime 下没有这个相关名字」是稳定事实，可以按名字缓存；
+    // 但不能记成「文件没有声明」，否则换名字查询会漏掉真实声明。
+    storeEntry(root, relPath, stat.mtimeMs, undefined, name);
+    return { decls: [], limited: false };
+  }
+
+  // 预筛命中才计入解析预算：缓存命中和预筛未命中都不消耗。
+  if (budget.parsed >= MAX_PARSE_FILES) return { decls: [], limited: true };
+  budget.parsed += 1;
 
   const ext = path.extname(relPath).toLowerCase();
   const decls = PHP_EXT.has(ext)
     ? parsePhpSymbols(text)
     : parseJsSymbols(text, ext.slice(1));
-  if (declCache.size >= MAX_CACHE_ENTRIES) declCache.clear();
-  declCache.set(key, { mtime: stat.mtimeMs, decls });
-  return decls;
+  storeEntry(root, relPath, stat.mtimeMs, decls);
+  return { decls, limited: false };
 }
 
 function depthOf(relPath) {
@@ -512,15 +576,21 @@ async function lookup(projectPath, name, options = {}) {
   // name 可能来自外部输入。非字符串经 String() 会变成 "[object Object]"，
   // 长度足够从而在预筛前就触发全项目文件遍历；这里一律视为无效查询。
   if (typeof name !== 'string') {
-    return { ok: true, matches: [], truncated: false, scanned: 0 };
+    return emptyResult();
   }
   const target = name.trim();
   if (target.length < 2) {
-    return { ok: true, matches: [], truncated: false, scanned: 0 };
+    return emptyResult();
+  }
+  // 关键字和 $ 变量名不可能对应声明，却几乎命中所有 PHP 文件；
+  // 在遍历之前挡掉，别让一次 Ctrl+点击拖住主进程。
+  if (!isValidName(target)) {
+    return emptyResult();
   }
 
   const root = path.resolve(projectPath);
-  const { files, truncated } = await collectFiles(root);
+  const { files, truncated: walkTruncated } = await collectFiles(root);
+  let truncated = walkTruncated;
   const currentPath = normalizeCurrentPath(root, options.currentPath);
   const targetLower = target.toLowerCase();
   const context = {
@@ -529,9 +599,15 @@ async function lookup(projectPath, name, options = {}) {
     namespace: await namespaceOf(root, currentPath),
   };
 
+  const budget = { parsed: 0 };
   const matches = [];
   for (const relPath of files) {
-    const decls = await declsFor(root, relPath, target);
+    const { decls, limited } = await declsFor(root, relPath, target, budget);
+    if (limited) {
+      // 预算用完，后面的文件即使命中也不会被解析：结果已不完整，停止遍历。
+      truncated = true;
+      break;
+    }
     for (const decl of decls) {
       // PHP 大小写不敏感、JS 大小写敏感；保留 decl.name 的原始写法返回给调用方。
       if (!nameMatches(decl.name, relPath, target, targetLower)) continue;

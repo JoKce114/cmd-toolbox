@@ -458,6 +458,26 @@ try {
     assert(result && result.scanned === 0, `${label} name 不扫描项目，实际 ${result && result.scanned}`);
   }
 
+  // 关键字、$ 变量名和超长名字会命中几乎所有文件，必须在遍历之前拒绝。
+  // scanned 为 0 证明连目录都没读。
+  const rejectedNames = [
+    ['$i', '$ 开头的变量名'],
+    ['return', '关键字 return'],
+    ['function', '关键字 function'],
+    ['CLASS', '关键字判定不区分大小写'],
+    ['a'.repeat(101), '超过 100 字符的名字'],
+  ];
+  for (const [badTarget, label] of rejectedNames) {
+    const result = await symbols.lookup(projectDir, badTarget, {});
+    assert(result && result.ok === true, `${label} 返回成功形状`);
+    assert(result && result.matches.length === 0, `${label} 返回空 matches`);
+    assert(result && result.scanned === 0, `${label} 不扫描项目，实际 ${result && result.scanned}`);
+  }
+
+  // 边界值：恰好 100 字符的合法名字不能被误伤
+  const boundaryName = await symbols.lookup(projectDir, 'a'.repeat(100), {});
+  assert(boundaryName.ok === true && boundaryName.scanned > 0, `100 字符的名字仍执行查询，实际 ${boundaryName.scanned}`);
+
   // 先查询一个存在且会被解析的名字（确保写入缓存），再改内容与 mtime：
   // 缓存不失效的话，旧名字仍会命中旧声明。
   symbols.resetCache();
@@ -683,6 +703,27 @@ try {
   assert(hitPhpUpper, 'PHP 大小写不敏感：查 foo 命中 PHP 的 Foo');
 } finally {
   rmSync(caseDir, { recursive: true, force: true });
+}
+
+console.log('\n16. 解析文件数上限');
+const parseLimitDir = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-parse-limit-'));
+try {
+  // 60 个文件都含同一个名字：不设解析上限时会全部交给 php-parser。
+  for (let i = 0; i < 60; i += 1) {
+    writeFileSync(
+      join(parseLimitDir, `f${String(i).padStart(3, '0')}.php`),
+      ['<?php', 'function capTarget() {}'].join(NL),
+      'utf8',
+    );
+  }
+
+  symbols.resetCache();
+  const capped = await symbols.lookup(parseLimitDir, 'capTarget', {});
+  assert(capped.truncated === true, '实际解析文件数超过上限时标记 truncated');
+  assert(capped.matches.length === 50, `最多解析 50 个文件，实际 ${capped.matches.length}`);
+  assert(capped.scanned === 60, `scanned 仍报告收集到的文件数，实际 ${capped.scanned}`);
+} finally {
+  rmSync(parseLimitDir, { recursive: true, force: true });
 }
 
 console.log(`\n全部通过：${passed} 项`);
