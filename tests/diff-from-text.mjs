@@ -148,4 +148,49 @@ console.log('9. 大文件：10000 行全不同');
   assert(elapsed < 2000, `10000 行全不同在 2 秒内返回，实际 ${elapsed.toFixed(1)} ms`);
 }
 
+console.log('10. 两万行完全不同（行集合快路径）');
+{
+  const size = 20000;
+  const oldText = Array.from({ length: size }, (_, index) => `old line ${index}`).join('\n');
+  const newText = Array.from({ length: size }, (_, index) => `new line ${index}`).join('\n');
+  const started = performance.now();
+  const disjointPatch = buildTextPatch('a', oldText, 'b', newText);
+  const elapsed = performance.now() - started;
+  assert(elapsed < 500, `20000 行全不同在 500 ms 内返回，实际 ${elapsed.toFixed(1)} ms`);
+  assert(disjointPatch.length > 0, '两万行全不同生成非空 patch');
+  const parsed = parsePatch(disjointPatch);
+  assert(parsed.hunks.length === 1, `两万行全不同只产生 1 个 hunk，实际 ${parsed.hunks.length}`);
+  assert(
+    parsed.hunks[0].header === '@@ -1,20000 +1,20000 @@',
+    `hunk 头为 @@ -1,20000 +1,20000 @@，实际 ${parsed.hunks[0].header}`,
+  );
+  const removed = parsed.hunks[0].lines.filter((line) => line.kind === 'removed');
+  const inserted = parsed.hunks[0].lines.filter((line) => line.kind === 'added');
+  assert(removed.length === size && inserted.length === size, '正好是全部删除 + 全部新增');
+}
+
+console.log('11. 一万行仅一行相同（有交集，走正常差分）');
+{
+  const size = 10000;
+  const sharedIndex = 5000;
+  const sharedLine = 'shared line';
+  const oldLines = Array.from({ length: size }, (_, index) => `old line ${index}`);
+  const newLines = Array.from({ length: size }, (_, index) => `new line ${index}`);
+  oldLines[sharedIndex] = sharedLine;
+  newLines[sharedIndex] = sharedLine;
+  const overlapping = buildTextPatch('a', oldLines.join('\n'), 'b', newLines.join('\n'));
+  const parsed = parsePatch(overlapping);
+  const contextLines = parsed.hunks
+    .flatMap((hunk) => hunk.lines)
+    .filter((line) => line.kind === 'context' && line.text === sharedLine);
+  assert(contextLines.length === 1, `唯一相同的行作为上下文出现一次，实际 ${contextLines.length}`);
+  assert(
+    contextLines[0]?.oldLine === sharedIndex + 1 && contextLines[0]?.newLine === sharedIndex + 1,
+    `上下文行的 oldLine/newLine 为 ${sharedIndex + 1}/${sharedIndex + 1}`,
+  );
+  const removed = parsed.hunks.flatMap((hunk) => hunk.lines).filter((line) => line.kind === 'removed');
+  const inserted = parsed.hunks.flatMap((hunk) => hunk.lines).filter((line) => line.kind === 'added');
+  assert(removed.length === size - 1 && inserted.length === size - 1, '其余行全部删除并新增');
+}
+
 console.log(`\n全部通过：${passed} 项`);

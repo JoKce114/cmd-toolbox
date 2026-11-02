@@ -116,6 +116,35 @@ function findMiddleSnake(
   return null;
 }
 
+// 判断两个区间里是否存在任意一行相同。用较小的区间建 Set，遍历另一方，
+// 时间 O(N+M)、空间 O(min(N,M))。无交集时 LCS 为 0，最优差分必然是
+// 「全部删除 + 全部新增」，可以直接跳过 Myers 的 O((N+M)D) 退化。
+function hasCommonLine(
+  a: LineSource,
+  aStart: number,
+  aEnd: number,
+  b: LineSource,
+  bStart: number,
+  bEnd: number,
+): boolean {
+  const aIds = a.ids;
+  const bIds = b.ids;
+  if (aEnd - aStart <= bEnd - bStart) {
+    const seen = new Set<number>();
+    for (let index = aStart; index < aEnd; index += 1) seen.add(aIds[index]);
+    for (let index = bStart; index < bEnd; index += 1) {
+      if (seen.has(bIds[index])) return true;
+    }
+  } else {
+    const seen = new Set<number>();
+    for (let index = bStart; index < bEnd; index += 1) seen.add(bIds[index]);
+    for (let index = aStart; index < aEnd; index += 1) {
+      if (seen.has(aIds[index])) return true;
+    }
+  }
+  return false;
+}
+
 // 递归分治。每层先剥掉公共前后缀，再用中间蛇把剩余区间一分为二。
 // 复杂度：时间 O((N+M)D)，空间 O(N+M)；全不同时时间退化为 O((N+M)^2) 但内存仍线性。
 function diffRange(
@@ -151,6 +180,15 @@ function diffRange(
   } else if (bStart === bEnd) {
     for (let index = aStart; index < aEnd; index += 1) {
       ops.push({ kind: 'delete', text: a.texts[index] });
+    }
+  } else if (!hasCommonLine(a, aStart, aEnd, b, bStart, bEnd)) {
+    // 剥掉公共前后缀后仍没有任何一行相同：没有可显示的细粒度差异，
+    // 最优解就是把旧区间全部删除、新区间全部新增。O(N+M)，瞬间完成。
+    for (let index = aStart; index < aEnd; index += 1) {
+      ops.push({ kind: 'delete', text: a.texts[index] });
+    }
+    for (let index = bStart; index < bEnd; index += 1) {
+      ops.push({ kind: 'insert', text: b.texts[index] });
     }
   } else if (aEnd - aStart > LARGE_FILE_LIMIT && bEnd - bStart > LARGE_FILE_LIMIT) {
     // 首尾公共部分已经剥掉，中间还各有 2 万行以上：全删全增，不再差分。
