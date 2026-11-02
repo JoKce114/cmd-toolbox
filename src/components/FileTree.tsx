@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
-import { ChevronRight, File, Folder, FolderOpen } from 'lucide-react';
+import {
+  ChevronRight,
+  ChevronsDownUp,
+  File,
+  FilePlus,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  RefreshCw,
+} from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import type { FileEntry, Group, MenuState } from '../types';
 import { PopupMenu } from './PopupMenu';
@@ -65,6 +74,55 @@ export function FileTree({
       }
     },
     [group.path, onError],
+  );
+
+  // 刷新：重新列所有已展开的目录。文件在外部被增删时用它同步。
+  const reloadAll = useCallback(async () => {
+    const dirs = Array.from(expanded);
+    setChildren({});
+    await Promise.all(dirs.map((dir) => loadDir(dir)));
+  }, [expanded, loadDir]);
+
+  const collapseAll = useCallback(() => {
+    setExpanded(new Set(['']));
+  }, []);
+
+  // 新建按钮的落点：activePath 是当前打开的文件，新建条目与它同级；
+  // 没有打开文件时落在项目根目录。
+  const createTargetDir = useCallback(() => {
+    if (!activePath) return '';
+    return ancestorsOf(activePath).pop() || '';
+  }, [activePath]);
+
+  const createFile = useCallback(
+    async (relDir: string) => {
+      const relPath = await promptName('新建文件', relDir, '');
+      if (!relPath) return;
+      try {
+        await window.api.files.createFile(group.path, relPath, '');
+        await loadDir(relDir);
+        setExpanded((previous) => new Set(previous).add(relDir));
+        onOpen(relPath);
+      } catch (error) {
+        onError(toErrorMessage(error));
+      }
+    },
+    [group.path, loadDir, onError, onOpen],
+  );
+
+  const createFolder = useCallback(
+    async (relDir: string) => {
+      const relPath = await promptName('新建文件夹', relDir, '');
+      if (!relPath) return;
+      try {
+        await window.api.files.createDir(group.path, relPath);
+        await loadDir(relDir);
+        setExpanded((previous) => new Set(previous).add(relDir));
+      } catch (error) {
+        onError(toErrorMessage(error));
+      }
+    },
+    [group.path, loadDir, onError],
   );
 
   useEffect(() => {
@@ -187,9 +245,49 @@ export function FileTree({
   };
 
   return (
-    <div className="file-tree">
-      {renderDir('', 0)}
-      {menu ? <PopupMenu state={menu} onClose={() => setMenu(null)} /> : null}
+    <div className="file-tree-wrap">
+      <div className="file-tree-toolbar">
+        <button
+          type="button"
+          className="icon-btn"
+          title="新建文件夹"
+          onClick={() => void createFolder(createTargetDir())}
+        >
+          <FolderPlus size={13} />
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          title="新建文件"
+          onClick={() => void createFile(createTargetDir())}
+        >
+          <FilePlus size={13} />
+        </button>
+        <button type="button" className="icon-btn" title="刷新" onClick={() => void reloadAll()}>
+          <RefreshCw size={13} />
+        </button>
+        <button type="button" className="icon-btn" title="全部折叠" onClick={collapseAll}>
+          <ChevronsDownUp size={13} />
+        </button>
+      </div>
+      <div className="file-tree">
+        {renderDir('', 0)}
+        {menu ? <PopupMenu state={menu} onClose={() => setMenu(null)} /> : null}
+      </div>
     </div>
   );
+}
+
+// 与项目里已有的 window.confirm 用法保持一致，避免再造一套输入弹窗。
+// 返回完整相对路径（relDir/name），名字非法或取消时返回空串。
+async function promptName(label: string, relDir: string, initial: string): Promise<string> {
+  const raw = window.prompt(`${label}（${relDir || '项目根目录'}）`, initial);
+  if (raw === null) return '';
+  const name = raw.trim();
+  if (!name) return '';
+  if (name.includes('/') || name.includes('\\')) {
+    window.alert('名字里不能包含斜杠');
+    return '';
+  }
+  return relDir ? `${relDir}/${name}` : name;
 }

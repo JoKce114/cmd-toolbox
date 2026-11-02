@@ -4876,3 +4876,24 @@ p {
   font-size: 12px;
   color: var(--muted);
 }
+
+.file-tree-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.file-tree-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.file-tree-toolbar .icon-btn {
+  width: 22px;
+  height: 22px;
+}
