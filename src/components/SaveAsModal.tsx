@@ -14,12 +14,21 @@ function validate(relPath: string): string {
   const value = relPath.trim();
   if (!value) return '请填写文件名';
   if (value === '.' || value === '..') return '文件名无效';
+  // 盘符路径先单独识别，否则会被冒号或反斜杠规则拦下，提示对不上
+  if (/^[A-Za-z]:[\\/]/.test(value)) return '请填写相对项目根的路径';
+  // \ 在 Windows 上也是分隔符，放行会让主进程静默建出意外目录
+  if (value.includes('\\')) return '请用 / 作为目录分隔符';
   if (/[<>:"|?*]/.test(value)) return '文件名不能包含 < > : " | ? *';
   // 先判绝对路径，否则以 / 开头会先被下面的空段规则拦下，提示词对不上
   if (value.startsWith('/')) return '请填写相对项目根的路径';
   const parts = value.split('/');
   if (parts.some((part) => part === '' || part === '.' || part === '..')) {
     return '目录名不能为空，也不能是 . 或 ..';
+  }
+  // Windows 会静默去掉结尾的点和空格，导致页签路径与磁盘不一致。
+  // .hidden 这类以点开头的名字仍然合法，只拦结尾。
+  if (parts.some((part) => part.endsWith('.') || part.endsWith(' '))) {
+    return '目录名或文件名不能以点或空格结尾';
   }
   const base = parts[parts.length - 1] || '';
   if (!base.includes('.')) return '文件名需要带扩展名，例如 a.php';
