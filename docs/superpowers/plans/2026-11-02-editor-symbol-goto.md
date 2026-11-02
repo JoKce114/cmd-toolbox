@@ -1407,7 +1407,7 @@ function referenceExtension(options: {
       if (!word) return false;
 
       event.preventDefault();
-      view.dispatch({ effects: setCard.of({ pos: word.from, card: { name: word.name, loading: true, truncated: false, matches: [] } }) });
+      view.dispatch({ effects: setCard.of({ pos: word.from, card: { name: word.name, loading: true, truncated: false, matches: [], failed: false } }) });
 
       void options.lookup(word.name, word.receiver).then((card) => {
         if (view.state.field(cardField, false) === undefined) return;
@@ -1494,6 +1494,7 @@ function referenceExtension(options: {
                   loading: false,
                   truncated: result.truncated,
                   matches: result.matches,
+                  failed: !result.ok,
                 };
               },
               onJump: (match) => jumpRef.current(match),
@@ -1516,7 +1517,7 @@ function referenceExtension(options: {
               currentPath: activeFileRef.current,
               receiver,
             });
-            return { name, loading: false, truncated: result.truncated, matches: result.matches };
+            return { name, loading: false, truncated: result.truncated, matches: result.matches, failed: !result.ok };
           },
           onJump: (match) => jumpRef.current(match),
         }),
