@@ -222,6 +222,11 @@ declare global {
         sync: (panes: Array<Record<string, unknown>>) => void;
         attachBrowser: (tabId: string, webContentsId: number) => void;
       };
+      browser: {
+        onOpenUrl: (
+          handler: (payload: { tabId: string; url: string }) => void,
+        ) => () => void;
+      };
       clipboard: {
         read: () => Promise<string>;
         write: (text: string) => Promise<boolean>;

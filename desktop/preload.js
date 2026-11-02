@@ -124,6 +124,10 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.send('panes:attach-browser', tabId, webContentsId),
   },
 
+  browser: {
+    onOpenUrl: (handler) => subscribe('browser:open-url', handler),
+  },
+
   clipboard: {
     read: () => invoke('clipboard:read'),
     write: (text) => invoke('clipboard:write', text),

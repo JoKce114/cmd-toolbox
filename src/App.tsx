@@ -1578,7 +1578,7 @@ export default function App() {
   }, [groupsByKey, tabsByGroup]);
 
   const createBrowser = useCallback(
-    (group: Group) => {
+    (group: Group, url = 'about:blank') => {
       if (!group.exists) {
         pushToast('项目目录不存在，请先编辑项目路径', 'error');
         return;
@@ -1596,7 +1596,7 @@ export default function App() {
         descriptor: '浏览器',
         custom: false,
         cwd: group.path,
-        url: 'about:blank',
+        url,
         exited: false,
       };
       applyTabs({ ...tabsRef.current, [group.key]: insertTabIntoList(groupTabs, tab, tabGroupId) });
@@ -1616,6 +1616,27 @@ export default function App() {
     },
     [applyTabs, inheritedTabGroupId, pushToast],
   );
+
+  // 网页里的 target="_blank" 在主进程被拦下后转成新页签：沿用发起请求的页签
+  // 所在的项目和标签组，不把用户弹到别的项目里
+  const createBrowserRef = useRef(createBrowser);
+  createBrowserRef.current = createBrowser;
+  const groupsByKeyRef = useRef(groupsByKey);
+  groupsByKeyRef.current = groupsByKey;
+
+  useEffect(() => {
+    const bridge = window.api?.browser;
+    if (!bridge) return;
+    return bridge.onOpenUrl(({ tabId, url }) => {
+      const source = Object.values(tabsRef.current)
+        .flat()
+        .find((tab) => tab.id === tabId);
+      if (!source) return;
+      const group = groupsByKeyRef.current.get(source.groupKey);
+      if (!group) return;
+      createBrowserRef.current(group, url);
+    });
+  }, []);
 
   const setTabDescriptor = useCallback(
     (groupKey: string, tabId: string, descriptor: string) => {

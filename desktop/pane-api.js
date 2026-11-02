@@ -13,6 +13,9 @@ let port = 0;
 let panes = [];
 const guests = new Map();
 let getTerminalOutput = () => '';
+// 网页里 target="_blank" / window.open 的去向由主进程决定，这里只负责把
+// 发起请求的页签和地址转出去
+let openUrlInNewTab = () => {};
 
 function json(res, status, payload) {
   const body = Buffer.from(JSON.stringify(payload), 'utf8');
@@ -476,6 +479,9 @@ function start(options) {
   if (typeof options.getTerminalOutput === 'function') {
     getTerminalOutput = options.getTerminalOutput;
   }
+  if (typeof options.openUrlInNewTab === 'function') {
+    openUrlInNewTab = options.openUrlInNewTab;
+  }
   const dataDir = options.dataDir || os.tmpdir();
   token = loadToken(dataDir);
   server = http.createServer(async (req, res) => {
@@ -551,6 +557,7 @@ function attachBrowser(tabId, webContentsId) {
 // 焦点落在网页内部时，按键只在 guest 渲染进程里，应用收不到，
 // 所以刷新快捷键必须在主进程接管。绑定时机不能依赖渲染进程的 attach 回调
 // （did-attach 和 useEffect 有竞态），改由 web-contents-created 统一挂。
+// 弹窗拦截同理挂在这里，避免网页先弹出窗口再被我们补救。
 const reloadBound = new Set();
 
 function bindBrowserKeys(contents) {
@@ -567,6 +574,16 @@ function bindBrowserKeys(contents) {
     event.preventDefault();
     if (input.shift) contents.reloadIgnoringCache();
     else contents.reload();
+  });
+
+  // 一律 deny：真正的弹窗交给主进程转成新的浏览器页签，绝不让 Electron 自己开窗口
+  contents.setWindowOpenHandler(({ url }) => {
+    const target = String(url || '');
+    if (target) {
+      const owner = [...guests.entries()].find(([, guestId]) => guestId === id);
+      if (owner) openUrlInNewTab(owner[0], target);
+    }
+    return { action: 'deny' };
   });
 
   contents.once('destroyed', () => reloadBound.delete(id));

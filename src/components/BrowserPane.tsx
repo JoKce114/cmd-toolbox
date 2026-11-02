@@ -121,10 +121,12 @@ export function BrowserPane({
     };
     const handleAttach = () => {
       try {
+        // getWebContentsId() 在 dom-ready 之前会抛错；did-attach 时还太早，
+        // 吞掉异常会导致主进程拿不到 tabId → webContentsId 的映射
         window.api.panes.attachBrowser(tab.id, view.getWebContentsId());
         syncDeviceToView(view, deviceRef.current);
       } catch {
-        // guest not ready
+        // guest 还没就绪，等 dom-ready
       }
     };
 
@@ -133,12 +135,13 @@ export function BrowserPane({
     view.addEventListener('did-start-loading', handleStart);
     view.addEventListener('did-stop-loading', handleStop);
     view.addEventListener('did-fail-load', handleFail);
-    view.addEventListener('did-attach', handleAttach);
+    // did-attach 时 guest 还没 ready，dom-ready 才是 getWebContentsId() 可用的时机
+    view.addEventListener('dom-ready', handleAttach);
     if (typeof view.getWebContentsId === 'function') {
       try {
         handleAttach();
       } catch {
-        // wait for did-attach
+        // wait for dom-ready
       }
     }
     return () => {
@@ -147,7 +150,7 @@ export function BrowserPane({
       view.removeEventListener('did-start-loading', handleStart);
       view.removeEventListener('did-stop-loading', handleStop);
       view.removeEventListener('did-fail-load', handleFail);
-      view.removeEventListener('did-attach', handleAttach);
+      view.removeEventListener('dom-ready', handleAttach);
     };
   }, [tab.id]);
 
@@ -482,6 +485,11 @@ export function BrowserPane({
           className="browser-view"
           src={initialSrc.current}
           partition={`persist:cmd-toolbox-browser:${tab.groupKey}`}
+          // 不开这个，网页里的 target="_blank" / window.open 会被 Electron 静默丢弃。
+          // 真正弹不弹由主进程的 setWindowOpenHandler 决定，见 pane-api.js。
+          // 类型声明只认布尔值，但 React 会把布尔值从自定义元素上丢掉（属性根本
+          // 不会出现在 DOM 里），所以运行时必须传字符串
+          allowpopups={'true' as unknown as boolean}
           webpreferences="contextIsolation=yes, nodeIntegration=no, sandbox=yes"
         />
       </div>

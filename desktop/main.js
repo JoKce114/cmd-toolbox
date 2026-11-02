@@ -539,6 +539,17 @@ if (!hasLock) {
     const mcp = await paneApi.start({
       dataDir: app.getPath('userData'),
       getTerminalOutput: (sessionId) => ptyHost.getLastOutput(sessionId),
+      // 网页里的 target="_blank"：http(s) 在同一个项目里开新的浏览器页签，
+      // mailto 交给系统，其余丢弃
+      openUrlInNewTab: (tabId, url) => {
+        const target = String(url || '');
+        if (/^mailto:/i.test(target)) {
+          void shell.openExternal(target);
+          return;
+        }
+        if (!validExternalUrl(target)) return;
+        send('browser:open-url', { tabId, url: target });
+      },
     });
     ptyHost.setExtraEnv({
       CMDTOOLBOX_MCP_URL: mcp.url,

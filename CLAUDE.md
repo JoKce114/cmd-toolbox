@@ -182,6 +182,7 @@ node tests/git-panel.mjs
 node tests/update-notify.mjs
 node tests/smoke.mjs
 node tests/browser-device.mjs    # F5 刷新与移动端模拟
+node tests/browser-popup.mjs     # 内置浏览器 target="_blank" / window.open 开新页签
 node tests/tab-status.mjs        # AI 页签状态灯与未读
 node tests/tab-groups.mjs        # 标签组：建组/改名/改色/折叠/拖拽/重启恢复
 node tests/editor-modules.mjs    # 压缩、语法诊断、外部改动自动重载
@@ -282,6 +283,17 @@ node tests/device-emulation-probe.mjs
   应用层收不到。绑定放在 `app.on('web-contents-created')` 里按
   `getType() === 'webview'` 判断，**不要**依赖渲染进程的 `did-attach` →
   `panes:attach-browser` 时序（实测经常抢不到，导致监听挂不上）。
+- **网页里的 `target="_blank"` / `window.open` 靠 `allowpopups` 属性 + 主进程拦截**：
+  `BrowserPane` 的 `<webview>` 必须带 `allowpopups`，否则请求被 Electron 静默丢弃。
+  React 会把布尔值从自定义元素上丢掉（属性根本不进 DOM），所以只能写
+  `allowpopups={'true' as unknown as boolean}`——类型声明只认布尔值。
+  真正弹不弹由 `pane-api.js` 的 `bindBrowserKeys()` 里 `setWindowOpenHandler` 决定：
+  一律 `deny`，再按 webContentsId 反查 tabId 通知主进程，由 `App.tsx` 在**同一个项目**
+  里开新浏览器页签。`main.js` 只放行 http/https，`mailto:` 交给系统。
+- **`getWebContentsId()` 必须等到 `dom-ready`**。`did-attach` 时调用会抛
+  「WebView must be attached to the DOM and the dom-ready event emitted」，异常被
+  吞掉后主进程的 `guests` 映射永远是空的——表现为新窗口打不开，且没有任何报错。
+  这也是 `panes:attach-browser` 曾经形同虚设的原因。
 - 设备模拟与 `setZoomFactor` 互斥：进入模拟会把缩放归零，退出时还原。
 
 ## 标签组
