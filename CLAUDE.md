@@ -97,12 +97,18 @@ Windows Defender 实时保护也是关闭的（`RealTimeProtectionEnabled: False
 - `node-pty`
 - `php-parser` / `acorn` / `acorn-jsx`（`desktop/symbols.js` 用）
 
-放进 devDependencies 的后果：只有 `iconv-lite` 在模块顶部 `require`，打包后
-**启动即崩**，报 `Cannot find module 'xxx'`。`electron-updater` / `node-pty`
-是懒加载且有 `try/catch` 兜底，表现为对应功能静默不可用；
-`php-parser` / `acorn` / `acorn-jsx` 也是懒 `require`（`loadPhpEngine()` /
-`parseJsSymbols()` 内部），**第一次点击符号时**才报错——PHP 路径直接抛出，
-JS 路径被 `catch` 吞成空结果，更难发现。
+放进 devDependencies 的后果分三类：
+
+- **启动即崩**：`iconv-lite` 在模块顶部 `require`（`desktop/file-api.js` 第 4 行，
+  又被 `desktop/main.js` 启动时同步加载），打包后报 `Cannot find module 'iconv-lite'`。
+- **可见降级**：`node-pty` 加载失败会退回管道模式，并在终端打印黄色提示
+  （`desktop/pty-host.js` 的 `createPipeSession` 分支）；`electron-updater`
+  加载失败时更新面板显示 unsupported 文案（`desktop/updater.js` 的 `loadUpdater`）。
+- **静默返回空（JS）/ 查询失败（PHP）**：`php-parser` / `acorn` / `acorn-jsx`
+  在 `desktop/symbols.js` 里懒 `require`（`loadPhpEngine()` / `parseJsSymbols()`），
+  **第一次点击符号时**才出错。PHP 路径的 `require` 在 `try` 外，这次查询直接失败
+  （卡片提示「暂时无法查询定义」）；JS 路径被 `catch` 吞成空结果，表现成
+  「没有找到定义」，更难发现。
 
 `npmRebuild: false`，不要打开——node-pty 在 CI 上预编译有风险。
 node-pty 1.1.0 用的是 node-addon-api（Node-API，ABI 稳定），已在 Electron 45
@@ -472,7 +478,8 @@ node tests/device-emulation-probe.mjs
 ## 不要做的事
 
 - 不要恢复已删除的本地启动器
-- 不要把 `electron-updater` / `iconv-lite` / `node-pty` 挪进 devDependencies
+- 不要把 `electron-updater` / `iconv-lite` / `node-pty` / `php-parser` / `acorn` /
+  `acorn-jsx` 挪进 devDependencies
 - 不要打开 `npmRebuild`
 - 不要在 `dist` 脚本里去掉 `--publish never`（防止环境里有 `GH_TOKEN` 时误上传）
 - 不要为了绕过索引器的文件锁去改打包配置或加 `--no-verify` 之类的开关
