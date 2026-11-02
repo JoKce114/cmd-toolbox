@@ -4876,6 +4876,14 @@ p {
   border-right: 0;
 }
 
+/* 搜索面板原来并排放在左栏，flex-basis 是固定宽度；现在改成列向 flex 的
+   子项后它会变成高度（只有 260px，下面一大片空白），还会和分界线叠成双线。 */
+.editor-sidebar-section.is-grow .search-panel {
+  flex: 1;
+  min-height: 0;
+  border-right: 0;
+}
+
 /* 「打开的编辑器」列表：不参与 flex 分配，自己滚动 */
 .open-editors-list {
   min-height: 0;
