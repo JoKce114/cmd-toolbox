@@ -224,6 +224,11 @@ declare global {
           content?: string,
         ) => Promise<{ ok: boolean }>;
         createDir: (projectPath: string, relPath: string) => Promise<{ ok: boolean }>;
+        copy: (
+          projectPath: string,
+          fromRel: string,
+          toRel: string,
+        ) => Promise<{ ok: boolean }>;
         move: (
           projectPath: string,
           fromRel: string,

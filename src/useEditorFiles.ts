@@ -318,19 +318,33 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
     [autoMinify, autoMinifyIfUnchangedOnDisk, onError, patch],
   );
 
-  const close = useCallback((relPath: string) => {
-    touchedRef.current.delete(relPath);
+  // 一次关掉多个页签（删除目录时目录内的页签要一起关）。
+  // 必须批量处理：逐个 close() 时 setActivePath 的兜底读的是尚未更新的
+  // filesRef，可能把激活页签落到另一个同样已被删掉的路径上。
+  const closeMany = useCallback((relPaths: string[]) => {
+    const doomed = new Set(relPaths);
+    if (doomed.size === 0) return;
+    doomed.forEach((relPath) => touchedRef.current.delete(relPath));
     setFiles((previous) => {
       const next = { ...previous };
-      delete next[relPath];
+      doomed.forEach((relPath) => {
+        delete next[relPath];
+      });
       return next;
     });
     setActivePath((current) => {
-      if (current !== relPath) return current;
-      const remaining = Object.keys(filesRef.current).filter((item) => item !== relPath);
+      if (!doomed.has(current)) return current;
+      const remaining = Object.keys(filesRef.current).filter((item) => !doomed.has(item));
       return remaining[remaining.length - 1] || '';
     });
   }, []);
+
+  const close = useCallback(
+    (relPath: string) => {
+      closeMany([relPath]);
+    },
+    [closeMany],
+  );
 
   const closeAll = useCallback(() => {
     setFiles({});
@@ -400,6 +414,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
     update,
     save,
     close,
+    closeMany,
     closeAll,
     rename,
     setActivePath,

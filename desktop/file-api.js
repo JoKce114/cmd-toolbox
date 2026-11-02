@@ -235,6 +235,24 @@ async function createDir(projectPath, relPath) {
   return { ok: true };
 }
 
+// 复制。目标已存在时报错，源文件保持原位。
+// 用 fsp.cp 而不是 read+write：目录要整棵递归复制，也要保留二进制内容。
+async function copy(projectPath, fromRel, toRel) {
+  const from = resolveWithin(projectPath, fromRel);
+  const to = resolveWithin(projectPath, toRel);
+  try {
+    await fsp.lstat(to);
+    throw new Error('目标位置已存在同名项');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  await fsp.mkdir(path.dirname(to), { recursive: true });
+  // force: false + errorOnExist: true：即使 lstat 与 cp 之间有竞态，
+  // 也绝不允许覆盖目标位置已有的内容。
+  await fsp.cp(from, to, { recursive: true, errorOnExist: true, force: false });
+  return { ok: true };
+}
+
 // 移动/重命名。目标已存在时报错——粘贴和重命名都不该覆盖现有内容。
 async function move(projectPath, fromRel, toRel) {
   const from = resolveWithin(projectPath, fromRel);
@@ -246,7 +264,7 @@ async function move(projectPath, fromRel, toRel) {
   if (!caseOnly) {
     try {
       await fsp.lstat(to);
-      throw new Error('目标位置已有同名项');
+      throw new Error('目标位置已存在同名项');
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
@@ -379,6 +397,7 @@ module.exports = {
   search,
   createFile,
   createDir,
+  copy,
   move,
   trash,
 };

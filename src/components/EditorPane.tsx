@@ -82,6 +82,8 @@ export function EditorPane({
     update,
     save,
     close,
+    closeMany,
+    rename,
     setActivePath,
   } = useEditorFiles(group, onError);
 
@@ -291,19 +293,39 @@ export function EditorPane({
     [group.path, onToast, open],
   );
 
+  // 文件树完成重命名 / 剪切移动后，页签必须跟着换到新路径，
+  // 否则继续编辑再保存会报 ENOENT。目录被移动时其下已打开的页签也要一起跟随。
+  const handleAfterRename = useCallback(
+    (fromRel: string, toRel: string) => {
+      if (files[fromRel]) {
+        rename(fromRel, toRel);
+        return;
+      }
+      for (const relPath of Object.keys(files)) {
+        if (relPath.startsWith(`${fromRel}/`)) {
+          rename(relPath, `${toRel}${relPath.slice(fromRel.length)}`);
+        }
+      }
+    },
+    [files, rename],
+  );
+
   const confirmDelete = useCallback(async () => {
     const relPath = pendingDelete;
     if (!relPath) return;
     setPendingDelete(null);
+    // 删除目录时，目录里已打开的页签也要一并关掉，否则会指向不存在的路径
+    const doomed = openPaths.filter(
+      (openPath) => openPath === relPath || openPath.startsWith(`${relPath}/`),
+    );
+    if (doomed.length > 0) closeMany(doomed);
     try {
-      // 先关掉指向该文件的页签，否则会留下指向不存在文件的编辑器
-      if (files[relPath]) close(relPath);
       await window.api.files.trash(group.path, relPath);
       onToast(`已删除 ${relPath}`, 'success');
     } catch (error) {
       onToast(toErrorMessage(error), 'error');
     }
-  }, [pendingDelete, files, close, group.path, onToast]);
+  }, [pendingDelete, openPaths, closeMany, group.path, onToast]);
 
   const requestClose = () => {
     if (hasDirty) {
@@ -464,9 +486,11 @@ export function EditorPane({
             onMinify={runMinify}
             canMinify={canMinify}
             onError={onError}
+            onToast={onToast}
             clip={fileClip}
             onClipChange={setFileClip}
             onRequestDelete={setPendingDelete}
+            onAfterRename={handleAfterRename}
           />
         )}
         <div className="editor-main">

@@ -77,6 +77,8 @@ try {
   for (const [label, fn] of [
     ['createFile ../evil', () => fileApi.createFile(dir, '../evil.txt', 'x')],
     ['createDir ../evil', () => fileApi.createDir(dir, '../evildir')],
+    ['copy 源路径越界', () => fileApi.copy(dir, '../evil.txt', 'copy-ok.txt')],
+    ['copy 目标越界', () => fileApi.copy(dir, 'dst.txt', '../evil.txt')],
     ['move 源路径越界', () => fileApi.move(dir, '../evil.txt', 'ok.txt')],
     ['move 目标越界', () => fileApi.move(dir, 'dst.txt', '../evil.txt')],
     ['trash 越界', () => fileApi.trash(dir, '../evil.txt', async () => {})],
@@ -125,6 +127,42 @@ try {
   }
   assert(dirTarget, '目标为目录时移动报错');
   assert(existsSync(join(dir, 'file-for-dir.txt')), '源文件保持原位');
+
+  console.log('10. copy 文件');
+  writeFileSync(join(dir, 'copy-src.txt'), 'COPY_DATA', 'utf8');
+  await fileApi.copy(dir, 'copy-src.txt', 'copy-dst.txt');
+  assert(existsSync(join(dir, 'copy-src.txt')), '复制后源文件仍在');
+  assert(readFileSync(join(dir, 'copy-dst.txt'), 'utf8') === 'COPY_DATA', '副本内容一致');
+  assert(readFileSync(join(dir, 'copy-src.txt'), 'utf8') === 'COPY_DATA', '源文件内容不变');
+
+  console.log('11. copy 目录（含嵌套文件）');
+  mkdirSync(join(dir, 'copy-dir/nested'), { recursive: true });
+  writeFileSync(join(dir, 'copy-dir/a.txt'), 'A', 'utf8');
+  writeFileSync(join(dir, 'copy-dir/nested/b.txt'), 'B', 'utf8');
+  await fileApi.copy(dir, 'copy-dir', 'copied-dir');
+  assert(existsSync(join(dir, 'copy-dir/a.txt')), '目录复制后源目录仍在');
+  assert(readFileSync(join(dir, 'copied-dir/a.txt'), 'utf8') === 'A', '目录内文件已复制');
+  assert(
+    readFileSync(join(dir, 'copied-dir/nested/b.txt'), 'utf8') === 'B',
+    '嵌套文件已复制',
+  );
+
+  console.log('12. copy 目标已存在时报错');
+  writeFileSync(join(dir, 'copy-occupied.txt'), 'KEEP', 'utf8');
+  writeFileSync(join(dir, 'copy-blocked.txt'), 'BLOCKED', 'utf8');
+  let copyDup = false;
+  try {
+    await fileApi.copy(dir, 'copy-blocked.txt', 'copy-occupied.txt');
+  } catch {
+    copyDup = true;
+  }
+  assert(copyDup, '目标已存在时复制报错');
+  assert(readFileSync(join(dir, 'copy-occupied.txt'), 'utf8') === 'KEEP', '目标文件未被覆盖');
+  assert(
+    readFileSync(join(dir, 'copy-blocked.txt'), 'utf8') === 'BLOCKED',
+    '源文件未被破坏',
+  );
+  assert(existsSync(join(dir, 'copy-blocked.txt')), '冲突时源文件仍在原位');
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

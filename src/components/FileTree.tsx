@@ -17,6 +17,7 @@ import type { FileClip } from '../fileClipboard';
 import type { FileEntry, Group, MenuEntry, MenuState } from '../types';
 import { Modal } from './Modal';
 import { PopupMenu } from './PopupMenu';
+import type { ToastKind } from './Toast';
 import { minifiedName } from '../modules/minify';
 
 type FileTreeProps = {
@@ -26,9 +27,12 @@ type FileTreeProps = {
   onMinify: (relPath: string) => void;
   canMinify: (relPath: string) => boolean;
   onError: (message: string) => void;
+  onToast: (message: string, kind?: ToastKind) => void;
   clip: FileClip | null;
   onClipChange: (clip: FileClip | null) => void;
   onRequestDelete: (relPath: string) => void;
+  // 文件操作只负责改磁盘；页签路径属于编辑器状态，由上层同步。
+  onAfterRename: (fromRel: string, toRel: string) => void;
 };
 
 type DirState = Record<string, FileEntry[] | undefined>;
@@ -66,9 +70,11 @@ export function FileTree({
   onMinify,
   canMinify,
   onError,
+  onToast,
   clip,
   onClipChange,
   onRequestDelete,
+  onAfterRename,
 }: FileTreeProps) {
   const [children, setChildren] = useState<DirState>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']));
@@ -173,10 +179,11 @@ export function FileTree({
       }
       const toRel = relDir ? `${relDir}/${name}` : name;
       await window.api.files.move(group.path, relPath, toRel);
+      onAfterRename(relPath, toRel);
       setPendingRename(null);
       await loadDir(relDir);
     },
-    [group.path, loadDir, pendingRename],
+    [group.path, loadDir, onAfterRename, pendingRename],
   );
 
   useEffect(() => {
@@ -240,13 +247,20 @@ export function FileTree({
     async (targetDir: string) => {
       const check = canPaste(clip, group.path);
       if (!clip || !check.ok) {
-        onError(check.ok ? '剪贴板为空' : check.reason);
+        onToast(check.ok ? '剪贴板为空' : check.reason, 'error');
         return;
       }
       const toRel = pasteTargetDir(clip, targetDir);
       try {
-        await window.api.files.move(group.path, clip.relPath, toRel);
-        if (clip.kind === 'cut') onClipChange(null);
+        if (clip.kind === 'copy') {
+          // 复制粘贴后保留剪贴板：用户可能要把同一项粘贴到多个目录
+          await window.api.files.copy(group.path, clip.relPath, toRel);
+        } else {
+          await window.api.files.move(group.path, clip.relPath, toRel);
+          onClipChange(null);
+          // 源路径已经不存在了，已打开的页签必须跟着改到新路径
+          onAfterRename(clip.relPath, toRel);
+        }
         await loadDir(targetDir);
         setExpanded((previous) => new Set(previous).add(targetDir));
         // 目录被移动后原目录的内容也失效了，整棵树重列一次最稳
@@ -255,7 +269,7 @@ export function FileTree({
         onError(toErrorMessage(error));
       }
     },
-    [clip, group.path, loadDir, onClipChange, onError, reloadAll],
+    [clip, group.path, loadDir, onAfterRename, onClipChange, onError, onToast, reloadAll],
   );
 
   // 绝对路径要转成 Windows 分隔符，相对路径保持树里的 / 写法。
@@ -266,12 +280,12 @@ export function FileTree({
       const absolute = `${group.path}${sep}${relPath.split('/').join(sep)}`;
       try {
         await window.api.clipboard.write(relative ? relPath : absolute);
-        onError(`已复制${relative ? '相对' : ''}路径`);
+        onToast(`已复制${relative ? '相对' : ''}路径`, 'success');
       } catch (error) {
         onError(toErrorMessage(error));
       }
     },
-    [group.path, onError],
+    [group.path, onError, onToast],
   );
 
   const requestRename = useCallback((entry: FileEntry) => {
@@ -282,12 +296,17 @@ export function FileTree({
     });
   }, []);
 
+  // 跨项目时菜单项保持可点，点击后 toast 说明原因（spec 要求给提示而不是静默置灰）。
+  // 剪贴板为空、项目路径异常等情况仍置灰，因为点了也没有有意义的反馈。
+  const pasteCheck = canPaste(clip, group.path);
+  const pasteDisabled =
+    !clip || (!pasteCheck.ok && pasteCheck.reason !== '不能跨项目粘贴文件');
+
   // 右键菜单按目标分两套：文件/文件夹一套，空白处一套。
   const openRowMenu = (event: React.MouseEvent, entry: FileEntry) => {
     event.preventDefault();
     event.stopPropagation();
     const dir = entry.isDir ? entry.relPath : ancestorsOf(entry.relPath).pop() || '';
-    const paste = canPaste(clip, group.path);
 
     const items: MenuEntry[] = [
       {
@@ -321,7 +340,7 @@ export function FileTree({
         type: 'item',
         id: 'paste',
         label: '粘贴',
-        disabled: !paste.ok,
+        disabled: pasteDisabled,
         onSelect: () => void pasteInto(dir),
       },
       { type: 'separator', id: 'sep-edit' },
@@ -371,7 +390,6 @@ export function FileTree({
   const openBlankMenu = (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    const paste = canPaste(clip, group.path);
     setMenu({
       x: event.clientX,
       y: event.clientY,
@@ -382,7 +400,7 @@ export function FileTree({
           type: 'item',
           id: 'blank-paste',
           label: '粘贴',
-          disabled: !paste.ok,
+          disabled: pasteDisabled,
           onSelect: () => void pasteInto(''),
         },
         { type: 'separator', id: 'blank-sep' },

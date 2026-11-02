@@ -119,6 +119,7 @@ contextBridge.exposeInMainWorld('api', {
     createFile: (projectPath, relPath, content) =>
       invoke('fs:create-file', projectPath, relPath, content),
     createDir: (projectPath, relPath) => invoke('fs:create-dir', projectPath, relPath),
+    copy: (projectPath, fromRel, toRel) => invoke('fs:copy', projectPath, fromRel, toRel),
     move: (projectPath, fromRel, toRel) => invoke('fs:move', projectPath, fromRel, toRel),
     trash: (projectPath, relPath) => invoke('fs:trash', projectPath, relPath),
   },
