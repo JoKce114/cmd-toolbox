@@ -214,6 +214,57 @@ async function renameWithRetry(temp, target) {
   }
 }
 
+// 新建文件。用 'wx' 标志：目标已存在时抛 EEXIST，绝不覆盖用户现有文件。
+async function createFile(projectPath, relPath, content = '') {
+  const target = resolveWithin(projectPath, relPath);
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  const handle = await fsp.open(target, 'wx');
+  try {
+    await handle.writeFile(String(content ?? ''), 'utf8');
+  } finally {
+    await handle.close();
+  }
+  return { ok: true };
+}
+
+// 新建目录。不带 recursive：同名目录已存在时要报错，而不是静默通过。
+async function createDir(projectPath, relPath) {
+  const target = resolveWithin(projectPath, relPath);
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await fsp.mkdir(target);
+  return { ok: true };
+}
+
+// 移动/重命名。目标已存在时报错——粘贴和重命名都不该覆盖现有内容。
+async function move(projectPath, fromRel, toRel) {
+  const from = resolveWithin(projectPath, fromRel);
+  const to = resolveWithin(projectPath, toRel);
+  try {
+    await fsp.lstat(to);
+    throw new Error('目标位置已有同名项');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  await fsp.mkdir(path.dirname(to), { recursive: true });
+  await fsp.rename(from, to);
+  return { ok: true };
+}
+
+// 删除到系统回收站，用户可恢复。
+// shell 可注入：单测不碰真实回收站，只验证调用参数。
+// 注入值可以是 shell 对象，也可以直接是 trashItem 函数。
+// 默认值必须懒求值：纯 Node 环境下 require('electron') 拿到的是可执行文件路径字符串。
+async function trash(projectPath, relPath, shell) {
+  const target = resolveWithin(projectPath, relPath);
+  const impl = shell || require('electron').shell;
+  const trashItem = typeof impl === 'function' ? impl : impl && impl.trashItem;
+  if (typeof trashItem !== 'function') {
+    throw new Error('当前环境不支持删除到回收站');
+  }
+  await trashItem.call(impl, target);
+  return { ok: true };
+}
+
 const SEARCH_MAX_FILES = 4000;
 const SEARCH_MAX_MATCHES = 500;
 const SEARCH_MAX_FILE_BYTES = 1024 * 1024;
@@ -293,4 +344,16 @@ async function search(projectPath, query, options = {}) {
   return { matches, truncated, scanned };
 }
 
-module.exports = { list, read, write, stat, writeMinified, detectEncoding, search };
+module.exports = {
+  list,
+  read,
+  write,
+  stat,
+  writeMinified,
+  detectEncoding,
+  search,
+  createFile,
+  createDir,
+  move,
+  trash,
+};
