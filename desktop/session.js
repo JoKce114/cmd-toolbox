@@ -33,27 +33,38 @@ function emptySession() {
     focusSideByGroup: {},
     splitRatioByGroup: {},
     untitledContents: {},
+    untitledDropped: [],
   };
 }
 
 // 空白窗口没有磁盘文件可读，内容只能跟着会话一起存。
-// 单个窗口上限 256KB，总数上限 2MB：会话文件不是用来存大文件的地方。
-// 超限的条目静默跳过——这里抛错会让整次会话保存失败，连页签都恢复不了。
+// 限额按字符数（UTF-16 code unit）计，不是字节数：单个窗口 256K 字符、
+// 总量 2M 字符。中文按 1 个字符算，实际落盘字节会更多，但会话文件仍很小。
+// 超限的条目跳过——这里抛错会让整次会话保存失败，连页签都恢复不了。
+// 被跳过的键单独记下来（untitledDropped）：只写内容会让恢复侧完全不知道
+// 这个窗口存在，编号重排时可能把另一个窗口的内容顶到它的编号上。
 const UNTITLED_MAX_CHARS = 256 * 1024;
 const UNTITLED_TOTAL_MAX_CHARS = 2 * 1024 * 1024;
 
 function normalizeUntitledContents(value) {
-  if (!value || typeof value !== 'object') return {};
-  const out = {};
+  if (!value || typeof value !== 'object') return { contents: {}, dropped: [] };
+  const contents = {};
+  const dropped = [];
   let total = 0;
   for (const [key, content] of Object.entries(value)) {
     if (typeof key !== 'string' || typeof content !== 'string') continue;
-    if (content.length > UNTITLED_MAX_CHARS) continue;
-    if (total + content.length > UNTITLED_TOTAL_MAX_CHARS) break;
-    out[key] = content;
+    if (content.length > UNTITLED_MAX_CHARS) {
+      dropped.push(key);
+      continue;
+    }
+    if (total + content.length > UNTITLED_TOTAL_MAX_CHARS) {
+      dropped.push(key);
+      continue;
+    }
+    contents[key] = content;
     total += content.length;
   }
-  return out;
+  return { contents, dropped };
 }
 
 function normalizeDevice(value) {
@@ -215,6 +226,19 @@ function normalizeSession(raw) {
     if (!known || !known.has(tab.tabGroupId)) tab.tabGroupId = '';
   }
 
+  const untitled = normalizeUntitledContents(raw.untitledContents);
+  // 上一次保存记下的「超限未落盘」键要继续传给恢复侧一次：
+  // 内容已经不在 untitledContents 里，只看内容会以为这个窗口从没存在过。
+  // 恢复后窗口变成空窗口，下一次保存会自然把它清掉。
+  const untitledDropped = new Set(untitled.dropped);
+  if (Array.isArray(raw.untitledDropped)) {
+    for (const key of raw.untitledDropped) {
+      if (typeof key !== 'string') continue;
+      if (Object.prototype.hasOwnProperty.call(untitled.contents, key)) continue;
+      untitledDropped.add(key);
+    }
+  }
+
   return {
     version: VERSION,
     activeGroupKey,
@@ -226,7 +250,8 @@ function normalizeSession(raw) {
     rightActiveByGroup,
     splitRatioByGroup,
     focusSideByGroup,
-    untitledContents: normalizeUntitledContents(raw.untitledContents),
+    untitledContents: untitled.contents,
+    untitledDropped: [...untitledDropped],
   };
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Save, Search, X } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import { buildTextPatch } from '../diffFromText';
@@ -74,6 +74,8 @@ export type EditorPaneProps = {
   onUntitledContentsChange?: (contents: Record<string, string>) => void;
   // 会话恢复时带下来的空白窗口内容（同样以虚拟路径为键）
   untitledRestore?: Record<string, string>;
+  // 会话里因超限被丢弃的空白窗口：恢复成空窗口并提示，但编号要保留
+  untitledDropped?: string[];
 };
 
 export function EditorPane({
@@ -101,6 +103,7 @@ export function EditorPane({
   onFilePathChange,
   onUntitledContentsChange,
   untitledRestore,
+  untitledDropped,
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const {
@@ -370,6 +373,10 @@ export function EditorPane({
   const rootRef = useRef<HTMLElement>(null);
   const fileRef = useRef(file);
   fileRef.current = file;
+  // Ctrl+W 的 keydown effect 只在挂载时注册一次，闭包里的 files 会过期。
+  // 关页签前要读最新的状态（dirty / sessionOnly），所以走 ref。
+  const filesRef = useRef(files);
+  filesRef.current = files;
   const activePathRef = useRef(activePath);
   activePathRef.current = activePath;
 
@@ -384,6 +391,7 @@ export function EditorPane({
   onUntitledContentsChangeRef.current = onUntitledContentsChange;
   // 只取挂载时的首值：恢复只在挂载早期做一次，之后父组件传什么都不该再灌一遍
   const untitledRestoreRef = useRef(untitledRestore);
+  const untitledDroppedRef = useRef(untitledDropped);
   const restoredRef = useRef(false);
 
   // 页签的 filePath 会变（上层用同一个编辑器页签顶替新文件），
@@ -396,32 +404,54 @@ export function EditorPane({
   useLayoutEffect(() => {
     if (restoredRef.current) return;
     restoredRef.current = true;
-    const saved = untitledRestoreRef.current;
-    if (!saved) return;
-    const entries = Object.entries(saved).filter(([relPath]) => isUntitledPath(relPath));
-    if (!entries.length) return;
+    const saved = untitledRestoreRef.current || {};
+    const entries = Object.entries(saved).filter(
+      ([relPath, content]) => isUntitledPath(relPath) && typeof content === 'string',
+    );
+    // 超限被丢弃的窗口只剩下编号。必须按空窗口恢复，并且把这些编号保留下来：
+    // 否则恢复的内容会被重排到该编号上，上层 filePath 再打开同一个编号时
+    // 用户看到的就是另一个窗口的内容。
+    const dropped = Array.from(
+      new Set((untitledDroppedRef.current || []).filter((relPath) => isUntitledPath(relPath))),
+    ).filter((relPath) => !Object.prototype.hasOwnProperty.call(saved, relPath));
+    if (!entries.length && !dropped.length) return;
 
+    const reserved = new Set(
+      dropped.map((relPath) => Number(relPath.slice(UNTITLED_PREFIX.length))),
+    );
     // 编号按最小可用值重新分配：会话里可能只剩 untitled://3，
     // 恢复成 Untitled-1 才符合「关掉的编号会被复用」的直觉。
-    const ordered = entries
-      .slice()
-      .sort(
-        ([left], [right]) =>
-          Number(left.slice(UNTITLED_PREFIX.length)) -
-          Number(right.slice(UNTITLED_PREFIX.length)),
-      );
+    // 分配时跳过被丢弃条目的编号，避免和它们的空窗口撞号。
+    const ordered = entries.slice().sort(
+      ([left], [right]) =>
+        Number(left.slice(UNTITLED_PREFIX.length)) -
+        Number(right.slice(UNTITLED_PREFIX.length)),
+    );
     const remapped = new Map<string, string>();
-    ordered.forEach(([oldPath], index) => remapped.set(oldPath, untitledPathFor(index + 1)));
-    restoreUntitled(
-      ordered.map(([oldPath, content]) => ({
+    let cursor = 1;
+    for (const [oldPath] of ordered) {
+      while (reserved.has(cursor)) cursor += 1;
+      remapped.set(oldPath, untitledPathFor(cursor));
+      cursor += 1;
+    }
+    restoreUntitled([
+      ...ordered.map(([oldPath, content]) => ({
         relPath: remapped.get(oldPath) as string,
         content,
       })),
-    );
+      // 被丢弃的窗口没有内容可保护，恢复成普通空窗口即可，不必弹关闭确认
+      ...dropped.map((relPath) => ({ relPath, content: '', sessionOnly: false })),
+    ]);
+
+    if (dropped.length) {
+      const names = dropped.map((relPath) => `「${displayNameFor(relPath)}」`).join('');
+      onToast(`${names}的内容超过会话存储上限，未能恢复`, 'error');
+    }
 
     const currentPath = tab.filePath || '';
     if (isUntitledPath(currentPath)) {
-      const mapped = remapped.get(currentPath);
+      const mapped =
+        remapped.get(currentPath) || (dropped.includes(currentPath) ? currentPath : '');
       if (mapped) {
         // 上层稍后会写回新编号，这里先把旧路径记成「已应用」，
         // 免得同步 filePath 的 effect 用旧编号再 open 一次空条目。
@@ -430,10 +460,10 @@ export function EditorPane({
         setActivePath(mapped);
       }
     } else if (!currentPath) {
-      const first = remapped.get(ordered[0][0]);
+      const first = remapped.get(ordered[0]?.[0] ?? '');
       if (first) setActivePath(first);
     }
-  }, [restoreUntitled, setActivePath, tab.filePath]);
+  }, [restoreUntitled, setActivePath, tab.filePath, onToast]);
 
   useEffect(() => {
     const next = tab.filePath || '';
@@ -442,13 +472,30 @@ export function EditorPane({
     void open(next);
   }, [tab.filePath, open]);
 
+  // 会话记录的路径已经不在编辑器里（空白窗口被关掉）时要同步给上层。
+  // 否则会话里仍留着旧虚拟路径，下次启动会照着它重新开出一个空窗口。
+  // 只处理虚拟路径：普通文件的 filePath 同步是既有行为，不在本次改动范围。
+  useEffect(() => {
+    const current = tab.filePath || '';
+    if (!isUntitledPath(current) || files[current]) return;
+    const next = activePath && files[activePath] ? activePath : '';
+    if (next === current) return;
+    appliedPathRef.current = next;
+    onFilePathChangeRef.current?.(next);
+  }, [activePath, files, tab.filePath]);
+
   // 空白窗口内容快照：只把「虚拟路径 + 内容」拼成原始字符串当依赖，
   // 普通文件每次按键都会换 files 对象，不能因此反复通知父组件。
   // 恢复 / 编辑 / 关闭空白窗口都会让这个字符串变化，其余情况 effect 不跑。
-  const untitledSnapshot = openPaths
-    .filter((relPath) => isUntitledPath(relPath))
-    .map((relPath) => `${relPath}\u0000${files[relPath]?.content ?? ''}`)
-    .join('\u0001');
+  // 拼接可能是 2MB 级别的，用 useMemo 避免菜单、拖拽这类无关渲染反复算一遍。
+  const untitledSnapshot = useMemo(
+    () =>
+      Object.keys(files)
+        .filter((relPath) => isUntitledPath(relPath))
+        .map((relPath) => `${relPath}\u0000${files[relPath]?.content ?? ''}`)
+        .join('\u0001'),
+    [files],
+  );
 
   useEffect(() => {
     const contents: Record<string, string> = {};
@@ -460,14 +507,18 @@ export function EditorPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [untitledSnapshot]);
 
+  const hasSessionOnly = openPaths.some((relPath) => Boolean(files[relPath].sessionOnly));
+
   useEffect(() => {
     const base = activePath ? displayNameFor(activePath) : '编辑器';
     onTitleChangeRef.current(`${group.name} · ${base}${hasDirty ? ' •' : ''}`);
   }, [activePath, hasDirty, group.name]);
 
   useEffect(() => {
-    onDirtyChangeRef.current(tab.id, hasDirty);
-  }, [tab.id, hasDirty]);
+    // sessionOnly 不算「未保存」（标题不显示 •），但关掉整个编辑器页签时
+    // 同样会永久丢内容，所以要把 App 的 dirty 守卫一起点亮。
+    onDirtyChangeRef.current(tab.id, hasDirty || hasSessionOnly);
+  }, [tab.id, hasDirty, hasSessionOnly]);
 
   useEffect(() => {
     setConflictCount(0);
@@ -563,8 +614,9 @@ export function EditorPane({
 
   const requestCloseTab = (relPath: string) => {
     if (!relPath) return;
-    const target = files[relPath];
-    if (target?.dirty) {
+    const target = filesRef.current[relPath];
+    // sessionOnly：内容只存在于会话里，关掉就永久丢失，必须确认
+    if (target?.dirty || target?.sessionOnly) {
       setPendingClose(relPath);
       return;
     }
@@ -715,10 +767,35 @@ export function EditorPane({
     return `「${relPath}」有未保存的修改，删除后不可恢复。确定删除到回收站吗？`;
   };
 
+  // 单个页签的关闭确认文案：sessionOnly 的条目要点明「只存在于会话」，
+  // 否则用户会把它当成普通空白窗口，确认框看起来像在问一个空文件。
+  const closeConfirmMessage = (relPath: string) => {
+    const name = displayNameFor(relPath);
+    if (files[relPath]?.sessionOnly) {
+      return `「${name}」的内容只存在于会话中，关闭后不可恢复。是否继续？`;
+    }
+    return `「${name}」有未保存的修改，关闭将丢失。是否继续？`;
+  };
+
   const requestClose = () => {
-    if (hasDirty) {
-      const names = openPaths.filter((item) => files[item].dirty).join('、');
-      const ok = window.confirm(`「${names}」有未保存的修改，关闭将丢失。是否继续？`);
+    const blocking = openPaths.filter(
+      (item) => files[item].dirty || files[item].sessionOnly,
+    );
+    if (blocking.length > 0) {
+      const dirtyNames = blocking
+        .filter((item) => files[item].dirty)
+        .map((item) => `「${displayNameFor(item)}」`)
+        .join('、');
+      const sessionNames = blocking
+        .filter((item) => !files[item].dirty && files[item].sessionOnly)
+        .map((item) => `「${displayNameFor(item)}」`)
+        .join('、');
+      const reasons: string[] = [];
+      if (dirtyNames) reasons.push(`${dirtyNames}有未保存的修改，关闭将丢失`);
+      if (sessionNames) {
+        reasons.push(`${sessionNames}的内容只存在于会话中，关闭后不可恢复`);
+      }
+      const ok = window.confirm(`${reasons.join('；')}。是否继续？`);
       if (!ok) return;
     }
     onClose(tab);
@@ -1008,9 +1085,7 @@ export function EditorPane({
       {pendingClose ? (
         <div className="modal-overlay" role="dialog" aria-modal="true">
           <div className="modal-card editor-confirm">
-            <p className="confirm-message">
-              「{pendingClose}」有未保存的修改，关闭将丢失。是否继续？
-            </p>
+            <p className="confirm-message">{closeConfirmMessage(pendingClose)}</p>
             <div className="modal-footer">
               <button
                 type="button"

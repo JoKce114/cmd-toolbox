@@ -19,6 +19,9 @@ export type EditorFileState = {
   loading: boolean;
   saving: boolean;
   dirty: boolean;
+  // 只存在于会话里、磁盘上没有副本的空白窗口。恢复出来的内容就是这个状态：
+  // 不算 dirty（启动时不该显示未保存标记），但关闭时必须确认，否则会话一清就永久丢失。
+  sessionOnly?: boolean;
   failedPath: string;
 };
 
@@ -213,6 +216,8 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
         relPath: targetRelPath,
         savedContent: state.content,
         dirty: false,
+        // 已经落到磁盘，不再需要「只存在于会话」的关闭保护
+        sessionOnly: false,
         saving: false,
         loading: false,
         mtime,
@@ -240,9 +245,11 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
 
   // 会话恢复用：把存下来的空白窗口内容灌回内存，不读盘。
   // savedContent 一并设成同样的内容，恢复出来的窗口不该是「未保存」状态——
-  // 它本来就没有磁盘副本，脏标记只会让关闭时弹一个没有意义的确认框。
+  // 它本来就没有磁盘副本，脏标记只会让启动时就显示一个误导的 •。
+  // 但内容只存在于会话里，误关就会永久丢失，所以默认标成 sessionOnly：
+  // 关闭时必须确认（落盘后的另存为会清掉它）。
   const restoreUntitled = useCallback(
-    (entries: Array<{ relPath: string; content: string }>) => {
+    (entries: Array<{ relPath: string; content: string; sessionOnly?: boolean }>) => {
       if (!entries.length) return;
       setFiles((previous) => {
         const next = { ...previous };
@@ -253,6 +260,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
             relPath: entry.relPath,
             content: entry.content,
             savedContent: entry.content,
+            sessionOnly: entry.sessionOnly ?? true,
           };
           touchedRef.current.add(entry.relPath);
         }

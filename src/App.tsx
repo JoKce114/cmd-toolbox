@@ -153,6 +153,14 @@ function pickGroupUntitled(
   return out;
 }
 
+// 超限被丢弃的空白窗口按项目分组暂存，恢复时交给对应 EditorPane 处理。
+function pickGroupUntitledDropped(
+  all: Record<string, string[]> | undefined,
+  groupKey: string,
+): string[] {
+  return all?.[groupKey] || [];
+}
+
 function shellIcon(shellId: string) {
   if (shellId === 'powershell') return <Command size={14} />;
   if (shellId === 'gitbash') return <GitBranch size={14} />;
@@ -262,6 +270,9 @@ export default function App() {
   // 空白窗口内容不进 React state：每次按键都同步给父组件会拖慢输入。
   // EditorPane 只在内容真的变化时回调，这里只换 ref，快照落盘时再读。
   const untitledContentsRef = useRef<Record<string, string>>({});
+  // 会话里因超限没落盘的空白窗口，按项目分组留到首次挂载时提示。
+  // 只在 EditorPane 挂载时读一次，之后编辑内容变化不会再触发。
+  const untitledDroppedRef = useRef<Record<string, string[]>>({});
 
   const setGroupUntitledContents = useCallback(
     (groupKey: string, contents: Record<string, string>) => {
@@ -724,6 +735,17 @@ export default function App() {
           if (editorGroupKeys.has(keyGroup)) seededUntitled[key] = value;
         }
         untitledContentsRef.current = seededUntitled;
+        // 超限丢弃的条目同样只留给仍有编辑器页签的项目。它们的编号必须保留，
+        // 否则恢复侧会把别的窗口内容重排到这些编号上。
+        const seededDropped: Record<string, string[]> = {};
+        for (const key of snapshot.untitledDropped || []) {
+          const separator = key.indexOf('|');
+          if (separator < 0) continue;
+          const keyGroup = key.slice(0, separator);
+          if (!editorGroupKeys.has(keyGroup)) continue;
+          (seededDropped[keyGroup] ||= []).push(key.slice(separator + 1));
+        }
+        untitledDroppedRef.current = seededDropped;
         applyTabs(restoredTabs);
         setTabGroupsByGroup(snapshot.tabGroups || {});
         const restoredActive: Record<string, string | null> = {};
@@ -2016,6 +2038,7 @@ export default function App() {
       // 继续留在会话里，下次重新打开编辑器会莫名其妙地冒出来。
       if (closing.some((tab) => isEditorTab(tab))) {
         setGroupUntitledContents(groupKey, {});
+        delete untitledDroppedRef.current[groupKey];
       }
 
       const remaining = currentTabs.filter((tab) => !ids.has(tab.id));
@@ -3135,6 +3158,7 @@ export default function App() {
             setGroupUntitledContents(group.key, contents)
           }
           untitledRestore={pickGroupUntitled(untitledContentsRef.current, group.key)}
+          untitledDropped={pickGroupUntitledDropped(untitledDroppedRef.current, group.key)}
           onDirtyChange={handleDirtyChange}
           themeMode={terminalThemeMode}
           wordWrap={prefs.editorWordWrap}

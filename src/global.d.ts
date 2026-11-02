@@ -53,6 +53,9 @@ export interface SessionSnapshot {
   splitRatioByGroup?: Record<string, number>;
   // 键是 `${groupKey}|untitled://N`，值是空白窗口内容
   untitledContents?: Record<string, string>;
+  // 同键格式：内容超过会话存储上限、没能落盘的空白窗口。
+  // 恢复它们时按空窗口处理，并给用户一次提示。
+  untitledDropped?: string[];
 }
 
 export interface PtyCreateInput {
