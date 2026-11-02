@@ -39,7 +39,7 @@ env.CMDTOOLBOX_NO_UPDATE = '1';
 
 let app;
 // 记录被移入回收站的文件，finally 里提示用户自行清理（测试不会清空真实回收站）
-let trashedFile = null;
+const trashedFiles = [];
 try {
   app = await electron.launch({
     executablePath: resolve(root, 'node_modules/electron/dist/electron.exe'),
@@ -236,9 +236,125 @@ try {
   await deleteModal.waitFor({ state: 'detached', timeout: 10000 });
   await waitFor(() => !existsSync(join(projectDir, 'external.php')), 10000, 'external.php 被移走');
   assert(!existsSync(join(projectDir, 'external.php')), '文件已被移走');
-  trashedFile = join(projectDir, 'external.php');
+  trashedFiles.push(join(projectDir, 'external.php'));
 
-  console.log('9. 「打开的编辑器」右键对比：与已保存文件比较');
+  console.log('9. 删除后文件树立即刷新，已打开页签随之关闭');
+  await waitFor(
+    async () => (await page.locator('.file-tree .file-row[title="external.php"]').count()) === 0,
+    10000,
+    '删除后 external.php 的树行消失',
+  );
+  assert(
+    (await page.locator('.file-tree .file-row[title="external.php"]').count()) === 0,
+    '删除后文件树里的行立即消失',
+  );
+
+  await page.locator('.file-tree .file-row[title="beta.php"]').click();
+  await waitFor(
+    async () => (await page.locator('.editor-pane .pane-path').first().innerText()).endsWith('beta.php'),
+    10000,
+    '编辑器切到 beta.php',
+  );
+  assert(
+    (await page.locator('.open-editors-list .file-row[title="beta.php"]').count()) === 1,
+    'beta.php 已打开',
+  );
+  await openTreeMenu(page, 'beta.php');
+  await page.getByRole('menuitem', { name: '删除', exact: true }).click();
+  const deleteOpenModal = page.locator('.modal-card').filter({ hasText: '删除到回收站' });
+  await deleteOpenModal.waitFor({ timeout: 8000 });
+  await deleteOpenModal.locator('.btn-danger').click();
+  await deleteOpenModal.waitFor({ state: 'detached', timeout: 10000 });
+  await waitFor(
+    async () => (await page.locator('.file-tree .file-row[title="beta.php"]').count()) === 0,
+    10000,
+    '删除后 beta.php 的树行消失',
+  );
+  assert(
+    (await page.locator('.file-tree .file-row[title="beta.php"]').count()) === 0,
+    '删除已打开的文件后树行消失',
+  );
+  await waitFor(
+    async () =>
+      (await page.locator('.open-editors-list .file-row[title="beta.php"]').count()) === 0 &&
+      (await page.locator('.editor-tab-name', { hasText: 'beta.php' }).count()) === 0,
+    10000,
+    'beta.php 的页签关闭',
+  );
+  assert(
+    (await page.locator('.open-editors-list .file-row[title="beta.php"]').count()) === 0 &&
+      (await page.locator('.editor-tab-name', { hasText: 'beta.php' }).count()) === 0,
+    '删除已打开的文件后对应页签关闭',
+  );
+  trashedFiles.push(join(projectDir, 'beta.php'));
+
+  console.log('10. 删除有未保存修改的文件时确认框点名未保存');
+  await page.locator('.file-tree-toolbar button[title="新建文件"]').click();
+  const dirtyCreateModal = page.locator('.modal-card').filter({ hasText: '新建文件' });
+  await dirtyCreateModal.waitFor({ timeout: 5000 });
+  await dirtyCreateModal.locator('input.text-input').fill('dirty.php');
+  await dirtyCreateModal.getByRole('button', { name: '创建', exact: true }).click();
+  await dirtyCreateModal.waitFor({ state: 'detached', timeout: 10000 });
+  await waitFor(
+    async () => (await page.locator('.editor-pane .pane-path').first().innerText()).endsWith('dirty.php'),
+    10000,
+    '编辑器切到 dirty.php',
+  );
+  await page.locator('.cm-content').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\n// unsaved');
+  await page.locator('.editor-tab.active .editor-tab-dot').waitFor({ timeout: 5000 });
+
+  await openTreeMenu(page, 'dirty.php');
+  await page.getByRole('menuitem', { name: '删除', exact: true }).click();
+  const dirtyDeleteModal = page.locator('.modal-card').filter({ hasText: '删除到回收站' });
+  await dirtyDeleteModal.waitFor({ timeout: 8000 });
+  const dirtyDeleteMessage = await dirtyDeleteModal.locator('.confirm-message').innerText();
+  assert(dirtyDeleteMessage.includes('未保存'), '确认框提示了未保存修改');
+  assert(dirtyDeleteMessage.includes('不可恢复'), '确认框提示了删除后不可恢复');
+  await dirtyDeleteModal.locator('.btn-secondary').click();
+  await dirtyDeleteModal.waitFor({ state: 'detached', timeout: 5000 });
+  assert(existsSync(join(projectDir, 'dirty.php')), '取消后文件仍在磁盘上');
+
+  console.log('11. 重命名已打开的文件后页签标题跟着变');
+  writeFileSync(join(projectDir, 'a.php'), '<?php\necho "a";\n', 'utf8');
+  await page.locator('.file-tree-toolbar button[title="刷新"]').click();
+  await page.locator('.file-tree .file-row[title="a.php"]').waitFor({ timeout: 10000 });
+  await page.locator('.file-tree .file-row[title="a.php"]').click();
+  await waitFor(
+    async () => (await page.locator('.editor-pane .pane-path').first().innerText()).endsWith('a.php'),
+    10000,
+    '编辑器切到 a.php',
+  );
+  assert(
+    (await page.locator('.editor-tab-name', { hasText: 'a.php' }).count()) === 1,
+    'a.php 的页签已打开',
+  );
+
+  await openTreeMenu(page, 'a.php');
+  await page.getByRole('menuitem', { name: '重命名', exact: true }).click();
+  const renameModal = page.locator('.modal-card').filter({ hasText: '重命名' });
+  await renameModal.waitFor({ timeout: 5000 });
+  await renameModal.locator('input.text-input').fill('b.php');
+  await renameModal.getByRole('button', { name: '重命名', exact: true }).click();
+  await renameModal.waitFor({ state: 'detached', timeout: 10000 });
+  await waitFor(() => existsSync(join(projectDir, 'b.php')), 10000, 'b.php 落盘');
+  assert(!existsSync(join(projectDir, 'a.php')), '重命名后旧文件消失');
+  await waitFor(
+    async () => (await page.locator('.editor-tab-name', { hasText: 'b.php' }).count()) === 1,
+    10000,
+    '页签标题变成 b.php',
+  );
+  assert(
+    (await page.locator('.editor-tab-name', { hasText: 'b.php' }).count()) === 1,
+    '重命名后页签标题跟着变',
+  );
+  assert(
+    (await page.locator('.editor-tab-name', { hasText: 'a.php' }).count()) === 0,
+    '旧标题 a.php 不再显示',
+  );
+
+  console.log('12. 「打开的编辑器」右键对比：与已保存文件比较');
   // 从文件树重新打开 alpha.php（先前的预览页签在新建 created.php 时被顶替了），
   // 再制造内存里的未保存改动
   await page.locator('.file-tree .file-row[title="alpha.php"]').click();
@@ -286,11 +402,57 @@ try {
     (await diffPane.innerText()).includes('changed in memory'),
     '对比里能看到内存中的改动',
   );
+
+  console.log('13. 只读 / 超大文件的三个对比入口全部置灰');
+  // > 2MB 会被 file-api 判成只读，content 是空串；拿空串对比只会得到假结果。
+  writeFileSync(join(projectDir, 'big.bin'), Buffer.alloc(2 * 1024 * 1024 + 1, 0x41));
+  await page.locator('.file-tree-toolbar button[title="刷新"]').click();
+  await page.locator('.file-tree .file-row[title="big.bin"]').waitFor({ timeout: 10000 });
+  await page.locator('.file-tree .file-row[title="big.bin"]').click();
+  await waitFor(
+    async () => (await page.locator('.editor-pane .pane-path').first().innerText()).endsWith('big.bin'),
+    10000,
+    '编辑器切到 big.bin',
+  );
+  await page.locator('.editor-notice').filter({ hasText: '只读' }).waitFor({ timeout: 8000 });
+  assert(
+    (await page.locator('.editor-notice').filter({ hasText: '只读' }).count()) === 1,
+    'big.bin 显示只读提示',
+  );
+
+  await page
+    .locator('.open-editors-list .file-row[title="big.bin"]')
+    .click({ button: 'right' });
+  await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+  assert(
+    await page.getByRole('menuitem', { name: '与已保存文件比较', exact: true }).isDisabled(),
+    '「与已保存文件比较」置灰',
+  );
+  assert(
+    await page.getByRole('menuitem', { name: '选择以进行比较', exact: true }).isDisabled(),
+    '「选择以进行比较」置灰',
+  );
+  assert(
+    await page.getByRole('menuitem', { name: '与 Git HEAD 比较', exact: true }).isDisabled(),
+    '「与 Git HEAD 比较」置灰',
+  );
+  await page.keyboard.press('Escape');
+  await page.locator('.popup-menu').waitFor({ state: 'detached', timeout: 5000 });
+
+  console.log('14. 同一项目再点「打开编辑器」切到已有页签而不是新建');
+  await page.locator('.group-item').filter({ hasText: 'ftree' }).click({ button: 'right' });
+  await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+  await page.getByRole('menuitem', { name: '打开编辑器', exact: true }).click();
+  await page.waitForTimeout(500);
+  assert(
+    (await page.locator('.terminal-pane.editor-pane').count()) === 1,
+    '同一项目仍然只有一个编辑器页签',
+  );
 } finally {
   await app?.close().catch(() => {});
-  if (trashedFile) {
+  if (trashedFiles.length > 0) {
     console.log(
-      `  [回收站] ${trashedFile} 已被删除到系统回收站；测试不会清空回收站，需要时请自行处理。`,
+      `  [回收站] ${trashedFiles.join('、')} 已被删除到系统回收站；测试不会清空回收站，需要时请自行处理。`,
     );
   }
   console.log(`  [临时目录] ${dataDir}`);
