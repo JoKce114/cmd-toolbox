@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -315,18 +315,19 @@ const projectDir = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-'));
 mkdirSync(join(projectDir, 'app'), { recursive: true });
 mkdirSync(join(projectDir, 'vendor'), { recursive: true });
 
+// 当前文件故意叫 zzz.php：字典序里它排最后，不实现「当前文件优先」就会选 aaa.php。
 writeFileSync(
-  join(projectDir, 'app', 'current.php'),
-  ['<?php', 'namespace App;', 'class Here {', '  public function shared() {}', '}'].join(NL),
+  join(projectDir, 'app', 'aaa.php'),
+  ['<?php', 'namespace App;', 'class Aaa {', '  public function shared() {}', '}'].join(NL),
   'utf8',
 );
 writeFileSync(
-  join(projectDir, 'app', 'other.php'),
-  ['<?php', 'namespace App;', 'class Other {', '  public function shared() {}', '}'].join(NL),
+  join(projectDir, 'app', 'bbb.php'),
+  ['<?php', 'namespace App;', 'class Bbb {', '  public function shared() {}', '}'].join(NL),
   'utf8',
 );
 writeFileSync(
-  join(projectDir, 'app', 'deep.php'),
+  join(projectDir, 'app', 'zzz.php'),
   ['<?php', 'namespace App;', 'class Deep {', '  public function shared() {}', '}'].join(NL),
   'utf8',
 );
@@ -335,16 +336,22 @@ writeFileSync(
   ['<?php', 'class Vendor {', '  public function shared() {}', '}'].join(NL),
   'utf8',
 );
-// public static 修饰 + 大小写混合的声明名：预筛正则必须能命中
+// public static 修饰 + 大小写混合的声明名
 writeFileSync(
   join(projectDir, 'app', 'mixed.php'),
   ['<?php', 'namespace App;', 'class Mixed {', '  public static function MixedCase() {}', '}'].join(NL),
   'utf8',
 );
+// 箭头函数赋值：声明里没有 function 关键字，预筛必须按名字本身命中
+writeFileSync(join(projectDir, 'app', 'arrow.js'), 'const arrowTarget = () => 1;\n', 'utf8');
+// PHP 引用返回：function 与名字之间有 &
+writeFileSync(join(projectDir, 'app', 'ref.php'), ['<?php', 'function &refTarget() {}'].join(NL), 'utf8');
+// mtime 失效用例的独立文件
+writeFileSync(join(projectDir, 'app', 'edited.php'), ['<?php', 'function editBefore() {}'].join(NL), 'utf8');
 
 try {
   symbols.resetCache();
-  const found = await symbols.lookup(projectDir, 'shared', { currentPath: 'app/current.php' });
+  const found = await symbols.lookup(projectDir, 'shared', { currentPath: 'app/zzz.php' });
   assert(found.ok === true, '查询成功');
   assert(found.matches.length === 3, `vendor 被跳过，实际 ${found.matches.length} 条`);
   assert(
@@ -352,8 +359,8 @@ try {
     '结果里没有 vendor 下的声明',
   );
   assert(
-    found.matches[0].relPath === 'app/current.php',
-    `当前文件排第一，实际 ${found.matches[0].relPath}`,
+    found.matches[0].relPath === 'app/zzz.php',
+    `当前文件排第一（字典序最后也能胜出），实际 ${found.matches[0].relPath}`,
   );
   assert(found.matches[0].line === 4, `行号是 1 起始的声明行，实际 ${found.matches[0].line}`);
 
@@ -364,19 +371,64 @@ try {
     `public static / 大小写混合的声明能被命中，实际 ${mixedHit.matches.length} 条`,
   );
 
+  // 大小写不同的查询名：PHP 函数名不敏感，返回的仍是声明里的原始写法
   symbols.resetCache();
-  const byReceiver = await symbols.lookup(projectDir, 'shared', {
-    currentPath: 'app/other.php',
+  const caseHit = await symbols.lookup(projectDir, 'MIXEDCASE', {});
+  assert(
+    caseHit.matches.length === 1 && caseHit.matches[0].name === 'MixedCase',
+    `大小写不同的查询名能找到定义，实际 ${caseHit.matches.length} 条 / ${caseHit.matches[0] && caseHit.matches[0].name}`,
+  );
+
+  // 箭头函数赋值的声明没有 function 关键字，预筛不能漏
+  const arrowHit = await symbols.lookup(projectDir, 'arrowTarget', {});
+  assert(
+    arrowHit.matches.length === 1 && arrowHit.matches[0].relPath === 'app/arrow.js',
+    `箭头函数赋值能被查到，实际 ${arrowHit.matches.length} 条`,
+  );
+
+  // PHP `function &x()` 的引用返回
+  const refHit = await symbols.lookup(projectDir, 'refTarget', {});
+  assert(
+    refHit.matches.length === 1 && refHit.matches[0].relPath === 'app/ref.php',
+    `function &x() 能被查到，实际 ${refHit.matches.length} 条`,
+  );
+
+  // 当前文件优先于接收者：不排序会选 aaa.php，接收者优先会选 zzz.php，只有当前文件优先得到 bbb.php
+  symbols.resetCache();
+  const currentBeatsReceiver = await symbols.lookup(projectDir, 'shared', {
+    currentPath: 'app/bbb.php',
     receiver: 'Deep',
   });
   assert(
-    byReceiver.matches[0].relPath === 'app/other.php',
-    '当前文件仍然优先于接收者匹配',
+    currentBeatsReceiver.matches[0].relPath === 'app/bbb.php',
+    `当前文件优先于接收者匹配，实际 ${currentBeatsReceiver.matches[0].relPath}`,
   );
 
+  // 接收者优先：Deep 在字典序最后的 zzz.php，不实现该规则会选 aaa.php
   symbols.resetCache();
   const noCurrent = await symbols.lookup(projectDir, 'shared', { receiver: 'Deep' });
-  assert(noCurrent.matches[0].relPath === 'app/deep.php', '接收者同名类优先');
+  assert(
+    noCurrent.matches[0].relPath === 'app/zzz.php',
+    `接收者同名类优先，实际 ${noCurrent.matches[0].relPath}`,
+  );
+
+  // currentPath 可能是绝对路径或反斜杠形式，必须归一化后才能命中「当前文件优先」
+  symbols.resetCache();
+  const absCurrent = await symbols.lookup(projectDir, 'shared', {
+    currentPath: join(projectDir, 'app', 'zzz.php'),
+  });
+  assert(absCurrent.matches[0].relPath === 'app/zzz.php', `绝对路径 currentPath 已归一化，实际 ${absCurrent.matches[0].relPath}`);
+
+  symbols.resetCache();
+  const slashCurrent = await symbols.lookup(projectDir, 'shared', { currentPath: 'app\\zzz.php' });
+  assert(slashCurrent.matches[0].relPath === 'app/zzz.php', `反斜杠 currentPath 已归一化，实际 ${slashCurrent.matches[0].relPath}`);
+
+  symbols.resetCache();
+  const nonStringCurrent = await symbols.lookup(projectDir, 'shared', { currentPath: 123 });
+  assert(
+    nonStringCurrent.matches[0].relPath === 'app/aaa.php',
+    `非字符串 currentPath 当作空，实际 ${nonStringCurrent.matches[0].relPath}`,
+  );
 
   symbols.resetCache();
   const missing = await symbols.lookup(projectDir, 'nothingHere', {});
@@ -385,16 +437,22 @@ try {
   const tooShort = await symbols.lookup(projectDir, 'a', {});
   assert(tooShort.matches.length === 0, '查询名少于 2 字符直接返回空');
 
-  // 文件改动后 mtime 变化，缓存必须失效
+  // 先查询一个存在且会被解析的名字（确保写入缓存），再改内容与 mtime：
+  // 缓存不失效的话，旧名字仍会命中旧声明。
   symbols.resetCache();
-  await symbols.lookup(projectDir, 'renamedLater', {});
+  const beforeEdit = await symbols.lookup(projectDir, 'editBefore', {});
+  assert(beforeEdit.matches.length === 1, `改动前能查到旧声明（并写入缓存），实际 ${beforeEdit.matches.length} 条`);
   writeFileSync(
-    join(projectDir, 'app', 'other.php'),
-    ['<?php', 'namespace App;', 'class Other {', '  public function renamedLater() {}', '}'].join(NL),
+    join(projectDir, 'app', 'edited.php'),
+    ['<?php', 'function editAfter() {}'].join(NL),
     'utf8',
   );
-  const afterEdit = await symbols.lookup(projectDir, 'renamedLater', {});
-  assert(afterEdit.matches.length === 1, '文件改动后缓存失效，能查到新声明');
+  const bumped = new Date(Date.now() + 5000);
+  utimesSync(join(projectDir, 'app', 'edited.php'), bumped, bumped);
+  const afterEdit = await symbols.lookup(projectDir, 'editBefore', {});
+  assert(afterEdit.matches.length === 0, `mtime 变化后旧缓存失效，实际 ${afterEdit.matches.length} 条`);
+  const afterEditNew = await symbols.lookup(projectDir, 'editAfter', {});
+  assert(afterEditNew.matches.length === 1, `mtime 变化后能查到新声明，实际 ${afterEditNew.matches.length} 条`);
 } finally {
   rmSync(projectDir, { recursive: true, force: true });
 }
@@ -457,6 +515,115 @@ try {
   assert(capped.scanned === 4000, `最多扫描 4000 个文件，实际 ${capped.scanned}`);
 } finally {
   rmSync(limitDir, { recursive: true, force: true });
+}
+
+console.log('\n13. 排序规则');
+const orderDir = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-order-'));
+try {
+  // 命名空间优先：当前文件在 Wanted，bbb 在 Wanted，aaa 在 Other。
+  // 不实现命名空间规则时字典序会先选 aaa。
+  mkdirSync(join(orderDir, 'ns'), { recursive: true });
+  writeFileSync(
+    join(orderDir, 'ns', 'aaa.php'),
+    ['<?php', 'namespace Other;', 'function nsTarget() {}'].join(NL),
+    'utf8',
+  );
+  writeFileSync(
+    join(orderDir, 'ns', 'bbb.php'),
+    ['<?php', 'namespace Wanted;', 'function nsTarget() {}'].join(NL),
+    'utf8',
+  );
+  writeFileSync(
+    join(orderDir, 'ns', 'zzz.php'),
+    ['<?php', 'namespace Wanted;', 'class Context {}'].join(NL),
+    'utf8',
+  );
+
+  symbols.resetCache();
+  const byNamespace = await symbols.lookup(orderDir, 'nsTarget', { currentPath: 'ns/zzz.php' });
+  assert(
+    byNamespace.matches.length === 2 && byNamespace.matches[0].relPath === 'ns/bbb.php',
+    `同命名空间优先（不实现会选 aaa），实际 ${byNamespace.matches.map((m) => m.relPath).join(', ')}`,
+  );
+
+  // 路径深度优先：浅的在前。字典序会把更深的 a/b/deep.php 排到最前。
+  mkdirSync(join(orderDir, 'depth', 'a', 'b'), { recursive: true });
+  writeFileSync(join(orderDir, 'depth', 'shallow.php'), ['<?php', 'function depthTarget() {}'].join(NL), 'utf8');
+  writeFileSync(join(orderDir, 'depth', 'a', 'mid.php'), ['<?php', 'function depthTarget() {}'].join(NL), 'utf8');
+  writeFileSync(join(orderDir, 'depth', 'a', 'b', 'deep.php'), ['<?php', 'function depthTarget() {}'].join(NL), 'utf8');
+
+  symbols.resetCache();
+  const byDepth = await symbols.lookup(orderDir, 'depthTarget', {});
+  assert(
+    JSON.stringify(byDepth.matches.map((m) => m.relPath)) ===
+      JSON.stringify(['depth/shallow.php', 'depth/a/mid.php', 'depth/a/b/deep.php']),
+    `路径浅的优先，实际 ${byDepth.matches.map((m) => m.relPath).join(', ')}`,
+  );
+
+  // 字典序：同深度、同命名空间（都为空）、无当前文件与接收者，只剩最后一条规则。
+  mkdirSync(join(orderDir, 'lex'), { recursive: true });
+  writeFileSync(join(orderDir, 'lex', 'zeta.php'), ['<?php', 'function lexTarget() {}'].join(NL), 'utf8');
+  writeFileSync(join(orderDir, 'lex', 'middle.php'), ['<?php', 'function lexTarget() {}'].join(NL), 'utf8');
+  writeFileSync(join(orderDir, 'lex', 'alpha.php'), ['<?php', 'function lexTarget() {}'].join(NL), 'utf8');
+
+  symbols.resetCache();
+  const byLex = await symbols.lookup(orderDir, 'lexTarget', {});
+  assert(
+    JSON.stringify(byLex.matches.map((m) => m.relPath)) ===
+      JSON.stringify(['lex/alpha.php', 'lex/middle.php', 'lex/zeta.php']),
+    `同深度时按字典序，实际 ${byLex.matches.map((m) => m.relPath).join(', ')}`,
+  );
+} finally {
+  rmSync(orderDir, { recursive: true, force: true });
+}
+
+console.log('\n14. currentPath 越界防护');
+const escapeParent = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-escape-'));
+const escapeDir = join(escapeParent, 'project');
+const outsideDir = join(escapeParent, 'outside');
+try {
+  mkdirSync(escapeDir, { recursive: true });
+  mkdirSync(outsideDir, { recursive: true });
+  // 项目外文件带 Secret 命名空间。若 namespaceOf 读了它，查询会把 bbb.php 排到最前。
+  writeFileSync(
+    join(outsideDir, 'outside.php'),
+    ['<?php', 'namespace Secret;', 'class Fake {}'].join(NL),
+    'utf8',
+  );
+  writeFileSync(
+    join(escapeDir, 'aaa.php'),
+    ['<?php', 'namespace Other;', 'function leakTarget() {}'].join(NL),
+    'utf8',
+  );
+  writeFileSync(
+    join(escapeDir, 'bbb.php'),
+    ['<?php', 'namespace Secret;', 'function leakTarget() {}'].join(NL),
+    'utf8',
+  );
+
+  const byDotDot = await symbols.lookup(escapeDir, 'leakTarget', { currentPath: '../outside/outside.php' });
+  assert(
+    byDotDot.matches[0].relPath === 'aaa.php',
+    `../ 越界不提供命名空间，实际 ${byDotDot.matches[0].relPath}`,
+  );
+
+  // 指向项目外的符号链接同样不能读。本机普通账户没有创建文件符号链接的权限（EPERM），
+  // 退到目录联接（junction），它走同一条 realpath 校验。
+  let linkCurrent = '';
+  try {
+    symlinkSync(join(outsideDir, 'outside.php'), join(escapeDir, 'link.php'), 'file');
+    linkCurrent = 'link.php';
+  } catch {
+    symlinkSync(outsideDir, join(escapeDir, 'link'), 'junction');
+    linkCurrent = 'link/outside.php';
+  }
+  const byLink = await symbols.lookup(escapeDir, 'leakTarget', { currentPath: linkCurrent });
+  assert(
+    byLink.matches[0].relPath === 'aaa.php',
+    `符号链接指向项目外时不提供命名空间（${linkCurrent}），实际 ${byLink.matches[0].relPath}`,
+  );
+} finally {
+  rmSync(escapeParent, { recursive: true, force: true });
 }
 
 console.log(`\n全部通过：${passed} 项`);

@@ -3,6 +3,7 @@ const SKIP_DIRS = new Set(['.git', 'node_modules', 'vendor', 'dist', 'release', 
 
 const fsp = require('fs/promises');
 const path = require('path');
+const { resolveWithin } = require('./path-guard');
 
 let phpEngine = null;
 
@@ -334,6 +335,9 @@ const JS_EXT = new Set(['.js', '.mjs', '.cjs', '.jsx']);
 // 只装被实际解析过的文件，不是项目级索引。key 必须带项目根：
 // 两个项目都有 app/a.php 时，只按 relPath 会互相读到对方的声明。
 const declCache = new Map();
+// 缓存只是省一次解析，重建成本只是重新读并解析少量文件；条目多到这个量级时
+// 清空重来比维护 LRU 简单且足够，也让这张表不会跨项目无限长成常驻索引。
+const MAX_CACHE_ENTRIES = 500;
 
 function resetCache() {
   declCache.clear();
@@ -345,10 +349,6 @@ function cacheKey(root, relPath) {
 
 function shouldSkipDir(name) {
   return SKIP_DIRS.has(name) || name.startsWith('release-build');
-}
-
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function collectFiles(root) {
@@ -385,13 +385,13 @@ async function collectFiles(root) {
   return { files, truncated };
 }
 
-// 文本预筛：只有真的出现 "function name" / "class name" 的文件才值得解析。
+// 文本预筛：文件里出现过这个名字本身才值得解析。
 // 不预筛直接全量解析，千文件项目要二十秒。
-// `public static function name`、`FUNCTION name` 都能命中：修饰符在 function 之前，
-// 正则只要求 function 与名字之间是空白，并用 i 忽略大小写。
+// 不要求名字紧跟 function/class：箭头函数赋值、PHP 的 `function &x()`、
+// 以及换行/修饰符写法都能命中；精确性交给后面的 AST 判断。
+// 大小写不敏感，与最终匹配一致（PHP 函数名不敏感），避免不同大小写的查询被粗筛挡掉。
 function prefilter(text, name) {
-  const escaped = escapeRegExp(name);
-  return new RegExp(`\\b(?:function|class)\\s+${escaped}\\b`, 'i').test(text);
+  return text.includes(name) || text.toLowerCase().includes(name.toLowerCase());
 }
 
 async function declsFor(root, relPath, name) {
@@ -421,6 +421,7 @@ async function declsFor(root, relPath, name) {
   const decls = PHP_EXT.has(ext)
     ? parsePhpSymbols(text)
     : parseJsSymbols(text, ext.slice(1));
+  if (declCache.size >= MAX_CACHE_ENTRIES) declCache.clear();
   declCache.set(key, { mtime: stat.mtimeMs, decls });
   return decls;
 }
@@ -456,14 +457,45 @@ function compareMatches(a, b, context) {
 async function namespaceOf(root, relPath) {
   if (!relPath) return '';
   if (!PHP_EXT.has(path.extname(relPath).toLowerCase())) return '';
+
+  // currentPath 来自外部输入，先做项目内校验：`..`、绝对路径和指向项目外的
+  // 符号链接/联接都会在这里被拒掉，越界时当作没有当前文件。
+  let target;
+  try {
+    target = resolveWithin(root, relPath);
+  } catch {
+    return '';
+  }
+
+  // 与普通文件扫描同一上限，避免当前文件绕过 1MB 限制。
+  let stat;
+  try {
+    stat = await fsp.stat(target);
+  } catch {
+    return '';
+  }
+  if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return '';
+
   let text;
   try {
-    text = await fsp.readFile(path.join(root, relPath), 'utf8');
+    text = await fsp.readFile(target, 'utf8');
   } catch {
     return '';
   }
   const hit = parsePhpSymbols(text).find((item) => item.namespace);
   return hit ? hit.namespace : '';
+}
+
+// currentPath 来自外部输入，可能是绝对路径或反斜杠形式。
+// 统一归一化到相对项目根的 `/` 分隔路径，否则「当前文件优先」会静默失效。
+// 越界路径不在这里拦截，交给 namespaceOf 的 resolveWithin 统一处理。
+function normalizeCurrentPath(root, value) {
+  if (typeof value !== 'string') return '';
+  let rel = value.trim();
+  if (!rel) return '';
+  if (path.isAbsolute(rel)) rel = path.relative(root, rel);
+  rel = rel.replace(/\\/g, '/').replace(/^\.\/+/, '');
+  return rel === '.' ? '' : rel;
 }
 
 async function lookup(projectPath, name, options = {}) {
@@ -474,7 +506,8 @@ async function lookup(projectPath, name, options = {}) {
 
   const root = path.resolve(projectPath);
   const { files, truncated } = await collectFiles(root);
-  const currentPath = typeof options.currentPath === 'string' ? options.currentPath : '';
+  const currentPath = normalizeCurrentPath(root, options.currentPath);
+  const targetLower = target.toLowerCase();
   const context = {
     currentPath,
     receiver: String(options.receiver || ''),
@@ -485,7 +518,8 @@ async function lookup(projectPath, name, options = {}) {
   for (const relPath of files) {
     const decls = await declsFor(root, relPath, target);
     for (const decl of decls) {
-      if (decl.name !== target) continue;
+      // PHP 函数名大小写不敏感；保留 decl.name 的原始写法返回给调用方。
+      if (decl.name.toLowerCase() !== targetLower) continue;
       matches.push({ ...decl, relPath });
     }
   }
