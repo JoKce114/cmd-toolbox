@@ -478,11 +478,11 @@ try {
   const boundaryName = await symbols.lookup(projectDir, 'a'.repeat(100), {});
   assert(boundaryName.ok === true && boundaryName.scanned > 0, `100 字符的名字仍执行查询，实际 ${boundaryName.scanned}`);
 
-  // 先查询一个存在且会被解析的名字（确保写入缓存），再改内容与 mtime：
-  // 缓存不失效的话，旧名字仍会命中旧声明。
+  // 先查询一个存在且会被解析的名字（确保索引建立），再改内容与 mtime：
+  // 索引不失效的话，旧名字仍会命中旧声明。
   symbols.resetCache();
   const beforeEdit = await symbols.lookup(projectDir, 'editBefore', {});
-  assert(beforeEdit.matches.length === 1, `改动前能查到旧声明（并写入缓存），实际 ${beforeEdit.matches.length} 条`);
+  assert(beforeEdit.matches.length === 1, `改动前能查到旧声明，实际 ${beforeEdit.matches.length} 条`);
   writeFileSync(
     join(projectDir, 'app', 'edited.php'),
     ['<?php', 'function editAfter() {}'].join(NL),
@@ -490,10 +490,12 @@ try {
   );
   const bumped = new Date(Date.now() + 5000);
   utimesSync(join(projectDir, 'app', 'edited.php'), bumped, bumped);
+  // 应用内保存或 git 切分支后由主进程调用 invalidate，下一次查询重建索引
+  symbols.invalidate(projectDir);
   const afterEdit = await symbols.lookup(projectDir, 'editBefore', {});
-  assert(afterEdit.matches.length === 0, `mtime 变化后旧缓存失效，实际 ${afterEdit.matches.length} 条`);
+  assert(afterEdit.matches.length === 0, `失效后旧声明消失，实际 ${afterEdit.matches.length} 条`);
   const afterEditNew = await symbols.lookup(projectDir, 'editAfter', {});
-  assert(afterEditNew.matches.length === 1, `mtime 变化后能查到新声明，实际 ${afterEditNew.matches.length} 条`);
+  assert(afterEditNew.matches.length === 1, `失效后能查到新声明，实际 ${afterEditNew.matches.length} 条`);
 } finally {
   rmSync(projectDir, { recursive: true, force: true });
 }
@@ -546,14 +548,18 @@ try {
 
   const manyDir = join(limitDir, 'many');
   mkdirSync(manyDir, { recursive: true });
+  // 4001 个空文件 + 末尾一个声明。旧实现按文件数截断，末尾的声明永远查不到；
+  // 索引实现必须覆盖全部文件。
   for (let i = 0; i < 4001; i += 1) {
     writeFileSync(join(manyDir, `f${String(i).padStart(4, '0')}.php`), '', 'utf8');
   }
+  writeFileSync(join(manyDir, 'zzzlast.php'), ['<?php', 'function tailTarget() {}'].join(NL), 'utf8');
 
   symbols.resetCache();
-  const capped = await symbols.lookup(limitDir, 'zzz', {});
-  assert(capped.truncated === true, '超过 4000 个文件时标记 truncated');
-  assert(capped.scanned === 4000, `最多扫描 4000 个文件，实际 ${capped.scanned}`);
+  const capped = await symbols.lookup(limitDir, 'tailTarget', {});
+  assert(capped.truncated === false, '索引模式不再有文件数截断');
+  assert(capped.scanned >= 4002, `索引覆盖全部文件，实际 ${capped.scanned}`);
+  assert(capped.matches.length === 1, `排在最后的声明也能查到，实际 ${capped.matches.length} 条`);
 } finally {
   rmSync(limitDir, { recursive: true, force: true });
 }
@@ -705,10 +711,11 @@ try {
   rmSync(caseDir, { recursive: true, force: true });
 }
 
-console.log('\n16. 解析文件数上限');
+console.log('\n16. 大量同名声明不再被截断');
 const parseLimitDir = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-parse-limit-'));
 try {
-  // 350 个文件都含同一个声明：不设解析上限时会全部交给 php-parser。
+  // 350 个文件都声明同一个名字。旧实现按解析预算截断到 50 个，
+  // 索引实现必须把全部 350 个都返回。
   for (let i = 0; i < 350; i += 1) {
     writeFileSync(
       join(parseLimitDir, `f${String(i).padStart(3, '0')}.php`),
@@ -719,9 +726,9 @@ try {
 
   symbols.resetCache();
   const capped = await symbols.lookup(parseLimitDir, 'capTarget', {});
-  assert(capped.truncated === true, '实际解析文件数超过上限时标记 truncated');
-  assert(capped.matches.length < 350, `解析数被上限截住，实际 ${capped.matches.length}`);
-  assert(capped.scanned === 350, `scanned 仍报告收集到的文件数，实际 ${capped.scanned}`);
+  assert(capped.truncated === false, '索引模式不再按解析预算截断');
+  assert(capped.matches.length === 350, `全部同名声明都被返回，实际 ${capped.matches.length}`);
+  assert(capped.scanned === 350, `scanned 报告全部文件数，实际 ${capped.scanned}`);
 } finally {
   rmSync(parseLimitDir, { recursive: true, force: true });
 }

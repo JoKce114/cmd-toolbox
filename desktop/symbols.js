@@ -326,13 +326,21 @@ function parseJsSymbols(text, lang) {
   return out;
 }
 
-const MAX_FILES = 4000;
-// 目录项（含目录、图片、压缩包等非源码条目）的总数上限：
-// 只统计已收集的源码文件时，遍历仍会走完整棵目录树，巨型目录/依赖目录能拖很久。
-const MAX_ENTRIES = 20000;
-// 实际交给解析器的文件数上限。短名（return、function 这类）几乎命中所有 PHP 文件，
-// 没有这个上限时 22ms/文件能拖到几十秒，期间主进程一直卡着。
-const MAX_PARSE_FILES = 50;
+// ---------------------------------------------------------------------------
+// 项目符号索引
+//
+// 早期实现是「每次点击遍历项目、按预算截断」，在真实项目上不成立：
+// develop-6.0 有 79600 个目录项、4499 个 PHP 文件，任何预算都会漏掉
+// 后半部分的文件，表现为「明明有定义却提示找不到」。
+//
+// 现在改为持久化索引：首次打开项目时全量扫描一次（实测 5540 个文件约 420ms，
+// 索引 JSON 约 1.5MB），之后每次查询只读索引（毫秒级），不再有截断。
+// 索引只存「名字 → 文件:行」，签名和 docblock 在命中后解析那 1-3 个文件，
+// 所以准确性不受影响。
+// ---------------------------------------------------------------------------
+
+const crypto = require('crypto');
+
 const MAX_NAME_LENGTH = 100;
 // 关键字不可能对应声明，命中面却几乎覆盖全项目。PHP 关键字不区分大小写，
 // 所以统一按小写比较；列表取 PHP/JS 的常见集合，不必穷举。
@@ -348,6 +356,33 @@ const MAX_FILE_BYTES = 1024 * 1024;
 const PHP_EXT = new Set(['.php']);
 const JS_EXT = new Set(['.js', '.mjs', '.cjs', '.jsx']);
 
+const INDEX_VERSION = 1;
+// 没有文件监听，只能定期重建。重建在后台跑，期间继续用旧索引。
+const INDEX_TTL = 10 * 60 * 1000;
+
+let indexDir = '';
+
+// 主进程在 whenReady 里指定索引目录；单测不配置时只用内存索引
+function configure(options = {}) {
+  indexDir = typeof options.indexDir === 'string' ? options.indexDir : '';
+}
+
+// root → { index, building }。index 是最后一次成功构建的结果。
+const indexMem = new Map();
+
+// 供测试清空内存索引，下次查询会重新建
+function resetCache() {
+  indexMem.clear();
+}
+
+// 项目里的文件被应用自己写过（保存、压缩产物、git 切分支）时调用：
+// 丢掉内存索引，下一次查询同步重建。只丢内存不删磁盘文件，
+// 重建失败时还能退化到旧数据。
+function invalidate(projectPath) {
+  if (typeof projectPath !== 'string' || !projectPath) return;
+  indexMem.delete(path.resolve(projectPath));
+}
+
 function emptyResult() {
   return { ok: true, matches: [], truncated: false, scanned: 0 };
 }
@@ -358,35 +393,57 @@ function isValidName(name) {
   return !RESERVED_NAMES.has(name.toLowerCase());
 }
 
-// `${项目根}\0${relPath}` → { mtime, decls, misses }。
-// 只装被实际解析过的文件，不是项目级索引。key 必须带项目根：
-// 两个项目都有 app/a.php 时，只按 relPath 会互相读到对方的声明。
-// misses 记「该名字在这个 mtime 下预筛未命中」，避免同名查询反复 stat + 读全文；
-// 它必须按名字分开记，否则换一个名字查询时会把别的名字的声明也漏掉。
-const declCache = new Map();
-// 缓存只是省一次解析，重建成本只是重新读并解析少量文件；条目多到这个量级时
-// 清空重来比维护 LRU 简单且足够，也让这张表不会跨项目无限长成常驻索引。
-const MAX_CACHE_ENTRIES = 500;
-
-function resetCache() {
-  declCache.clear();
-}
-
-function cacheKey(root, relPath) {
-  return `${root}\u0000${relPath}`;
-}
-
 function shouldSkipDir(name) {
   return SKIP_DIRS.has(name) || name.startsWith('release-build');
 }
 
-async function collectFiles(root) {
-  const files = [];
-  let truncated = false;
-  let entriesSeen = 0;
+function indexPathFor(root) {
+  if (!indexDir) return '';
+  const hash = crypto
+    .createHash('sha1')
+    .update(path.resolve(root).toLowerCase())
+    .digest('hex')
+    .slice(0, 16);
+  return path.join(indexDir, `${hash}.json`);
+}
 
+// 逐行提取声明。刻意不用 AST：全量索引要扫几千个文件，
+// php-parser 平均 22ms/文件，全量要一分多钟；这里只需要名字和行号，
+// 精确的签名和 docblock 等命中后再由 AST 补。
+function scanFileSymbols(text, isPhp) {
+  const out = [];
+  let owner = '';
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    // 不能用 ^ 锚行首：PHP 文件第一行常是 `<?php function foo()`，
+    // 名字前面还有 `<?php ` 前缀。用「非标识符字符」作左边界。
+    const cls =
+      /(?:^|[^\w$])(?:abstract\s+|final\s+)?(?:class|interface|trait)\s+([A-Za-z_]\w*)/.exec(line);
+    if (cls) {
+      owner = cls[1];
+      out.push({ name: cls[1], line: index + 1, kind: 'class', owner: '' });
+      continue;
+    }
+    const fn =
+      /(?:^|[^\w$])(?:(?:public|private|protected|static|async|export|default|abstract|final)\s+)*function\s+&?\s*([A-Za-z_]\w*)/.exec(
+        line,
+      );
+    if (fn) {
+      out.push({ name: fn[1], line: index + 1, kind: owner ? 'method' : 'function', owner });
+      continue;
+    }
+    if (isPhp) continue;
+    const assigned =
+      /(?:^|[^\w$])(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(line);
+    if (assigned) out.push({ name: assigned[1], line: index + 1, kind: 'function', owner: '' });
+  }
+  return out;
+}
+
+async function collectSourceFiles(root) {
+  const files = [];
   async function walk(relDir) {
-    if (truncated) return;
     let entries;
     try {
       entries = await fsp.readdir(path.join(root, relDir), { withFileTypes: true });
@@ -394,13 +451,6 @@ async function collectFiles(root) {
       return;
     }
     for (const entry of entries) {
-      if (truncated) return;
-      // 目录、图片、压缩包和跳过目录都算一条：这里封的是遍历本身，不是收集结果。
-      entriesSeen += 1;
-      if (entriesSeen > MAX_ENTRIES) {
-        truncated = true;
-        return;
-      }
       if (entry.isSymbolicLink()) continue;
       const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
@@ -408,33 +458,135 @@ async function collectFiles(root) {
         await walk(relPath);
         continue;
       }
-      if (files.length >= MAX_FILES) {
-        truncated = true;
-        return;
-      }
       const ext = path.extname(entry.name).toLowerCase();
       if (PHP_EXT.has(ext) || JS_EXT.has(ext)) files.push(relPath);
     }
   }
-
   await walk('');
-  return { files, truncated };
+  return files;
 }
 
-// 文本预筛：文件里必须出现「声明」这个名字才值得解析。
-// 不预筛直接全量解析，千文件项目要二十秒。
-//
-// 只认声明、不认调用是刻意的：`$x = HelpFile::getBaseName($y)` 这类调用点
-// 会命中几乎所有业务文件，把解析预算耗光，真正定义的地方反而轮不到。
-// 三种形态覆盖了我们收集的全部声明——PHP 函数/方法（含 `function &x`）、
-// JS 函数与箭头函数赋值、类。
-function prefilter(text, name) {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return (
-    new RegExp(`function\\s+&?\\s*${escaped}\\b`, 'i').test(text) ||
-    new RegExp(`(?:const|let|var)\\s+${escaped}\\s*=`, 'i').test(text) ||
-    new RegExp(`class\\s+${escaped}\\b`, 'i').test(text)
-  );
+async function buildIndex(root) {
+  const files = await collectSourceFiles(root);
+  const symbols = Object.create(null);
+  const fileMap = Object.create(null);
+
+  for (const relPath of files) {
+    let stat;
+    let text;
+    try {
+      stat = await fsp.stat(path.join(root, relPath));
+      if (stat.size > MAX_FILE_BYTES) continue;
+      text = await fsp.readFile(path.join(root, relPath), 'utf8');
+    } catch {
+      continue;
+    }
+    fileMap[relPath] = stat.mtimeMs;
+
+    const isPhp = PHP_EXT.has(path.extname(relPath).toLowerCase());
+    for (const symbol of scanFileSymbols(text, isPhp)) {
+      // key 用小写：PHP 标识符不区分大小写，查 getbasename 也要能命中
+      // getBaseName。条目里保留原始写法，返回给界面时用。
+      const key = symbol.name.toLowerCase();
+      const list = symbols[key] || (symbols[key] = []);
+      list.push([relPath, symbol.line, symbol.kind, symbol.owner, symbol.name]);
+    }
+  }
+
+  return { version: INDEX_VERSION, root, builtAt: Date.now(), files: fileMap, symbols };
+}
+
+async function loadIndexFromDisk(file) {
+  if (!file) return null;
+  try {
+    const data = JSON.parse(await fsp.readFile(file, 'utf8'));
+    if (!data || data.version !== INDEX_VERSION || typeof data.symbols !== 'object') return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+async function persistIndex(file, index) {
+  if (!file) return;
+  try {
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    await fsp.writeFile(file, JSON.stringify(index), 'utf8');
+  } catch {
+    // 写不进去只是下次还要重建，不影响本次查询
+  }
+}
+
+async function ensureIndex(root) {
+  const cached = indexMem.get(root);
+  if (cached && cached.index) return cached.index;
+  if (cached && cached.building) return cached.building;
+
+  const entry = cached || {};
+  indexMem.set(root, entry);
+
+  entry.building = (async () => {
+    const file = indexPathFor(root);
+    const fromDisk = await loadIndexFromDisk(file);
+    if (fromDisk && path.resolve(fromDisk.root).toLowerCase() === root.toLowerCase()) {
+      entry.index = fromDisk;
+      return fromDisk;
+    }
+    const built = await buildIndex(root);
+    entry.index = built;
+    await persistIndex(file, built);
+    return built;
+  })();
+
+  try {
+    return await entry.building;
+  } finally {
+    entry.building = null;
+  }
+}
+
+// 索引过期时后台重建，重建期间继续用旧索引
+function refreshIfStale(root, index) {
+  if (!index || Date.now() - index.builtAt < INDEX_TTL) return;
+  const entry = indexMem.get(root);
+  if (!entry || entry.building) return;
+  entry.building = (async () => {
+    const built = await buildIndex(root);
+    entry.index = built;
+    await persistIndex(indexPathFor(root), built);
+    return built;
+  })();
+  entry.building.finally(() => {
+    entry.building = null;
+  });
+}
+
+// 打开项目时调用：把索引建好，用户第一次 Ctrl+点击就已经是快的
+async function warmIndex(projectPath) {
+  const root = path.resolve(projectPath);
+  const index = await ensureIndex(root);
+  refreshIfStale(root, index);
+  return { ok: true, files: Object.keys(index.files).length };
+}
+
+function normalizeCurrentPath(root, value) {
+  if (typeof value !== 'string' || !value) return '';
+  let rel = value;
+  try {
+    if (path.isAbsolute(rel)) rel = path.relative(root, rel);
+  } catch {
+    return '';
+  }
+  rel = rel.split(path.sep).join('/');
+  if (!rel || rel === '.' || rel.startsWith('../') || rel === '..') return '';
+  // currentPath 来自渲染进程，除了词法越界还要挡符号链接逃逸：
+  // 项目内一个指向项目外的链接，读它等于读到项目外的文件。
+  try {
+    resolveWithin(root, rel);
+  } catch {
+    return '';
+  }
+  return rel;
 }
 
 // PHP 标识符不区分大小写，JS 标识符区分。
@@ -444,66 +596,6 @@ function nameMatches(declName, relPath, target, targetLower) {
     return declName.toLowerCase() === targetLower;
   }
   return declName === target;
-}
-
-// 写缓存。decls 为 undefined 表示这只是「该名字预筛未命中」的负记录。
-function storeEntry(root, relPath, mtime, decls, missName) {
-  const key = cacheKey(root, relPath);
-  const previous = declCache.get(key);
-  const sameFile = previous && previous.mtime === mtime;
-  // 保持原有 500 条上限的行为：满了就整体清空重建，不做 LRU。
-  if (!sameFile && declCache.size >= MAX_CACHE_ENTRIES) declCache.clear();
-  const misses = new Set(sameFile && previous.misses ? previous.misses : []);
-  if (missName) misses.add(missName);
-  declCache.set(key, {
-    mtime,
-    decls: decls === undefined ? (sameFile ? previous.decls : null) : decls,
-    misses,
-  });
-}
-
-// 返回 { decls, limited }。limited 表示解析预算已用完，这个文件本该解析却被跳过：
-// 调用方据此把 truncated 置 true 并停止遍历。
-async function declsFor(root, relPath, name, budget) {
-  let stat;
-  try {
-    stat = await fsp.stat(path.join(root, relPath));
-  } catch {
-    return { decls: [], limited: false };
-  }
-  if (stat.size > MAX_FILE_BYTES) return { decls: [], limited: false };
-
-  const key = cacheKey(root, relPath);
-  const cached = declCache.get(key);
-  if (cached && cached.mtime === stat.mtimeMs) {
-    // 负缓存只对同一个名字有效；换名字查询仍要重新读文件判断。
-    if (cached.misses && cached.misses.has(name)) return { decls: [], limited: false };
-    if (cached.decls) return { decls: cached.decls, limited: false };
-  }
-
-  let text;
-  try {
-    text = await fsp.readFile(path.join(root, relPath), 'utf8');
-  } catch {
-    return { decls: [], limited: false };
-  }
-  if (!prefilter(text, name)) {
-    // 「该文件在该 mtime 下没有这个相关名字」是稳定事实，可以按名字缓存；
-    // 但不能记成「文件没有声明」，否则换名字查询会漏掉真实声明。
-    storeEntry(root, relPath, stat.mtimeMs, undefined, name);
-    return { decls: [], limited: false };
-  }
-
-  // 预筛命中才计入解析预算：缓存命中和预筛未命中都不消耗。
-  if (budget.parsed >= MAX_PARSE_FILES) return { decls: [], limited: true };
-  budget.parsed += 1;
-
-  const ext = path.extname(relPath).toLowerCase();
-  const decls = PHP_EXT.has(ext)
-    ? parsePhpSymbols(text)
-    : parseJsSymbols(text, ext.slice(1));
-  storeEntry(root, relPath, stat.mtimeMs, decls);
-  return { decls, limited: false };
 }
 
 function depthOf(relPath) {
@@ -516,8 +608,8 @@ function compareMatches(a, b, context) {
   if (aCurrent !== bCurrent) return aCurrent - bCurrent;
 
   if (context.receiver) {
-    const aOwner = a.owner && a.owner === context.receiver ? 0 : 1;
-    const bOwner = b.owner && b.owner === context.receiver ? 0 : 1;
+    const aOwner = a.owner && a.owner.toLowerCase() === context.receiver.toLowerCase() ? 0 : 1;
+    const bOwner = b.owner && b.owner.toLowerCase() === context.receiver.toLowerCase() ? 0 : 1;
     if (aOwner !== bOwner) return aOwner - bOwner;
   }
 
@@ -532,33 +624,12 @@ function compareMatches(a, b, context) {
   return a.relPath.localeCompare(b.relPath);
 }
 
-// 当前文件的命名空间：用于「同命名空间优先」。
-// 只解析当前文件，拿不到就当作没有命名空间。
+// 当前文件所属的命名空间，用于「同命名空间优先」
 async function namespaceOf(root, relPath) {
-  if (!relPath) return '';
-  if (!PHP_EXT.has(path.extname(relPath).toLowerCase())) return '';
-
-  // currentPath 来自外部输入，先做项目内校验：`..`、绝对路径和指向项目外的
-  // 符号链接/联接都会在这里被拒掉，越界时当作没有当前文件。
-  let target;
-  try {
-    target = resolveWithin(root, relPath);
-  } catch {
-    return '';
-  }
-
-  // 与普通文件扫描同一上限，避免当前文件绕过 1MB 限制。
-  let stat;
-  try {
-    stat = await fsp.stat(target);
-  } catch {
-    return '';
-  }
-  if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return '';
-
+  if (!relPath || !PHP_EXT.has(path.extname(relPath).toLowerCase())) return '';
   let text;
   try {
-    text = await fsp.readFile(target, 'utf8');
+    text = await fsp.readFile(path.join(root, relPath), 'utf8');
   } catch {
     return '';
   }
@@ -566,20 +637,56 @@ async function namespaceOf(root, relPath) {
   return hit ? hit.namespace : '';
 }
 
-// currentPath 来自外部输入，可能是绝对路径或反斜杠形式。
-// 统一归一化到相对项目根的 `/` 分隔路径，否则「当前文件优先」会静默失效。
-// 越界路径不在这里拦截，交给 namespaceOf 的 resolveWithin 统一处理。
-function normalizeCurrentPath(root, value) {
-  if (typeof value !== 'string') return '';
-  let rel = value.trim();
-  if (!rel) return '';
-  if (path.isAbsolute(rel)) rel = path.relative(root, rel);
-  rel = rel.replace(/\\/g, '/').replace(/^\.\/+/, '');
-  return rel === '.' ? '' : rel;
+// self:: / static:: / $this-> 的接收者不是类名，要换成光标所在的类
+async function enclosingClassName(root, currentPath, line) {
+  if (!currentPath || !line) return '';
+  let text;
+  try {
+    text = await fsp.readFile(path.join(root, currentPath), 'utf8');
+  } catch {
+    return '';
+  }
+  const lines = text.split(/\r?\n/);
+  const limit = Math.min(line, lines.length);
+  let owner = '';
+  for (let index = 0; index < limit; index += 1) {
+    const match = /^\s*(?:abstract\s+|final\s+)?(?:class|interface|trait)\s+([A-Za-z_]\w*)/.exec(
+      lines[index],
+    );
+    if (match) owner = match[1];
+  }
+  return owner;
 }
 
-// PHP 局部变量只搜当前文件：找 `$name =` 的赋值点，把整行当作「签名」。
-// 变量没有 docblock，卡片上能提供的信息就是它被赋成了什么。
+// 索引只给了位置，签名和 docblock 要读那几个文件由 AST 补。
+// 命中的通常只有 1-3 个文件，成本可以忽略。
+async function resolveCandidates(root, candidates, target) {
+  const targetLower = target.toLowerCase();
+  const byFile = new Set();
+  for (const [relPath] of candidates) byFile.add(relPath);
+
+  const matches = [];
+  for (const relPath of byFile) {
+    let text;
+    try {
+      text = await fsp.readFile(path.join(root, relPath), 'utf8');
+    } catch {
+      continue;
+    }
+    const ext = path.extname(relPath).toLowerCase();
+    const decls = PHP_EXT.has(ext)
+      ? parsePhpSymbols(text)
+      : parseJsSymbols(text, ext.slice(1));
+    for (const decl of decls) {
+      if (!nameMatches(decl.name, relPath, target, targetLower)) continue;
+      matches.push({ ...decl, relPath });
+    }
+  }
+  return matches;
+}
+
+// PHP 局部变量与函数参数只搜当前文件：找赋值点和 `function foo($name, ...)` 的
+// 参数声明。变量没有 docblock，卡片上能提供的信息就是它出现的那一行。
 async function lookupLocalVariable(root, currentPath, name) {
   if (!currentPath) return emptyResult();
   if (!PHP_EXT.has(path.extname(currentPath).toLowerCase())) return emptyResult();
@@ -594,10 +701,17 @@ async function lookupLocalVariable(root, currentPath, name) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // `=` 后面紧跟 `=` 或 `>` 时是比较/箭头，不是赋值
   const assign = new RegExp(`${escaped}\\s*=(?!=|>)`);
+  const param = new RegExp(`(?:^|[(,])\\s*${escaped}\\s*[,)=]`);
+
   const lines = text.split(/\r?\n/);
   const matches = [];
   for (let index = 0; index < lines.length; index += 1) {
-    if (!assign.test(lines[index])) continue;
+    const line = lines[index];
+    const isAssign = assign.test(line);
+    // 参数只在函数签名行里认，避免把 `foo($categoryId)` 这类调用当成声明
+    const isParam = !isAssign && /\bfunction\b/.test(line) && param.test(line);
+    if (!isAssign && !isParam) continue;
+
     matches.push({
       relPath: currentPath,
       line: index + 1,
@@ -605,7 +719,7 @@ async function lookupLocalVariable(root, currentPath, name) {
       name,
       owner: '',
       namespace: '',
-      signature: lines[index].trim(),
+      signature: line.trim(),
       doc: '',
     });
   }
@@ -615,57 +729,57 @@ async function lookupLocalVariable(root, currentPath, name) {
 
 async function lookup(projectPath, name, options = {}) {
   // name 可能来自外部输入。非字符串经 String() 会变成 "[object Object]"，
-  // 长度足够从而在预筛前就触发全项目文件遍历；这里一律视为无效查询。
-  if (typeof name !== 'string') {
-    return emptyResult();
-  }
+  // 这里一律视为无效查询。
+  if (typeof name !== 'string') return emptyResult();
+
   const target = name.trim();
-  if (target.length < 2) {
-    return emptyResult();
-  }
+  if (target.length < 2) return emptyResult();
 
   const root = path.resolve(projectPath);
   const currentPath = normalizeCurrentPath(root, options.currentPath);
 
-  // PHP 变量（`$name`）：只在当前文件里有意义。搜全项目只会命中一堆
-  // 同名但无关的局部变量，而且这类名字在业务文件里出现频率极高，
-  // 会白白耗掉解析预算。所以走独立分支，只读当前文件。
+  // PHP 变量（`$name`）：只在当前文件里有意义
   if (target.startsWith('$')) {
     return lookupLocalVariable(root, currentPath, target);
   }
 
-  // 关键字不可能对应声明，却几乎命中所有 PHP 文件；
-  // 在遍历之前挡掉，别让一次 Ctrl+点击拖住主进程。
-  if (!isValidName(target)) {
-    return emptyResult();
+  if (!isValidName(target)) return emptyResult();
+
+  const index = await ensureIndex(root);
+  refreshIfStale(root, index);
+
+  const candidates = index.symbols[target.toLowerCase()] || [];
+
+  let receiver = String(options.receiver || '');
+  if (/^(\$this|self|static)$/i.test(receiver)) {
+    receiver = await enclosingClassName(root, currentPath, Number(options.line) || 0);
   }
-  const { files, truncated: walkTruncated } = await collectFiles(root);
-  let truncated = walkTruncated;
-  const targetLower = target.toLowerCase();
+
   const context = {
     currentPath,
-    receiver: String(options.receiver || ''),
+    receiver,
     namespace: await namespaceOf(root, currentPath),
   };
 
-  const budget = { parsed: 0 };
-  const matches = [];
-  for (const relPath of files) {
-    const { decls, limited } = await declsFor(root, relPath, target, budget);
-    if (limited) {
-      // 预算用完，后面的文件即使命中也不会被解析：结果已不完整，停止遍历。
-      truncated = true;
-      break;
-    }
-    for (const decl of decls) {
-      // PHP 大小写不敏感、JS 大小写敏感；保留 decl.name 的原始写法返回给调用方。
-      if (!nameMatches(decl.name, relPath, target, targetLower)) continue;
-      matches.push({ ...decl, relPath });
-    }
-  }
-
+  const matches = await resolveCandidates(root, candidates, target);
   matches.sort((a, b) => compareMatches(a, b, context));
-  return { ok: true, matches, truncated, scanned: files.length };
+
+  return {
+    ok: true,
+    matches,
+    truncated: false,
+    scanned: Object.keys(index.files).length,
+  };
 }
 
-module.exports = { parsePhpSymbols, parseJsSymbols, cleanDoc, lookup, resetCache, compareMatches };
+module.exports = {
+  parsePhpSymbols,
+  parseJsSymbols,
+  cleanDoc,
+  lookup,
+  configure,
+  warmIndex,
+  resetCache,
+  invalidate,
+  compareMatches,
+};

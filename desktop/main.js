@@ -218,6 +218,18 @@ function registerIpc() {
     return symbols.lookup(knownPath, name, input);
   });
 
+  // 打开项目时预热符号索引：用户在编辑器里第一次 Ctrl+点击就已经是快的。
+  // 失败不影响任何功能，只是首次点击会等一次建索引。
+  ipcMain.handle('symbols:warm', (_event, projectPath) => {
+    let knownPath;
+    try {
+      knownPath = assertProjectPath(projectPath);
+    } catch {
+      return { ok: false, files: 0 };
+    }
+    return symbols.warmIndex(knownPath).catch(() => ({ ok: false, files: 0 }));
+  });
+
   ipcMain.handle('updater:download', () => updater.startDownload());
   ipcMain.handle('updater:install', () => updater.install());
   ipcMain.handle('updater:state', () => updater.getState());
@@ -409,17 +421,24 @@ function registerIpc() {
     fileApi.read(assertProjectPath(projectPath), relPath),
   );
 
-  ipcMain.handle('fs:write', (_event, projectPath, relPath, content, encoding, mtime) =>
-    fileApi.write(assertProjectPath(projectPath), relPath, content, encoding, mtime),
-  );
+  ipcMain.handle('fs:write', async (_event, projectPath, relPath, content, encoding, mtime) => {
+    const known = assertProjectPath(projectPath);
+    const result = await fileApi.write(known, relPath, content, encoding, mtime);
+    // 保存后让符号索引失效，否则刚写的函数要等索引过期才查得到
+    symbols.invalidate(known);
+    return result;
+  });
 
   ipcMain.handle('fs:stat', (_event, projectPath, relPath) =>
     fileApi.stat(assertProjectPath(projectPath), relPath),
   );
 
-  ipcMain.handle('fs:write-minified', (_event, projectPath, relPath, content) =>
-    fileApi.writeMinified(assertProjectPath(projectPath), relPath, content),
-  );
+  ipcMain.handle('fs:write-minified', async (_event, projectPath, relPath, content) => {
+    const known = assertProjectPath(projectPath);
+    const result = await fileApi.writeMinified(known, relPath, content);
+    symbols.invalidate(known);
+    return result;
+  });
 
   ipcMain.handle('fs:search', (_event, projectPath, query, options) =>
     fileApi.search(assertProjectPath(projectPath), query, options),
@@ -580,6 +599,8 @@ if (!hasLock) {
     loginItem.repairOnStartup();
     // Release 列表落盘，重启应用后不必重新打 GitHub API
     updates.configure({ cacheFile: path.join(app.getPath('userData'), 'update-cache.json') });
+    // 符号索引按项目落盘，重启应用后不必重建
+    symbols.configure({ indexDir: path.join(app.getPath('userData'), 'symbol-index') });
     registerIpc();
     createWindow();
     updater.init(send, () => {

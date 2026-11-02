@@ -7,7 +7,7 @@ const WORD_CHAR = /[\w$]/;
 export function wordAndReceiverAt(
   state: EditorState,
   pos: number,
-): { name: string; receiver: string; from: number; to: number } | null {
+): { name: string; receiver: string; from: number; to: number; line: number } | null {
   // 调用方可能给出越界位置（例如文档刚被替换），先夹到合法区间再取行
   const safePos = Math.max(0, Math.min(pos, state.doc.length));
   const line = state.doc.lineAt(safePos);
@@ -28,13 +28,13 @@ export function wordAndReceiverAt(
   const match = /([A-Za-z_][\w]*)\s*(?:::|->)\s*$/.exec(before);
   const receiver = match ? match[1] : '';
 
-  return { name, receiver, from: line.from + start, to: line.from + end };
+  return { name, receiver, from: line.from + start, to: line.from + end, line: line.number };
 }
 
 export async function lookupSymbol(
   projectPath: string,
   name: string,
-  options: { currentPath?: string; receiver?: string },
+  options: { currentPath?: string; receiver?: string; line?: number },
 ): Promise<SymbolLookupResult> {
   const bridge = window.api?.symbols;
   if (!bridge) return { ok: false, failed: true, matches: [], truncated: false, scanned: 0 };

@@ -227,8 +227,9 @@ declare global {
         lookup: (
           projectPath: string,
           name: string,
-          options?: { currentPath?: string; receiver?: string },
+          options?: { currentPath?: string; receiver?: string; line?: number },
         ) => Promise<SymbolLookupResult>;
+        warm: (projectPath: string) => Promise<{ ok: boolean; files: number }>;
       };
       browser: {
         onOpenUrl: (

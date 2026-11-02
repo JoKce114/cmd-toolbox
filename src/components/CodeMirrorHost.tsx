@@ -106,7 +106,7 @@ function createCardDom(
 
 function referenceExtension(options: {
   isEnabled: () => boolean;
-  lookup: (name: string, receiver: string) => Promise<SymbolCardState>;
+  lookup: (name: string, receiver: string, line: number) => Promise<SymbolCardState>;
   onJump: (match: SymbolMatch) => void;
 }): Extension {
   const handlers = EditorView.domEventHandlers({
@@ -138,7 +138,7 @@ function referenceExtension(options: {
         }),
       });
 
-      void options.lookup(word.name, word.receiver).then((card) => {
+      void options.lookup(word.name, word.receiver, word.line).then((card) => {
         if (view.state.field(cardField, false) === undefined) return;
         const current = view.state.field(cardField);
         // 序号不一致说明期间又发起了新查询、卡片已关闭或编辑器已重建
@@ -377,10 +377,11 @@ export function CodeMirrorHost({
   const referenceExtensionOption = () =>
     referenceExtension({
       isEnabled: () => referenceEnabledRef.current,
-      lookup: async (name, receiver) => {
+      lookup: async (name, receiver, line) => {
         const result = await lookupSymbol(projectPathRef.current, name, {
           currentPath: activeFileRef.current,
           receiver,
+          line,
         });
         return {
           name,

@@ -321,6 +321,14 @@ export function EditorPane({
         ? findModule('ref-js') ?? null
         : null;
 
+  // 打开编辑器时预热符号索引：全量扫描要几百毫秒到一两秒，
+  // 放在用户第一次 Ctrl+点击之前做完，点击就不会卡。
+  useEffect(() => {
+    const bridge = window.api?.symbols;
+    if (!bridge?.warm) return;
+    void bridge.warm(group.path).catch(() => {});
+  }, [group.path]);
+
   return (
     <section
       ref={rootRef}
