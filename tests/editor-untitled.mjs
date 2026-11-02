@@ -151,6 +151,18 @@ try {
   const afterSave = await page.locator('.editor-tab-name').allInnerTexts();
   assert(afterSave.some((name) => name.includes('saved.php')), '页签标题变成文件名');
   assert(!afterSave.some((name) => name.includes('Untitled')), '虚拟页签已消失');
+  // 另存为会新建文件（还可能自动创建父目录），文件树必须跟着刷新，
+  // 不能等用户手动点刷新才看得到。
+  await waitFor(
+    async () =>
+      (await page.locator('.file-tree .file-row').filter({ hasText: 'saved.php' }).count()) > 0,
+    8000,
+    '文件树出现 saved.php',
+  );
+  assert(
+    (await page.locator('.file-tree .file-row').filter({ hasText: 'saved.php' }).count()) > 0,
+    '文件树里能看到 saved.php 这一行',
+  );
 
   console.log('4. 保存后 Ctrl+Z 能撤销保存前的输入');
   await page.locator('.cm-content').first().click();

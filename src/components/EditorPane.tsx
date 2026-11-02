@@ -227,7 +227,12 @@ export function EditorPane({
       setDiffTarget({
         kind: 'text',
         title: `${displayNameFor(leftRel)} ↔ ${displayNameFor(rightRel)}`,
-        patch: buildTextPatch(leftRel, left.content, rightRel, right.content),
+        patch: buildTextPatch(
+          displayNameFor(leftRel),
+          left.content,
+          displayNameFor(rightRel),
+          right.content,
+        ),
       });
       setDiffCompareWith(null);
     },
@@ -299,9 +304,9 @@ export function EditorPane({
       let patch = '';
       if (diffSource.kind === 'pair') {
         patch = buildTextPatch(
-          diffSource.left,
+          displayNameFor(diffSource.left),
           diffPrimaryContent ?? '',
-          diffSource.right,
+          displayNameFor(diffSource.right),
           diffSecondaryContent ?? '',
         );
       } else if (diffSource.kind === 'disk') {
@@ -501,18 +506,39 @@ export function EditorPane({
     onFilePathChangeRef.current?.(next);
   }, [activePath, files, tab.filePath]);
 
-  // 空白窗口内容快照：只把「虚拟路径 + 内容」拼成原始字符串当依赖，
-  // 普通文件每次按键都会换 files 对象，不能因此反复通知父组件。
-  // 恢复 / 编辑 / 关闭空白窗口都会让这个字符串变化，其余情况 effect 不跑。
-  // 拼接可能是 2MB 级别的，用 useMemo 避免菜单、拖拽这类无关渲染反复算一遍。
-  const untitledSnapshot = useMemo(
-    () =>
-      Object.keys(files)
-        .filter((relPath) => isUntitledPath(relPath))
-        .map((relPath) => `${relPath}\u0000${files[relPath]?.content ?? ''}`)
-        .join('\u0001'),
-    [files],
-  );
+  // 空白窗口内容快照：只比较各空白条目的内容引用并维护版本号，不把全部内容
+  // 拼成一个字符串（2MB 上限下那会是每键 O(总内容)）。普通文件每次按键都会换
+  // files 对象，这里最多做 O(空白窗口数) 的引用比较。快照用来触发
+  // onUntitledContentsChange，必须识别「长度相同但内容不同」，所以按内容引用
+  // 变化递增版本，而不是只比长度。
+  const untitledContentCacheRef = useRef(new Map<string, string>());
+  const untitledVersionRef = useRef(new Map<string, number>());
+  const untitledSnapshot = useMemo(() => {
+    const cache = untitledContentCacheRef.current;
+    const versions = untitledVersionRef.current;
+    const parts: string[] = [];
+    const seen = new Set<string>();
+    for (const relPath of openPaths) {
+      if (!isUntitledPath(relPath)) continue;
+      seen.add(relPath);
+      const content = files[relPath]?.content ?? '';
+      let version = versions.get(relPath) ?? 0;
+      if (cache.get(relPath) !== content) {
+        version += 1;
+        versions.set(relPath, version);
+        cache.set(relPath, content);
+      }
+      parts.push(`${relPath}\u0000${version}`);
+    }
+    // 关掉的条目不能留下缓存：同编号重新打开时要重新计数，
+    // 否则旧版本号会和新内容撞在一起。
+    for (const relPath of Array.from(cache.keys())) {
+      if (seen.has(relPath)) continue;
+      cache.delete(relPath);
+      versions.delete(relPath);
+    }
+    return parts.join('\u0001');
+  }, [openPaths, files]);
 
   useEffect(() => {
     const contents: Record<string, string> = {};
@@ -592,6 +618,8 @@ export function EditorPane({
   const markResolved = useCallback(async () => {
     const target = activePathRef.current;
     if (!target) return;
+    // 空白窗口没有磁盘文件，git stage 会拿 untitled://N 去执行并弹错误 toast。
+    if (isUntitledPath(target)) return;
     setMarkingResolved(true);
     try {
       await window.api.git.stage(group.path, [target]);
@@ -986,7 +1014,7 @@ export function EditorPane({
         </p>
       ) : null}
 
-      {hadConflict && conflictCount === 0 && !unrecognizedConflict && !file.dirty && !file.readOnly && activePath ? (
+      {hadConflict && conflictCount === 0 && !unrecognizedConflict && !file.dirty && !file.readOnly && activePath && !isUntitledPath(activePath) ? (
         <div className="editor-notice editor-notice-done editor-resolve-bar">
           <span>冲突已全部处理并保存，标记为已解决后即可提交。</span>
           <button
@@ -1163,6 +1191,9 @@ export function EditorPane({
             // 把刚保存的内容从磁盘读一遍并清掉撤销栈
             appliedPathRef.current = relPath;
             onFilePathChangeRef.current?.(relPath);
+            // 另存为会新建文件（还可能自动创建父目录）：文件树的 reveal 对
+            // 根目录与已缓存目录都会提前返回，必须显式重列一次才看得到新文件。
+            setTreeRefreshToken((token) => token + 1);
             onToast('已保存', 'success');
             return null;
           }}
