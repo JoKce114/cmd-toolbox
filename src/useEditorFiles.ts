@@ -159,11 +159,13 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
       virtualPath: string,
       targetRelPath: string,
     ): Promise<{ ok: boolean; message?: string }> => {
-      const state = filesRef.current[virtualPath];
-      if (!state) return { ok: false, message: '空白窗口已关闭' };
+      // 先确认来源是虚拟路径：未打开的普通路径也要归入「不是空白窗口」，
+      // 不能报成「空白窗口已关闭」，那会让调用方误判页签状态。
       if (!isUntitledPath(virtualPath)) {
         return { ok: false, message: '该页签不是空白窗口' };
       }
+      const state = filesRef.current[virtualPath];
+      if (!state) return { ok: false, message: '空白窗口已关闭' };
       if (isUntitledPath(targetRelPath)) {
         return { ok: false, message: '目标路径无效' };
       }
@@ -181,6 +183,29 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
         return { ok: false, message: toErrorMessage(error) };
       }
 
+      // await 期间用户可能用 Ctrl+W 关掉了这个页签，或者目标已被打开。
+      // filesRef 在每次渲染时同步，await 恢复后读到的是已提交的最新状态。
+      const latest = filesRef.current;
+      if (!latest[virtualPath] || latest[targetRelPath]) {
+        return { ok: false, message: '页签已关闭或目标已被打开' };
+      }
+
+      // 写盘后立刻 stat 一次，拿真实 mtime。否则 2 秒轮询会发现 mtime 不匹配
+      // 再整读一次文件；这期间按 Ctrl+S 还会被误判为「外部修改」。
+      let mtime = 0;
+      try {
+        const info = await window.api.files.stat(groupRef.current.path, targetRelPath);
+        mtime = Number(info?.mtime) || 0;
+      } catch {
+        // 拿不到就退回 0，轮询会补上；不影响保存本身
+      }
+
+      // stat 又是一个 await，同样的竞态再确认一次
+      const settled = filesRef.current;
+      if (!settled[virtualPath] || settled[targetRelPath]) {
+        return { ok: false, message: '页签已关闭或目标已被打开' };
+      }
+
       const next: EditorFileState = {
         ...state,
         relPath: targetRelPath,
@@ -188,12 +213,15 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
         dirty: false,
         saving: false,
         loading: false,
-        mtime: 0,
+        mtime,
         readOnly: false,
         failedPath: '',
       };
 
       setFiles((previous) => {
+        // stat 的 await 期间也可能有人关掉页签或打开目标：两种情况都不该强行写入
+        if (!previous[virtualPath]) return previous;
+        if (previous[targetRelPath]) return previous;
         const merged = { ...previous };
         delete merged[virtualPath];
         merged[targetRelPath] = next;
