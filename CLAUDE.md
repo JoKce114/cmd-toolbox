@@ -459,15 +459,16 @@ node tests/device-emulation-probe.mjs
   `startsWith`——漏一处就会拿伪路径去读磁盘，表现是每 2 秒报一次错。
 - **新建入口只有两个**：页签栏右侧的 ＋（`.editor-tab-add`）和页签右键菜单
   「新建空白文件」。页签标题、顶部路径和「打开的编辑器」都走
-  `displayNameFor()`，虚拟路径显示成 `Untitled-N`；顶部路径展示的是文件名，
-  不是完整相对路径。
+  `displayNameFor()`，虚拟路径显示成 `Untitled-N`；顶部路径**只展示文件名**，
+  完整相对路径放在 `.pane-path` 的 `title` 属性里（测试靠它区分同名文件，
+  `editor-goto-def.mjs` 的 `openFile()` 用的就是 `title`）。
 - **保存 = 另存为**：`save()` 对虚拟路径直接返回 `'unchanged'`，拦截在 `handleSave` 里。
   `saveUntitledAs` 必须**先 `createFile` 写盘成功、再原子换键**；反过来一旦写盘失败
   会留下指向不存在文件的页签。
 - **换路径后不能重新 `open()`**：`EditorPane` 要先改 `appliedPathRef.current` 再调
   `onFilePathChange`，否则上层 `tab.filePath` 变化会触发重新读盘，撤销栈全丢。
   `CodeMirrorHost` 会识别 `untitled://N → 真实路径` 并保留同一个 `EditorView`。
-- **`readOnly` 走 CodeMirror 的 Compartment，不参与 `EditorView` 重建**（Task 5 改的）。
+- **`readOnly` 走 CodeMirror 的 Compartment，不参与 `EditorView` 重建**。
   不要把它加回重建依赖：另存为换路径时重建实例会丢掉撤销栈和光标。
 - **编号复用最小可用值**：关掉 `Untitled-1` 再新建拿到的还是 `Untitled-1`。
 - **空白窗口不能与磁盘版本或 Git HEAD 比较**（没有对应版本），菜单置灰 + 函数内兜底。

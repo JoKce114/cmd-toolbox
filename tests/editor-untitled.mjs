@@ -156,8 +156,13 @@ try {
   await page.locator('.cm-content').first().click();
   await page.keyboard.press('Control+z');
   await page.waitForTimeout(400);
-  const undoneText = await page.locator('.cm-content').first().innerText();
-  assert(!undoneText.includes('echo 1'), '撤销掉了保存前的输入');
+  const undoneText = (await page.locator('.cm-content').first().innerText()).trim();
+  // 保存前这个窗口是空的；撤销必须回到空串。只断言「不含 echo 1」在视图被
+  // 整个清空时也会通过，测不出撤销是否真的生效。
+  assert(
+    undoneText === '',
+    `撤销后回到保存前的空白内容，实际 ${JSON.stringify(undoneText)}`,
+  );
 
   console.log('5. 另存为到已存在的路径：弹窗报错且不覆盖原文件');
   await page.locator('.editor-tab-add').click();

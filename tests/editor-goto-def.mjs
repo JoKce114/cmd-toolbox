@@ -233,6 +233,12 @@ async function currentPanePath(page) {
   return page.locator('.editor-pane .pane-path').first().innerText();
 }
 
+// .pane-path 的文本只是文件名，完整相对路径在 title 里（EditorPane.tsx）。
+// 用 title 才能区分 app/caller.php 与 deep/app/caller.php 这类同名文件。
+async function currentPanePathTitle(page) {
+  return page.locator('.editor-pane .pane-path').first().getAttribute('title');
+}
+
 // 打开文件树里的文件。夹具放在 app/ 子目录，先逐层展开沿途目录。
 // 目录行和文件行都用 title=relPath（FileTree.tsx），比按文字匹配稳。
 async function openFile(page, relPath) {
@@ -250,12 +256,16 @@ async function openFile(page, relPath) {
   await entry.click();
   // 等面板标题切到目标文件、且正文已经载入。固定 sleep 在慢机器上不够、
   // 快机器上又白等；.cm-content 可能在切换前就命中旧编辑器，不能单独依赖。
-  // 面板标题（pane-path）显示的是文件名，不是完整相对路径。
-  const displayName = relPath.split('/').pop() || relPath;
+  // .pane-path 的文本只是文件名，改用 title 里的完整相对路径精确比对，
+  // 否则 deep/app/caller.php 也会被当成 app/caller.php。
+  const expectedRel = relPath.replace(/\\/g, '/');
+  const expectedAbs = join(projectDir, relPath).replace(/\\/g, '/');
   await waitFor(
     async () => {
-      const path = await currentPanePath(page).catch(() => '');
-      if (!path.endsWith(displayName)) return false;
+      const title = await currentPanePathTitle(page).catch(() => '');
+      if (!title) return false;
+      const normalized = title.replace(/\\/g, '/');
+      if (normalized !== expectedRel && normalized !== expectedAbs) return false;
       const text = await page.locator('.cm-content').first().innerText().catch(() => '');
       return text.trim().length > 0;
     },
