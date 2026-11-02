@@ -1,4 +1,7 @@
+import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const symbols = require('../desktop/symbols.js');
@@ -306,5 +309,154 @@ const cjsSource = [
 const cjsDecls = symbols.parseJsSymbols(cjsSource, 'cjs');
 assert(cjsDecls.some((d) => d.name === 'cjsFn'), 'cjs 能解析 with 和顶层 return');
 assert(symbols.parseJsSymbols(cjsSource, 'js').length === 0, '同一份 CJS 按 module 解析确实会失败');
+
+console.log('\n10. 项目查询');
+const projectDir = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-'));
+mkdirSync(join(projectDir, 'app'), { recursive: true });
+mkdirSync(join(projectDir, 'vendor'), { recursive: true });
+
+writeFileSync(
+  join(projectDir, 'app', 'current.php'),
+  ['<?php', 'namespace App;', 'class Here {', '  public function shared() {}', '}'].join(NL),
+  'utf8',
+);
+writeFileSync(
+  join(projectDir, 'app', 'other.php'),
+  ['<?php', 'namespace App;', 'class Other {', '  public function shared() {}', '}'].join(NL),
+  'utf8',
+);
+writeFileSync(
+  join(projectDir, 'app', 'deep.php'),
+  ['<?php', 'namespace App;', 'class Deep {', '  public function shared() {}', '}'].join(NL),
+  'utf8',
+);
+writeFileSync(
+  join(projectDir, 'vendor', 'lib.php'),
+  ['<?php', 'class Vendor {', '  public function shared() {}', '}'].join(NL),
+  'utf8',
+);
+// public static 修饰 + 大小写混合的声明名：预筛正则必须能命中
+writeFileSync(
+  join(projectDir, 'app', 'mixed.php'),
+  ['<?php', 'namespace App;', 'class Mixed {', '  public static function MixedCase() {}', '}'].join(NL),
+  'utf8',
+);
+
+try {
+  symbols.resetCache();
+  const found = await symbols.lookup(projectDir, 'shared', { currentPath: 'app/current.php' });
+  assert(found.ok === true, '查询成功');
+  assert(found.matches.length === 3, `vendor 被跳过，实际 ${found.matches.length} 条`);
+  assert(
+    found.matches.every((m) => !m.relPath.startsWith('vendor/')),
+    '结果里没有 vendor 下的声明',
+  );
+  assert(
+    found.matches[0].relPath === 'app/current.php',
+    `当前文件排第一，实际 ${found.matches[0].relPath}`,
+  );
+  assert(found.matches[0].line === 4, `行号是 1 起始的声明行，实际 ${found.matches[0].line}`);
+
+  // 上一轮查询里 mixed.php 因预筛未命中被扫过，这里不能因此漏掉
+  const mixedHit = await symbols.lookup(projectDir, 'MixedCase', {});
+  assert(
+    mixedHit.matches.length === 1 && mixedHit.matches[0].relPath === 'app/mixed.php',
+    `public static / 大小写混合的声明能被命中，实际 ${mixedHit.matches.length} 条`,
+  );
+
+  symbols.resetCache();
+  const byReceiver = await symbols.lookup(projectDir, 'shared', {
+    currentPath: 'app/other.php',
+    receiver: 'Deep',
+  });
+  assert(
+    byReceiver.matches[0].relPath === 'app/other.php',
+    '当前文件仍然优先于接收者匹配',
+  );
+
+  symbols.resetCache();
+  const noCurrent = await symbols.lookup(projectDir, 'shared', { receiver: 'Deep' });
+  assert(noCurrent.matches[0].relPath === 'app/deep.php', '接收者同名类优先');
+
+  symbols.resetCache();
+  const missing = await symbols.lookup(projectDir, 'nothingHere', {});
+  assert(missing.ok === true && missing.matches.length === 0, '查不到时返回空列表而不是报错');
+
+  const tooShort = await symbols.lookup(projectDir, 'a', {});
+  assert(tooShort.matches.length === 0, '查询名少于 2 字符直接返回空');
+
+  // 文件改动后 mtime 变化，缓存必须失效
+  symbols.resetCache();
+  await symbols.lookup(projectDir, 'renamedLater', {});
+  writeFileSync(
+    join(projectDir, 'app', 'other.php'),
+    ['<?php', 'namespace App;', 'class Other {', '  public function renamedLater() {}', '}'].join(NL),
+    'utf8',
+  );
+  const afterEdit = await symbols.lookup(projectDir, 'renamedLater', {});
+  assert(afterEdit.matches.length === 1, '文件改动后缓存失效，能查到新声明');
+} finally {
+  rmSync(projectDir, { recursive: true, force: true });
+}
+
+console.log('\n11. 项目隔离与缓存');
+const dirA = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-a-'));
+const dirB = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-b-'));
+const sameTime = new Date(1700000000000);
+try {
+  writeFileSync(join(dirA, 'a.php'), ['<?php', 'function alphaOnly() {}'].join(NL), 'utf8');
+  writeFileSync(join(dirB, 'a.php'), ['<?php', 'function betaOnly() {}'].join(NL), 'utf8');
+  // 两个不同项目下的同名相对路径，强制相同 mtime：缓存只按 relPath 作 key 时会串味
+  utimesSync(join(dirA, 'a.php'), sameTime, sameTime);
+  utimesSync(join(dirB, 'a.php'), sameTime, sameTime);
+
+  symbols.resetCache();
+  const aHit = await symbols.lookup(dirA, 'alphaOnly', {});
+  assert(aHit.matches.length === 1, '项目 A 能查到自己的声明');
+  const bHit = await symbols.lookup(dirB, 'betaOnly', {});
+  assert(bHit.matches.length === 1, `不同项目的同名相对路径不串味，实际 ${bHit.matches.length} 条`);
+  assert(bHit.matches[0].name === 'betaOnly', '项目 B 拿到的是 B 的声明');
+
+  // 预筛没命中不能把「没解析」当成「没有声明」缓存起来
+  writeFileSync(join(dirA, 'b.php'), ['<?php', 'function alphaOnly() {}'].join(NL), 'utf8');
+  symbols.resetCache();
+  const prefilterMiss = await symbols.lookup(dirA, 'notPresent', {});
+  assert(prefilterMiss.matches.length === 0, '预筛未命中时返回空');
+  const afterMiss = await symbols.lookup(dirA, 'alphaOnly', {});
+  assert(afterMiss.matches.length === 2, `同文件换名字再查不能漏，实际 ${afterMiss.matches.length} 条`);
+} finally {
+  rmSync(dirA, { recursive: true, force: true });
+  rmSync(dirB, { recursive: true, force: true });
+}
+
+console.log('\n12. 扫描上限');
+const limitDir = mkdtempSync(join(tmpdir(), 'cmdtb-symbols-limit-'));
+try {
+  writeFileSync(
+    join(limitDir, 'huge.php'),
+    '<?php function hugeFn() {}\n' + 'x'.repeat(1024 * 1024 + 10),
+    'utf8',
+  );
+  writeFileSync(join(limitDir, 'small.php'), '<?php function smallFn() {}', 'utf8');
+
+  symbols.resetCache();
+  const huge = await symbols.lookup(limitDir, 'hugeFn', {});
+  assert(huge.matches.length === 0, '单文件超过 1MB 不解析');
+  const small = await symbols.lookup(limitDir, 'smallFn', {});
+  assert(small.matches.length === 1, '同目录下的小文件仍然能查到');
+
+  const manyDir = join(limitDir, 'many');
+  mkdirSync(manyDir, { recursive: true });
+  for (let i = 0; i < 4001; i += 1) {
+    writeFileSync(join(manyDir, `f${String(i).padStart(4, '0')}.php`), '', 'utf8');
+  }
+
+  symbols.resetCache();
+  const capped = await symbols.lookup(limitDir, 'zzz', {});
+  assert(capped.truncated === true, '超过 4000 个文件时标记 truncated');
+  assert(capped.scanned === 4000, `最多扫描 4000 个文件，实际 ${capped.scanned}`);
+} finally {
+  rmSync(limitDir, { recursive: true, force: true });
+}
 
 console.log(`\n全部通过：${passed} 项`);

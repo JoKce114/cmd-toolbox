@@ -1,6 +1,8 @@
 // 扫描时跳过的目录：依赖和产物目录里同名声明太多，还会把扫描拖慢
-// （Task 3 扫描项目时使用，本文件目前未引用）
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'vendor', 'dist', 'release', 'release-build']);
+
+const fsp = require('fs/promises');
+const path = require('path');
 
 let phpEngine = null;
 
@@ -323,4 +325,173 @@ function parseJsSymbols(text, lang) {
   return out;
 }
 
-module.exports = { parsePhpSymbols, parseJsSymbols, cleanDoc };
+const MAX_FILES = 4000;
+const MAX_FILE_BYTES = 1024 * 1024;
+const PHP_EXT = new Set(['.php']);
+const JS_EXT = new Set(['.js', '.mjs', '.cjs', '.jsx']);
+
+// `${项目根}\0${relPath}` → { mtime, decls }。
+// 只装被实际解析过的文件，不是项目级索引。key 必须带项目根：
+// 两个项目都有 app/a.php 时，只按 relPath 会互相读到对方的声明。
+const declCache = new Map();
+
+function resetCache() {
+  declCache.clear();
+}
+
+function cacheKey(root, relPath) {
+  return `${root}\u0000${relPath}`;
+}
+
+function shouldSkipDir(name) {
+  return SKIP_DIRS.has(name) || name.startsWith('release-build');
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function collectFiles(root) {
+  const files = [];
+  let truncated = false;
+
+  async function walk(relDir) {
+    if (truncated) return;
+    let entries;
+    try {
+      entries = await fsp.readdir(path.join(root, relDir), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (truncated) return;
+      if (entry.isSymbolicLink()) continue;
+      const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (shouldSkipDir(entry.name)) continue;
+        await walk(relPath);
+        continue;
+      }
+      if (files.length >= MAX_FILES) {
+        truncated = true;
+        return;
+      }
+      const ext = path.extname(entry.name).toLowerCase();
+      if (PHP_EXT.has(ext) || JS_EXT.has(ext)) files.push(relPath);
+    }
+  }
+
+  await walk('');
+  return { files, truncated };
+}
+
+// 文本预筛：只有真的出现 "function name" / "class name" 的文件才值得解析。
+// 不预筛直接全量解析，千文件项目要二十秒。
+// `public static function name`、`FUNCTION name` 都能命中：修饰符在 function 之前，
+// 正则只要求 function 与名字之间是空白，并用 i 忽略大小写。
+function prefilter(text, name) {
+  const escaped = escapeRegExp(name);
+  return new RegExp(`\\b(?:function|class)\\s+${escaped}\\b`, 'i').test(text);
+}
+
+async function declsFor(root, relPath, name) {
+  let stat;
+  try {
+    stat = await fsp.stat(path.join(root, relPath));
+  } catch {
+    return [];
+  }
+  if (stat.size > MAX_FILE_BYTES) return [];
+
+  const key = cacheKey(root, relPath);
+  const cached = declCache.get(key);
+  if (cached && cached.mtime === stat.mtimeMs) return cached.decls;
+
+  let text;
+  try {
+    text = await fsp.readFile(path.join(root, relPath), 'utf8');
+  } catch {
+    return [];
+  }
+  // 预筛未命中的结果不能缓存：同一个文件换一个名字查询时，
+  // 「没为这个名字解析」不等于「文件里没有声明」。
+  if (!prefilter(text, name)) return [];
+
+  const ext = path.extname(relPath).toLowerCase();
+  const decls = PHP_EXT.has(ext)
+    ? parsePhpSymbols(text)
+    : parseJsSymbols(text, ext.slice(1));
+  declCache.set(key, { mtime: stat.mtimeMs, decls });
+  return decls;
+}
+
+function depthOf(relPath) {
+  return relPath.split('/').length;
+}
+
+function compareMatches(a, b, context) {
+  const aCurrent = a.relPath === context.currentPath ? 0 : 1;
+  const bCurrent = b.relPath === context.currentPath ? 0 : 1;
+  if (aCurrent !== bCurrent) return aCurrent - bCurrent;
+
+  if (context.receiver) {
+    const aOwner = a.owner && a.owner === context.receiver ? 0 : 1;
+    const bOwner = b.owner && b.owner === context.receiver ? 0 : 1;
+    if (aOwner !== bOwner) return aOwner - bOwner;
+  }
+
+  if (context.namespace) {
+    const aNs = a.namespace === context.namespace ? 0 : 1;
+    const bNs = b.namespace === context.namespace ? 0 : 1;
+    if (aNs !== bNs) return aNs - bNs;
+  }
+
+  const depth = depthOf(a.relPath) - depthOf(b.relPath);
+  if (depth !== 0) return depth;
+  return a.relPath.localeCompare(b.relPath);
+}
+
+// 当前文件的命名空间：用于「同命名空间优先」。
+// 只解析当前文件，拿不到就当作没有命名空间。
+async function namespaceOf(root, relPath) {
+  if (!relPath) return '';
+  if (!PHP_EXT.has(path.extname(relPath).toLowerCase())) return '';
+  let text;
+  try {
+    text = await fsp.readFile(path.join(root, relPath), 'utf8');
+  } catch {
+    return '';
+  }
+  const hit = parsePhpSymbols(text).find((item) => item.namespace);
+  return hit ? hit.namespace : '';
+}
+
+async function lookup(projectPath, name, options = {}) {
+  const target = String(name || '').trim();
+  if (target.length < 2) {
+    return { ok: true, matches: [], truncated: false, scanned: 0 };
+  }
+
+  const root = path.resolve(projectPath);
+  const { files, truncated } = await collectFiles(root);
+  const currentPath = typeof options.currentPath === 'string' ? options.currentPath : '';
+  const context = {
+    currentPath,
+    receiver: String(options.receiver || ''),
+    namespace: await namespaceOf(root, currentPath),
+  };
+
+  const matches = [];
+  for (const relPath of files) {
+    const decls = await declsFor(root, relPath, target);
+    for (const decl of decls) {
+      if (decl.name !== target) continue;
+      matches.push({ ...decl, relPath });
+    }
+  }
+
+  matches.sort((a, b) => compareMatches(a, b, context));
+  return { ok: true, matches, truncated, scanned: files.length };
+}
+
+module.exports = { parsePhpSymbols, parseJsSymbols, cleanDoc, lookup, resetCache };
