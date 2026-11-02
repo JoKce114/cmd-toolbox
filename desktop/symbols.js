@@ -147,43 +147,105 @@ function parsePhpSymbols(text) {
   return out;
 }
 
-// JSDoc 只有紧贴声明时才认：从声明起点往前跳过空白，必须正好接在 */ 上
+// acorn 的声明节点起点经常落在 export/default/const 之后，回溯时把这些前缀也跳过
+const JS_PREFIX_KEYWORDS = new Set(['export', 'default', 'async', 'const', 'let', 'var', 'declare']);
+
+// JSDoc 只有紧贴声明时才认：从声明起点往前只允许空白和声明前缀关键字，
+// 且注释必须独占一行（排除上一行语句末尾的 /** */ 尾注释），中间最多隔一个换行
+// （排除隔空行认领文件头注释）。
 function jsDocBefore(text, index) {
-  let cursor = index - 1;
-  while (cursor >= 0 && /\s/.test(text[cursor])) cursor -= 1;
-  if (cursor < 1 || text[cursor] !== '/' || text[cursor - 1] !== '*') return '';
-  const closing = cursor + 1;
-  const opening = text.lastIndexOf('/**', closing);
-  if (opening < 0) return '';
-  return cleanDoc(text.slice(opening, closing));
+  let cursor = index;
+  for (;;) {
+    while (cursor > 0 && /\s/.test(text[cursor - 1])) cursor -= 1;
+    if (cursor >= 2 && text[cursor - 1] === '/' && text[cursor - 2] === '*') {
+      const closing = cursor;
+      const opening = text.lastIndexOf('/**', closing);
+      if (opening < 0) return '';
+      const lineStart = text.lastIndexOf('\n', opening - 1) + 1;
+      if (text.slice(lineStart, opening).trim() !== '') return '';
+      if ((text.slice(closing, index).match(/\n/g) || []).length > 1) return '';
+      return cleanDoc(text.slice(opening, closing));
+    }
+    const wordEnd = cursor;
+    while (cursor > 0 && /[A-Za-z_$]/.test(text[cursor - 1])) cursor -= 1;
+    if (cursor === wordEnd) return '';
+    if (!JS_PREFIX_KEYWORDS.has(text.slice(cursor, wordEnd))) return '';
+  }
+}
+
+// JS 声明签名：按参数列表的右括号截断，而不是按第一个 {（解构参数和默认值里的 { 都在括号内）。
+// 箭头函数没有参数括号时退回到 =>；arrowBodyStart 用来避开函数体里嵌套的 =>。
+function jsSignature(text, start, end, arrowBodyStart) {
+  if (typeof start !== 'number' || typeof end !== 'number' || end <= start) return '';
+  const slice = text.slice(start, end);
+  const normalize = (value) => value.replace(/\s+/g, ' ').trim().replace(/;$/, '');
+
+  if (typeof arrowBodyStart === 'number') {
+    const arrowIndex = slice.lastIndexOf('=>', arrowBodyStart - start);
+    if (arrowIndex >= 0) return normalize(slice.slice(0, arrowIndex));
+  }
+
+  const open = slice.indexOf('(');
+  if (open < 0) return normalize(slice);
+
+  let depth = 0;
+  let quote = '';
+  for (let i = open; i < slice.length; i += 1) {
+    const char = slice[i];
+    if (quote) {
+      if (char === '\\') {
+        i += 1;
+      } else if (char === quote) {
+        quote = '';
+      }
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+    } else if (char === '(') {
+      depth += 1;
+    } else if (char === ')') {
+      depth -= 1;
+      if (depth === 0) return normalize(slice.slice(0, i + 1));
+    }
+  }
+  return normalize(slice);
 }
 
 function walkJs(node, text, out) {
   if (!node || typeof node !== 'object' || typeof node.type !== 'string') return;
 
-  if (node.type === 'FunctionDeclaration' && node.id && node.id.name) {
-    out.push({
-      kind: 'function',
-      name: node.id.name,
-      owner: '',
-      namespace: '',
-      line: node.loc ? node.loc.start.line : 1,
-      signature: sourceSignature(text, node, ['{']),
-      doc: jsDocBefore(text, node.start),
-    });
+  // 函数和类节点一律不递归：无论是否被收集，函数体/类体里都是局部声明和闭包，
+  // 不是调用方想跳转的目标。匿名函数和 IIFE 也靠这里挡住。
+  if (node.type === 'FunctionDeclaration') {
+    if (node.id && node.id.name) {
+      out.push({
+        kind: 'function',
+        name: node.id.name,
+        owner: '',
+        namespace: '',
+        line: node.loc ? node.loc.start.line : 1,
+        signature: jsSignature(text, node.start, node.end),
+        doc: jsDocBefore(text, node.start),
+      });
+    }
     return;
   }
 
-  if (node.type === 'ClassDeclaration' && node.id && node.id.name) {
-    out.push({
-      kind: 'class',
-      name: node.id.name,
-      owner: '',
-      namespace: '',
-      line: node.loc ? node.loc.start.line : 1,
-      signature: `class ${node.id.name}`,
-      doc: jsDocBefore(text, node.start),
-    });
+  if (node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression') return;
+
+  if (node.type === 'ClassDeclaration' || node.type === 'ClassExpression') {
+    if (node.type === 'ClassDeclaration' && node.id && node.id.name) {
+      out.push({
+        kind: 'class',
+        name: node.id.name,
+        owner: '',
+        namespace: '',
+        line: node.loc ? node.loc.start.line : 1,
+        signature: `class ${node.id.name}`,
+        doc: jsDocBefore(text, node.start),
+      });
+    }
     return;
   }
 
@@ -196,7 +258,12 @@ function walkJs(node, text, out) {
         owner: '',
         namespace: '',
         line: node.loc ? node.loc.start.line : 1,
-        signature: sourceSignature(text, node, ['=>']),
+        signature: jsSignature(
+          text,
+          node.start,
+          node.end,
+          init.type === 'ArrowFunctionExpression' && init.body ? init.body.start : undefined,
+        ),
         doc: jsDocBefore(text, node.start),
       });
       return;
@@ -233,9 +300,13 @@ function parseJsSymbols(text, lang) {
 
   let ast;
   try {
+    // .cjs 是 CommonJS：with 和顶层 return（Node 会包进函数里）都是合法的脚本语法，
+    // 按 module 解析会整文件报错并返回空。
+    const cjs = lang === 'cjs';
     ast = parser.parse(source, {
       ecmaVersion: 'latest',
-      sourceType: 'module',
+      sourceType: cjs ? 'script' : 'module',
+      allowReturnOutsideFunction: cjs,
       locations: true,
       allowHashBang: true,
     });

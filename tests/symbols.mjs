@@ -189,4 +189,122 @@ assert(!jsDecls.some((d) => d.name === 'insideJsString'), '字符串里的同名
 const jsxDecls = symbols.parseJsSymbols('export function App() {\n  return <div />;\n}\n', 'jsx');
 assert(jsxDecls.some((d) => d.name === 'App'), 'JSX 文件能正常解析');
 
+console.log('\n5. JS 局部声明泄漏');
+const leakSource = [
+  'const arr = [1];',
+  'arr.map(() => {',
+  '  function callbackLocal() {}',
+  '});',
+  'export default function () {',
+  '  function defaultLocal() {}',
+  '}',
+  'const iife = (function () {',
+  '  function iifeLocal() {}',
+  '  return 1;',
+  '})();',
+].join(NL);
+
+const leakDecls = symbols.parseJsSymbols(leakSource, 'js');
+assert(!leakDecls.some((d) => d.name === 'callbackLocal'), '回调函数体里的函数不被收集');
+assert(!leakDecls.some((d) => d.name === 'defaultLocal'), 'export default 匿名函数体里的函数不被收集');
+assert(!leakDecls.some((d) => d.name === 'iifeLocal'), 'IIFE 函数体里的函数不被收集');
+
+console.log('\n6. 函数表达式与解构参数签名');
+const signatureSource = [
+  'const fnExpr = function (a, b) {',
+  '  return a + b;',
+  '};',
+  'function App({ title }) {',
+  '  return title;',
+  '}',
+  'function withDefault(a = {}) {',
+  '  return a;',
+  '}',
+].join(NL);
+
+const signatureDecls = symbols.parseJsSymbols(signatureSource, 'js');
+const fnExpr = signatureDecls.find((d) => d.name === 'fnExpr');
+assert(fnExpr.signature === 'fnExpr = function (a, b)', `函数表达式签名到右括号为止，实际 ${fnExpr.signature}`);
+
+const appFn = signatureDecls.find((d) => d.name === 'App');
+assert(appFn.signature === 'function App({ title })', `解构参数签名完整，实际 ${appFn.signature}`);
+
+const withDefault = signatureDecls.find((d) => d.name === 'withDefault');
+assert(withDefault.signature === 'function withDefault(a = {})', `默认值里的花括号不截断签名，实际 ${withDefault.signature}`);
+
+console.log('\n7. export 前缀与 const 前的 JSDoc');
+const docSource = [
+  '/** 导出函数说明 */',
+  'export function exportedFn(a) {',
+  '  return a;',
+  '}',
+  '',
+  '/** 默认导出说明 */',
+  'export default function defaultFn() {}',
+  '',
+  '/** 导出类说明 */',
+  'export class ExportedClass {}',
+  '',
+  '/** 箭头说明 */',
+  'const documentedArrow = (x) => x;',
+  '',
+  '/** 常量函数说明 */',
+  'export const documentedConst = function () {};',
+].join(NL);
+
+const docDecls = symbols.parseJsSymbols(docSource, 'js');
+const exportedFn = docDecls.find((d) => d.name === 'exportedFn');
+assert(exportedFn.doc === '导出函数说明', `export function 的 JSDoc，实际 ${JSON.stringify(exportedFn.doc)}`);
+
+const defaultFn = docDecls.find((d) => d.name === 'defaultFn');
+assert(defaultFn.doc === '默认导出说明', `export default function 的 JSDoc，实际 ${JSON.stringify(defaultFn.doc)}`);
+
+const exportedClass = docDecls.find((d) => d.name === 'ExportedClass');
+assert(exportedClass.doc === '导出类说明', `export class 的 JSDoc，实际 ${JSON.stringify(exportedClass.doc)}`);
+
+const documentedArrow = docDecls.find((d) => d.name === 'documentedArrow');
+assert(documentedArrow.doc === '箭头说明', `const 赋值上方的 JSDoc，实际 ${JSON.stringify(documentedArrow.doc)}`);
+
+const documentedConst = docDecls.find((d) => d.name === 'documentedConst');
+assert(documentedConst.doc === '常量函数说明', `export const 上方的 JSDoc，实际 ${JSON.stringify(documentedConst.doc)}`);
+
+console.log('\n8. JSDoc 不误挂');
+const strayDocSource = [
+  'const first = 1; /** 尾注释 */',
+  'function afterTrailing() {}',
+  '',
+  '/** 文件头 */',
+  '',
+  '',
+  'function farFromHeader() {}',
+  '',
+  '/** 隔代码 */ console.log("x");',
+  'function afterCode() {}',
+].join(NL);
+
+const strayDecls = symbols.parseJsSymbols(strayDocSource, 'js');
+const afterTrailing = strayDecls.find((d) => d.name === 'afterTrailing');
+assert(afterTrailing.doc === '', `上一行语句末尾的尾注释不挂给下一个声明，实际 ${JSON.stringify(afterTrailing.doc)}`);
+
+const farFromHeader = strayDecls.find((d) => d.name === 'farFromHeader');
+assert(farFromHeader.doc === '', `隔空行的文件头注释不挂给远处声明，实际 ${JSON.stringify(farFromHeader.doc)}`);
+
+const afterCode = strayDecls.find((d) => d.name === 'afterCode');
+assert(afterCode.doc === '', `中间隔着代码的注释不挂给声明，实际 ${JSON.stringify(afterCode.doc)}`);
+
+console.log('\n9. CommonJS 解析');
+const cjsSource = [
+  'function cjsFn() {',
+  '  return 1;',
+  '}',
+  'with ({ a: 1 }) {',
+  '  console.log(a);',
+  '}',
+  'return;',
+].join(NL);
+
+const cjsDecls = symbols.parseJsSymbols(cjsSource, 'cjs');
+assert(cjsDecls.some((d) => d.name === 'cjsFn'), 'cjs 能解析 with 和顶层 return');
+assert(symbols.parseJsSymbols(cjsSource, 'js').length === 0, '同一份 CJS 按 module 解析确实会失败');
+
 console.log(`\n全部通过：${passed} 项`);
