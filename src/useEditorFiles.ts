@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toErrorMessage } from './lib';
 import { enqueueMinify, minifiedName, nextMinifySeq, shouldAutoMinify } from './modules/minify';
 import type { Group, OpenedFile } from './types';
+import { isUntitledPath } from './untitledPath';
 
 export function normalizeNewlines(text: string): string {
   return text.replace(/\r\n/g, '\n');
@@ -70,6 +71,21 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   const open = useCallback(
     async (relPath: string): Promise<boolean> => {
       if (!relPath) return false;
+
+      // 空白窗口没有磁盘文件：直接建一个空条目，不读盘。
+      if (isUntitledPath(relPath)) {
+        if (filesRef.current[relPath]) {
+          setActivePath(relPath);
+          return true;
+        }
+        setActivePath(relPath);
+        setFiles((previous) => ({
+          ...previous,
+          [relPath]: { ...EMPTY, relPath, content: '', savedContent: '' },
+        }));
+        touchedRef.current.add(relPath);
+        return true;
+      }
 
       // 已经打开过就直接切过去，保留未保存的修改
       if (filesRef.current[relPath]) {
@@ -162,6 +178,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   // 那时用户手上有更新的内容，静默替换等于丢数据。
   // 返回值没人用：React 不保证 updater 同步执行，`replaced` 这类副作用不可靠。
   const reloadFromDisk = useCallback(async (relPath: string): Promise<void> => {
+    if (isUntitledPath(relPath)) return;
     const state = filesRef.current[relPath];
     if (!state || state.dirty || state.saving || state.loading) return;
     try {
@@ -199,6 +216,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   // 不能让它们去 reload——那时真正的新写入可能还没落盘。
   const autoMinify = useCallback(
     (relPath: string, content: string, seq: number) => {
+      if (isUntitledPath(relPath)) return;
       void (async () => {
         try {
           const projectPath = groupRef.current.path;
@@ -234,6 +252,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   // 等轮询把编辑器重载成新内容，用户再保存时才会压出正确结果。
   const autoMinifyIfUnchangedOnDisk = useCallback(
     async (relPath: string, state: EditorFileState, seq: number) => {
+      if (isUntitledPath(relPath)) return;
       try {
         const info = await window.api.files.stat(groupRef.current.path, relPath);
         if (!info.exists || Math.abs(info.mtime - state.mtime) > 1) return;
@@ -247,6 +266,8 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
 
   const save = useCallback(
     async (relPath: string): Promise<SaveOutcome> => {
+      // 空白窗口不写盘：另存为由调用方接管
+      if (isUntitledPath(relPath)) return 'unchanged';
       const current = filesRef.current[relPath];
       if (!current || current.loading || current.readOnly) return 'failed';
 
@@ -399,6 +420,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
   useEffect(() => {
     const timer = window.setInterval(() => {
       const relPath = activePathRef.current;
+      if (isUntitledPath(relPath)) return;
       const state = filesRef.current[relPath];
       // 正在保存或加载时不动，避免和保存流程抢
       if (!state || state.dirty || state.saving || state.loading || state.readOnly) return;
