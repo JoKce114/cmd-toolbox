@@ -230,6 +230,13 @@ function registerIpc() {
     return symbols.warmIndex(knownPath).catch(() => ({ ok: false, files: 0 }));
   });
 
+  // 文件树刷新时调用：外部改动（git 切分支、外部工具写文件）后立即丢掉
+  // 符号索引，下一次查询同步重建，不用等 10 分钟 TTL。
+  ipcMain.handle('symbols:invalidate', (_event, projectPath) => {
+    symbols.invalidate(assertProjectPath(projectPath));
+    return { ok: true };
+  });
+
   ipcMain.handle('updater:download', () => updater.startDownload());
   ipcMain.handle('updater:install', () => updater.install());
   ipcMain.handle('updater:state', () => updater.getState());

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ReactElement } from 'react';
+import type { FormEvent, ReactElement } from 'react';
 import {
   ChevronRight,
   ChevronsDownUp,
@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import type { FileEntry, Group, MenuState } from '../types';
+import { Modal } from './Modal';
 import { PopupMenu } from './PopupMenu';
 import { minifiedName } from '../modules/minify';
 
@@ -25,6 +26,8 @@ type FileTreeProps = {
 };
 
 type DirState = Record<string, FileEntry[] | undefined>;
+
+type PendingCreate = { kind: 'file' | 'directory'; relDir: string };
 
 // Trae / VS Code 风格的自然排序：
 // 目录在前，然后按名称比较，名称里的数字段按数值比较
@@ -59,8 +62,10 @@ export function FileTree({
   const [children, setChildren] = useState<DirState>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']));
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
   const pendingRevealRef = useRef('');
+  const reloadingRef = useRef(false);
 
   const loadDir = useCallback(
     async (relDir: string) => {
@@ -76,12 +81,33 @@ export function FileTree({
     [group.path, onError],
   );
 
-  // 刷新：重新列所有已展开的目录。文件在外部被增删时用它同步。
+  // 刷新：先清掉符号索引（外部改动后立即重扫），再重新列所有已展开的目录。
+  // 不清空 children，避免整树闪白；并发限制在 4 个；重复点击直接忽略。
   const reloadAll = useCallback(async () => {
-    const dirs = Array.from(expanded);
-    setChildren({});
-    await Promise.all(dirs.map((dir) => loadDir(dir)));
-  }, [expanded, loadDir]);
+    if (reloadingRef.current) return;
+    reloadingRef.current = true;
+    try {
+      try {
+        await window.api.symbols.invalidate(group.path);
+      } catch {
+        // 索引清理失败不影响刷新：过期索引在下次查询时也会自动重建。
+      }
+      const dirs = Array.from(expanded);
+      let next = 0;
+      const worker = async () => {
+        while (next < dirs.length) {
+          const dir = dirs[next];
+          next += 1;
+          await loadDir(dir);
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(4, dirs.length) }, () => worker()),
+      );
+    } finally {
+      reloadingRef.current = false;
+    }
+  }, [expanded, group.path, loadDir]);
 
   const collapseAll = useCallback(() => {
     setExpanded(new Set(['']));
@@ -94,35 +120,24 @@ export function FileTree({
     return ancestorsOf(activePath).pop() || '';
   }, [activePath]);
 
-  const createFile = useCallback(
-    async (relDir: string) => {
-      const relPath = await promptName('新建文件', relDir, '');
-      if (!relPath) return;
-      try {
+  // 弹窗提交成功后才真正落盘：新建条目与当前打开的文件同级，
+  // 没有打开文件时落在项目根目录。
+  const submitCreate = useCallback(
+    async (name: string) => {
+      if (!pendingCreate) return;
+      const { kind, relDir } = pendingCreate;
+      const relPath = relDir ? `${relDir}/${name}` : name;
+      if (kind === 'file') {
         await window.api.files.createFile(group.path, relPath, '');
-        await loadDir(relDir);
-        setExpanded((previous) => new Set(previous).add(relDir));
-        onOpen(relPath);
-      } catch (error) {
-        onError(toErrorMessage(error));
-      }
-    },
-    [group.path, loadDir, onError, onOpen],
-  );
-
-  const createFolder = useCallback(
-    async (relDir: string) => {
-      const relPath = await promptName('新建文件夹', relDir, '');
-      if (!relPath) return;
-      try {
+      } else {
         await window.api.files.createDir(group.path, relPath);
-        await loadDir(relDir);
-        setExpanded((previous) => new Set(previous).add(relDir));
-      } catch (error) {
-        onError(toErrorMessage(error));
       }
+      await loadDir(relDir);
+      setExpanded((previous) => new Set(previous).add(relDir));
+      setPendingCreate(null);
+      if (kind === 'file') onOpen(relPath);
     },
-    [group.path, loadDir, onError],
+    [group.path, loadDir, onOpen, pendingCreate],
   );
 
   useEffect(() => {
@@ -251,7 +266,8 @@ export function FileTree({
           type="button"
           className="icon-btn"
           title="新建文件夹"
-          onClick={() => void createFolder(createTargetDir())}
+          aria-label="新建文件夹"
+          onClick={() => setPendingCreate({ kind: 'directory', relDir: createTargetDir() })}
         >
           <FolderPlus size={13} />
         </button>
@@ -259,14 +275,27 @@ export function FileTree({
           type="button"
           className="icon-btn"
           title="新建文件"
-          onClick={() => void createFile(createTargetDir())}
+          aria-label="新建文件"
+          onClick={() => setPendingCreate({ kind: 'file', relDir: createTargetDir() })}
         >
           <FilePlus size={13} />
         </button>
-        <button type="button" className="icon-btn" title="刷新" onClick={() => void reloadAll()}>
+        <button
+          type="button"
+          className="icon-btn"
+          title="刷新"
+          aria-label="刷新"
+          onClick={() => void reloadAll()}
+        >
           <RefreshCw size={13} />
         </button>
-        <button type="button" className="icon-btn" title="全部折叠" onClick={collapseAll}>
+        <button
+          type="button"
+          className="icon-btn"
+          title="全部折叠"
+          aria-label="全部折叠"
+          onClick={collapseAll}
+        >
           <ChevronsDownUp size={13} />
         </button>
       </div>
@@ -274,20 +303,104 @@ export function FileTree({
         {renderDir('', 0)}
         {menu ? <PopupMenu state={menu} onClose={() => setMenu(null)} /> : null}
       </div>
+      {pendingCreate ? (
+        <CreateEntryModal
+          kind={pendingCreate.kind}
+          relDir={pendingCreate.relDir}
+          onClose={() => setPendingCreate(null)}
+          onSubmit={submitCreate}
+        />
+      ) : null}
     </div>
   );
 }
 
-// 与项目里已有的 window.confirm 用法保持一致，避免再造一套输入弹窗。
-// 返回完整相对路径（relDir/name），名字非法或取消时返回空串。
-async function promptName(label: string, relDir: string, initial: string): Promise<string> {
-  const raw = window.prompt(`${label}（${relDir || '项目根目录'}）`, initial);
-  if (raw === null) return '';
+// 新建文件 / 文件夹的输入弹窗。Electron 渲染进程不支持 window.prompt，
+// 统一走项目里的 Modal。
+type CreateEntryModalProps = {
+  kind: 'file' | 'directory';
+  relDir: string;
+  onClose: () => void;
+  onSubmit: (name: string) => Promise<void>;
+};
+
+function validateName(raw: string): string {
   const name = raw.trim();
-  if (!name) return '';
-  if (name.includes('/') || name.includes('\\')) {
-    window.alert('名字里不能包含斜杠');
-    return '';
-  }
-  return relDir ? `${relDir}/${name}` : name;
+  if (!name) return '名字不能为空';
+  if (name === '.' || name === '..') return '名字不能是 . 或 ..';
+  if (/[\\/]/.test(name)) return '名字里不能包含 / 或 \\';
+  if (/[<>:"|?*]/.test(name)) return '名字不能包含 < > : " | ? * 这些字符';
+  return '';
+}
+
+function CreateEntryModal({ kind, relDir, onClose, onSubmit }: CreateEntryModalProps) {
+  const [value, setValue] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const isFile = kind === 'file';
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    const message = validateName(value);
+    if (message) {
+      setError(message);
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await onSubmit(value.trim());
+    } catch (submitError) {
+      setError(toErrorMessage(submitError));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={isFile ? '新建文件' : '新建文件夹'}
+      subtitle={`位置：${relDir || '项目根目录'}`}
+      icon={isFile ? <FilePlus size={16} /> : <FolderPlus size={16} />}
+      width={420}
+      onClose={onClose}
+      closeDisabled={busy}
+    >
+      <form className="modal-form" onSubmit={submit}>
+        <div className="field">
+          <label className="field-label" htmlFor="file-tree-new-name">
+            {isFile ? '文件名' : '文件夹名'}
+          </label>
+          <input
+            id="file-tree-new-name"
+            className="text-input"
+            value={value}
+            data-autofocus
+            spellCheck={false}
+            placeholder={isFile ? '例如：index.ts' : '例如：components'}
+            onChange={(event) => {
+              setValue(event.target.value);
+              setError('');
+            }}
+          />
+          <div className="field-hint">
+            {'不能包含 / \\ < > : " | ? *，也不能是 . 或 ..'}
+          </div>
+        </div>
+        {error ? (
+          <div className="field-error" role="alert">
+            {error}
+          </div>
+        ) : null}
+        <div className="modal-footer">
+          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={busy}>
+            取消
+          </button>
+          <button type="submit" className="btn btn-primary" disabled={busy}>
+            {busy ? '创建中…' : '创建'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
 }

@@ -4897,3 +4897,7 @@ p {
   width: 22px;
   height: 22px;
 }
+
+.editor-pane.theme-dark .file-tree-toolbar {
+  border-bottom-color: #23252b;
+}

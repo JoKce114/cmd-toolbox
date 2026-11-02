@@ -242,6 +242,7 @@ declare global {
           options?: { currentPath?: string; receiver?: string; line?: number },
         ) => Promise<SymbolLookupResult>;
         warm: (projectPath: string) => Promise<{ ok: boolean; files: number }>;
+        invalidate: (projectPath: string) => Promise<{ ok: boolean }>;
       };
       browser: {
         onOpenUrl: (

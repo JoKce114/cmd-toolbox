@@ -133,6 +133,7 @@ contextBridge.exposeInMainWorld('api', {
     lookup: (projectPath, name, options) =>
       invoke('symbols:lookup', projectPath, name, options),
     warm: (projectPath) => invoke('symbols:warm', projectPath),
+    invalidate: (projectPath) => invoke('symbols:invalidate', projectPath),
   },
 
   browser: {
