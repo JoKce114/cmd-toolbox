@@ -1,4 +1,4 @@
-export type ModuleKind = 'diagnostics';
+export type ModuleKind = 'diagnostics' | 'reference';
 
 export type EditorModule = {
   id: string;
@@ -27,9 +27,44 @@ export const EDITOR_MODULES: EditorModule[] = [
     kind: 'diagnostics',
     languages: ['php'],
   },
+  {
+    id: 'ref-php',
+    name: 'PHP 跳转与简介',
+    description: '按住 Ctrl 点击函数或类名，查看说明并跳到定义',
+    kind: 'reference',
+    languages: ['php'],
+  },
+  {
+    id: 'ref-js',
+    name: 'JS 跳转与简介',
+    description: '按住 Ctrl 点击函数或类名，查看说明并跳到定义。TS / TSX 暂不支持',
+    kind: 'reference',
+    languages: ['js', 'mjs', 'cjs', 'jsx'],
+  },
 ];
 
-export const DEFAULT_ENABLED_MODULES = ['diag-php'];
+export const DEFAULT_ENABLED_MODULES = ['diag-php', 'ref-php', 'ref-js'];
+
+// seenDefaultModules 字段引入之前发布过的默认模块。
+// 老用户的偏好里没有「已见过哪些默认模块」的记录，列表里缺少这些 id
+// 只可能是用户自己关掉的，升级时不能自动补回来。
+export const LEGACY_DEFAULT_ENABLED_MODULES = ['diag-php'];
+
+// 把新增的默认模块合并进已启用列表：只加不减，已记入 seenDefaults 的模块
+// 即使不在 enabled 里也不再补回（那是用户手动关掉的）。
+export function mergeDefaultModules(
+  enabled: string[],
+  seenDefaults: string[],
+): { enabledModules: string[]; seenDefaultModules: string[] } {
+  const seen = new Set(seenDefaults.filter((id) => Boolean(findModule(id))));
+  const enabledModules = enabled.filter((id) => Boolean(findModule(id)));
+  for (const id of DEFAULT_ENABLED_MODULES) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (!enabledModules.includes(id)) enabledModules.push(id);
+  }
+  return { enabledModules, seenDefaultModules: [...seen] };
+}
 
 export function findModule(id: string): EditorModule | undefined {
   return EDITOR_MODULES.find((item) => item.id === id);

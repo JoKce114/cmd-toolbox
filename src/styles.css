@@ -3148,6 +3148,11 @@ p {
   margin-bottom: 18px;
 }
 
+/* 模块页签按类别分组：组标题与上一组之间留出间距 */
+.settings-subgroup {
+  margin-top: 14px;
+}
+
 /* 选项卡里只剩一组时不要再留组间距，否则底部一片空白 */
 .settings-body > .settings-group:last-child {
   margin-bottom: 0;

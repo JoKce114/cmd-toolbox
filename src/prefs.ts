@@ -1,6 +1,10 @@
 import { DEFAULT_KEYBINDINGS, normalizeCombo } from './editorKeymap';
 import type { EditorActionId, KeyBindingMap } from './editorKeymap';
-import { DEFAULT_ENABLED_MODULES, findModule } from './modules/catalog';
+import {
+  DEFAULT_ENABLED_MODULES,
+  LEGACY_DEFAULT_ENABLED_MODULES,
+  mergeDefaultModules,
+} from './modules/catalog';
 
 export type EditorFontFamily = 'consolas' | 'courier' | 'lucida';
 
@@ -19,6 +23,9 @@ export type AppPrefs = {
   editorIndentWithSpaces: boolean;
   editorKeybindings: KeyBindingMap;
   enabledModules: string[];
+  // 已经自动合并过的默认模块。持久化后，用户手动关掉的默认模块
+  // 在下次启动时不会被当成「新模块」重新打开。
+  seenDefaultModules: string[];
 };
 
 export const TERMINAL_FONT_SIZE_MIN = 11;
@@ -54,6 +61,7 @@ export function defaultPrefs(): AppPrefs {
     editorIndentWithSpaces: false,
     editorKeybindings: { ...DEFAULT_KEYBINDINGS },
     enabledModules: [...DEFAULT_ENABLED_MODULES],
+    seenDefaultModules: [...DEFAULT_ENABLED_MODULES],
   };
 }
 
@@ -93,6 +101,23 @@ export function readPrefs(): AppPrefs {
       parsed.editorFontFamily === 'courier' || parsed.editorFontFamily === 'lucida'
         ? parsed.editorFontFamily
         : 'consolas';
+    // 老版本没有 seenDefaultModules。只把这一版新增的默认模块补进已启用列表，
+    // 旧默认模块（如 diag-php）缺失时视为用户手动关闭，不重新打开。
+    const storedModules = Array.isArray(parsed.enabledModules)
+      ? parsed.enabledModules
+      : null;
+    const storedSeenDefaults = Array.isArray(parsed.seenDefaultModules)
+      ? parsed.seenDefaultModules
+      : null;
+    const modules = mergeDefaultModules(
+      (storedModules ?? DEFAULT_ENABLED_MODULES).filter(
+        (id): id is string => typeof id === 'string',
+      ),
+      (
+        storedSeenDefaults ??
+        (storedModules ? LEGACY_DEFAULT_ENABLED_MODULES : DEFAULT_ENABLED_MODULES)
+      ).filter((id): id is string => typeof id === 'string'),
+    );
     return {
       terminalFontSize: clampInt(
         parsed.terminalFontSize ?? parsed.fontSize,
@@ -118,11 +143,9 @@ export function readPrefs(): AppPrefs {
       // 默认使用制表符；只有明确存过 true 才用空格
       editorIndentWithSpaces: parsed.editorIndentWithSpaces === true,
       editorKeybindings: normalizeKeybindings(parsed.editorKeybindings),
-      // 未知 id 丢弃，防止降级后残留脏数据
-      enabledModules: (Array.isArray(parsed.enabledModules)
-        ? parsed.enabledModules
-        : DEFAULT_ENABLED_MODULES
-      ).filter((id): id is string => typeof id === 'string' && Boolean(findModule(id))),
+      // mergeDefaultModules 会丢弃未知 id，防止降级后残留脏数据
+      enabledModules: modules.enabledModules,
+      seenDefaultModules: modules.seenDefaultModules,
     };
   } catch {
     return defaultPrefs();

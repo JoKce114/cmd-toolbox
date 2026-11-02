@@ -624,18 +624,30 @@ export function SettingsModal({
                 </span>
               </div>
             </div>
-            {EDITOR_MODULES.map((item) => (
-              <div className="settings-item" key={item.id}>
-                <div className="settings-item-text">
-                  <span className="settings-item-label">{item.name}</span>
-                  <span className="settings-item-desc">{item.description}</span>
+            {[
+              { kind: 'diagnostics' as const, title: '语法检查' },
+              { kind: 'reference' as const, title: '跳转与简介' },
+            ].map((group) => {
+              const items = EDITOR_MODULES.filter((item) => item.kind === group.kind);
+              if (!items.length) return null;
+              return (
+                <div className="settings-subgroup" key={group.kind}>
+                  <p className="settings-group-title">{group.title}</p>
+                  {items.map((item) => (
+                    <div className="settings-item" key={item.id}>
+                      <div className="settings-item-text">
+                        <span className="settings-item-label">{item.name}</span>
+                        <span className="settings-item-desc">{item.description}</span>
+                      </div>
+                      <Toggle
+                        checked={modules.includes(item.id)}
+                        onChange={(next) => toggleModule(item.id, next)}
+                      />
+                    </div>
+                  ))}
                 </div>
-                <Toggle
-                  checked={modules.includes(item.id)}
-                  onChange={(next) => toggleModule(item.id, next)}
-                />
-              </div>
-            ))}
+              );
+            })}
           </section>
         ) : null}
 
