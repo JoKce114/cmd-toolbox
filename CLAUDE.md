@@ -95,6 +95,7 @@ Windows Defender 实时保护也是关闭的（`RealTimeProtectionEnabled: False
 - `electron-updater`
 - `iconv-lite`（`desktop/file-api.js` 用）
 - `node-pty`
+- `php-parser` / `acorn` / `acorn-jsx`（`desktop/symbols.js` 用）
 
 放进 devDependencies 的后果是打包后启动即崩，报 `Cannot find module 'xxx'`。
 
@@ -161,6 +162,7 @@ node tests/git-pull.mjs      # 拉取/推送/上游修复
 node tests/commit-diff.mjs   # 提交 patch 切分
 node tests/login-item.mjs     # 开机自启动（假 app，不碰注册表）
 node tests/status.mjs         # AI 状态分类、未读状态迁移
+node tests/symbols.mjs        # 符号提取、项目查询、排序（离线）
 ```
 
 - `tests/login-item.mjs` 用假 `app` 对象，**不会**读写真实注册表。
@@ -186,6 +188,7 @@ node tests/browser-popup.mjs     # 内置浏览器 target="_blank" / window.open
 node tests/tab-status.mjs        # AI 页签状态灯与未读
 node tests/tab-groups.mjs        # 标签组：建组/改名/改色/折叠/拖拽/重启恢复
 node tests/editor-modules.mjs    # 压缩、语法诊断、外部改动自动重载
+node tests/editor-goto-def.mjs   # Ctrl+点击弹卡片与跳转
 node tests/module-catalog.mjs    # 模块清单与默认开关（离线）
 node tests/clipboard-image.mjs   # 剪贴板图片识别（会占用系统剪贴板）
 node tests/device-emulation-probe.mjs
@@ -347,8 +350,9 @@ node tests/device-emulation-probe.mjs
 
 ## 编辑器模块
 
-模块是「能力」的容器：格式化已整体移除，现在只剩 **JS 压缩**（不需要开关，
-保存时自动执行）和 **JS / PHP 语法诊断**（设置里两个开关，点保存才生效）。
+模块是「能力」的容器：格式化已整体移除，现在是 **JS 压缩**（不需要开关，
+保存时自动执行）、**JS / PHP 语法诊断** 和 **Ctrl+点击符号跳转**
+（后两者在设置里各有开关，点保存才生效）。
 
 - **压缩配置必须与 VS Code 的 Nu-Minify 扩展一致**，`src/modules/minify.ts` 的
   `MINIFY_OPTIONS` 是从它的 `package.json` 默认值照搬的。实测用同一份配置能
@@ -372,8 +376,11 @@ node tests/device-emulation-probe.mjs
   它会全局文本替换所有依赖里的 `process.*`，影响 xterm 之类按平台分支的库。
 - **`ts`/`tsx` 不挂诊断**：acorn 不认识类型注解，挂上会满屏误报。设置项因此叫
   「JS / JSX 语法检查」而不是「JS / TS」。
-- **模块依赖全部放 `devDependencies`**：vite 打进前端 bundle，运行时不从
-  node_modules 读。
+- **模块依赖按使用方分开放**：只被前端 `import` 的放 `devDependencies`
+  （vite 打进前端 bundle，运行时不从 node_modules 读）；主进程也 `require` 的
+  必须放 `dependencies`——`php-parser` / `acorn` / `acorn-jsx` 就属于后者。
+  放进 `devDependencies` 会被 `electron-builder` 剥掉，打包后主进程启动即报
+  `Cannot find module 'xxx'`。
 
 ### 编辑器自动重新加载
 
@@ -383,6 +390,31 @@ node tests/device-emulation-probe.mjs
 - **有未保存修改时一律跳过**，绝不覆盖用户手上的内容。
 - **压缩完成后必须主动调 `reloadFromDisk(target)`**，不能只靠轮询：轮询只盯激活
   页签，而保存 `global.js` 时激活的是源文件，`.min.js` 永远轮不到。
+
+### 符号跳转与简介（Ctrl+点击）
+
+- **解析在主进程**（`desktop/symbols.js`），不在渲染进程。要遍历文件系统，
+  且全量解析会卡住编辑器输入。
+- **不做常驻索引**：点击时才遍历，先用 `function name` / `class name` 文本预筛，
+  只对命中文件跑 `php-parser` / `acorn`。实测 `php-parser` 约 22ms/文件，
+  千文件项目全量解析要二十秒，预筛是必需的。
+- **缓存按 `relPath + mtime`**，文件改动自动失效。注意它是「解析过的文件清单」，
+  不是项目级符号表——不要在此基础上做全局补全，会把内存吃光。
+- **`php-parser` 的 `name` 是 Identifier 对象**（`{ name: 'foo' }`），不是字符串；
+  类的 docblock 挂在类节点的 `leadingComments`，方法的挂在自己节点上，要分开取。
+- **签名用源码切片**（`loc.start.offset` 到 `end.offset`，遇到 `{` 截断），
+  不要用 AST 重拼参数——重拼会丢默认值写法和类型原样。
+- **`getWebContentsId()` 无关**，这里没有 webview；卡片用 CodeMirror 的
+  `showTooltip` facet 承载 React 节点，`create(view)` 拿到的 view 用来关闭卡片。
+- **`php-parser` / `acorn` / `acorn-jsx` 必须在 `dependencies`**，因为主进程
+  `require` 它们；放进 devDependencies 会让打包后的应用启动即崩。
+- **`onGotoLineApplied` 是 `CodeMirrorHost` 的必填 prop**：定位完成后调用它，
+  上层必须据此把 `gotoLine` 复位成 `null`。漏传会让 `prevGotoLineRef` 一直停在
+  上一次的值，从第二次跳转起全部静默失效。
+- **跨文件跳转要等内容就绪**：`open()` 是异步的，loading 阶段挂的是空文档，
+  此时设置 `gotoLine` 会被 clamp 到第 1 行且不会重跑。必须等目标文件
+  `loading` 变 `false` 后再设置 `gotoLine`。
+- 模块关闭时 Ctrl+点击**不拦截**，保持 CodeMirror 原生多光标行为。
 
 ## 界面约定
 - 标题栏底色是 `--surface: #ffffff`，红点（`.titlebar-update-dot`）用
