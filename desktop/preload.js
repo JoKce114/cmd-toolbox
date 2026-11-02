@@ -116,6 +116,11 @@ contextBridge.exposeInMainWorld('api', {
       invoke('fs:write-minified', projectPath, relPath, content),
     search: (projectPath, query, options) =>
       invoke('fs:search', projectPath, query, options),
+    createFile: (projectPath, relPath, content) =>
+      invoke('fs:create-file', projectPath, relPath, content),
+    createDir: (projectPath, relPath) => invoke('fs:create-dir', projectPath, relPath),
+    move: (projectPath, fromRel, toRel) => invoke('fs:move', projectPath, fromRel, toRel),
+    trash: (projectPath, relPath) => invoke('fs:trash', projectPath, relPath),
   },
 
   panes: {

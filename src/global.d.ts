@@ -218,6 +218,18 @@ declare global {
           truncated: boolean;
           scanned: number;
         }>;
+        createFile: (
+          projectPath: string,
+          relPath: string,
+          content?: string,
+        ) => Promise<{ ok: boolean }>;
+        createDir: (projectPath: string, relPath: string) => Promise<{ ok: boolean }>;
+        move: (
+          projectPath: string,
+          fromRel: string,
+          toRel: string,
+        ) => Promise<{ ok: boolean }>;
+        trash: (projectPath: string, relPath: string) => Promise<{ ok: boolean }>;
       };
       panes: {
         sync: (panes: Array<Record<string, unknown>>) => void;

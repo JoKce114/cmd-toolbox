@@ -440,6 +440,36 @@ function registerIpc() {
     return result;
   });
 
+  // 以下四个都会改动磁盘，成功后让符号索引失效：
+  // 否则新建的文件在索引里不存在，Ctrl+点击会漏掉。
+  ipcMain.handle('fs:create-file', async (_event, projectPath, relPath, content) => {
+    const known = assertProjectPath(projectPath);
+    const result = await fileApi.createFile(known, relPath, content);
+    symbols.invalidate(known);
+    return result;
+  });
+
+  ipcMain.handle('fs:create-dir', async (_event, projectPath, relPath) => {
+    const known = assertProjectPath(projectPath);
+    const result = await fileApi.createDir(known, relPath);
+    symbols.invalidate(known);
+    return result;
+  });
+
+  ipcMain.handle('fs:move', async (_event, projectPath, fromRel, toRel) => {
+    const known = assertProjectPath(projectPath);
+    const result = await fileApi.move(known, fromRel, toRel);
+    symbols.invalidate(known);
+    return result;
+  });
+
+  ipcMain.handle('fs:trash', async (_event, projectPath, relPath) => {
+    const known = assertProjectPath(projectPath);
+    const result = await fileApi.trash(known, relPath);
+    symbols.invalidate(known);
+    return result;
+  });
+
   ipcMain.handle('fs:search', (_event, projectPath, query, options) =>
     fileApi.search(assertProjectPath(projectPath), query, options),
   );
