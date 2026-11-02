@@ -187,6 +187,28 @@ try {
     '目标目录原有内容未被改动',
   );
   assert(!existsSync(join(dir, 'copy-existing-dir/a.txt')), '未在目标目录里留下半拷贝');
+
+  console.log('15. copy 失败后清理本次新建的父目录');
+  // 源是目录、目标在源目录内部：fsp.cp 会抛 ERR_FS_CP_EINVAL，
+  // 此时目标父目录已经被 mkdir 建出来，失败分支要把它一起删掉。
+  mkdirSync(join(dir, 'copy-fail-src'), { recursive: true });
+  writeFileSync(join(dir, 'copy-fail-src/a.txt'), 'A', 'utf8');
+  let copyIntoSource = false;
+  try {
+    await fileApi.copy(dir, 'copy-fail-src', 'copy-fail-src/nested/copied');
+  } catch {
+    copyIntoSource = true;
+  }
+  assert(copyIntoSource, '复制到源目录内部时失败');
+  assert(
+    !existsSync(join(dir, 'copy-fail-src/nested/copied')),
+    '失败后目标路径不存在',
+  );
+  assert(
+    !existsSync(join(dir, 'copy-fail-src/nested')),
+    '失败后本次新建的父目录被清理',
+  );
+  assert(existsSync(join(dir, 'copy-fail-src/a.txt')), '源目录内容未被破坏');
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

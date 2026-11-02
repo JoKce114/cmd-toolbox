@@ -301,19 +301,27 @@ export function EditorPane({
 
   // 文件树完成重命名 / 剪切移动后，页签必须跟着换到新路径，
   // 否则继续编辑再保存会报 ENOENT。目录被移动时其下已打开的页签也要一起跟随。
+  // 目标页签已存在且源页签 dirty 时 rename 会保留源页签、报告路径同步未完成，
+  // 这里提示用户手动处理，不能默默把未保存内容关掉。
   const handleAfterRename = useCallback(
     (fromRel: string, toRel: string) => {
+      let unsynced = false;
       if (files[fromRel]) {
-        rename(fromRel, toRel);
-        return;
-      }
-      for (const relPath of Object.keys(files)) {
-        if (relPath.startsWith(`${fromRel}/`)) {
-          rename(relPath, `${toRel}${relPath.slice(fromRel.length)}`);
+        unsynced = !rename(fromRel, toRel).synced;
+      } else {
+        for (const relPath of Object.keys(files)) {
+          if (relPath.startsWith(`${fromRel}/`)) {
+            if (!rename(relPath, `${toRel}${relPath.slice(fromRel.length)}`).synced) {
+              unsynced = true;
+            }
+          }
         }
       }
+      if (unsynced) {
+        onToast('目标文件已打开，旧页签的未保存修改已保留，请手动处理', 'error');
+      }
     },
-    [files, rename],
+    [files, onToast, rename],
   );
 
   // 点删除时就确定这次操作会波及哪些已打开页签，以及其中哪些有未保存修改。

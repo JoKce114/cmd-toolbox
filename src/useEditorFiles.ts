@@ -40,6 +40,11 @@ const EMPTY: EditorFileState = {
 // 但用户需要能区分：前者该提示「没有修改」，后者该报错。
 export type SaveOutcome = 'saved' | 'unchanged' | 'failed';
 
+// 重命名的返回结果。目标页签已存在且源页签有未保存修改时，源页签会原样保留
+// （旧路径的页签虽然指向已不存在的文件，但用户内容不能丢），此时 synced 为 false，
+// 调用方需要提示用户手动处理。
+export type RenameOutcome = { synced: boolean };
+
 export function useEditorFiles(group: Group, onError: (message: string) => void) {
   const [files, setFiles] = useState<Record<string, EditorFileState>>({});
   const [activePath, setActivePath] = useState('');
@@ -351,9 +356,16 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
     setActivePath('');
   }, []);
 
-  const rename = useCallback((from: string, to: string) => {
-    if (from === to) return;
+  const rename = useCallback((from: string, to: string): RenameOutcome => {
+    if (from === to) return { synced: true };
+    const source = filesRef.current[from];
     const targetExists = Boolean(filesRef.current[to]);
+    // 目标页签已存在且源页签有未保存修改：既不能覆盖目标页签
+    // （它展示的是目标位置的真实内容），也不能删源页签（会丢用户没保存的修改）。
+    // 宁可留下一个指向旧路径的页签，让调用方提示用户手动处理。
+    if (targetExists && source?.dirty) {
+      return { synced: false };
+    }
     // 目标已存在时不接收来源页签的「占位」标记，目标页签保持自己的状态。
     if (touchedRef.current.delete(from) && !targetExists) touchedRef.current.add(to);
     setFiles((previous) => {
@@ -361,7 +373,8 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
       const next = { ...previous };
       if (previous[to]) {
         // 目标页签已存在：该页签展示的是目标位置真实内容，不能覆盖；
-        // 但旧路径的编辑器已指向不存在的文件，必须关掉而不是静默留下。
+        // 源页签没有未保存修改（上面已排除 dirty 情况），直接关掉，
+        // 避免留下指向已不存在文件的死页签。
         delete next[from];
       } else {
         next[to] = { ...next[from], relPath: to };
@@ -370,6 +383,7 @@ export function useEditorFiles(group: Group, onError: (message: string) => void)
       return next;
     });
     setActivePath((current) => (current === from ? to : current));
+    return { synced: true };
   }, []);
 
   useEffect(() => {

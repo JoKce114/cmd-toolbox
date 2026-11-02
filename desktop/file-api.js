@@ -246,16 +246,34 @@ async function copy(projectPath, fromRel, toRel) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  await fsp.mkdir(path.dirname(to), { recursive: true });
+  const parent = path.dirname(to);
+  // 记录本次 mkdir 之前最靠上的那一级不存在目录。mkdir 是递归的，一次可能
+  // 建出多级父目录；复制失败时要把这些「本次新建」的目录整棵删掉，
+  // 否则会留下一个空的深层目录树。已存在的祖先目录不受影响。
+  let firstCreated = '';
+  for (let candidate = parent; ; candidate = path.dirname(candidate)) {
+    try {
+      await fsp.stat(candidate);
+      break;
+    } catch (error) {
+      if (error.code !== 'ENOENT') break;
+    }
+    firstCreated = candidate;
+    if (path.dirname(candidate) === candidate) break;
+  }
+  await fsp.mkdir(parent, { recursive: true });
   try {
     // force: false + errorOnExist: true：即使 lstat 与 cp 之间有竞态，
     // 也绝不允许覆盖目标位置已有的内容。
     await fsp.cp(from, to, { recursive: true, errorOnExist: true, force: false });
   } catch (error) {
     // 复制失败时目标位置可能已经留下半成品（目录树里先复制成功的部分文件）。
-    // 上面的 lstat 已确认目标原本不存在，所以整个删掉是安全的；
-    // 父目录可能是本来就存在的，不要清理。
+    // 上面的 lstat 已确认目标原本不存在，所以整个删掉是安全的。
     await fsp.rm(to, { recursive: true, force: true }).catch(() => {});
+    // 父目录是本次新建的才清理，用户原本就有的目录不能碰。
+    if (firstCreated) {
+      await fsp.rm(firstCreated, { recursive: true, force: true }).catch(() => {});
+    }
     throw error;
   }
   return { ok: true };
