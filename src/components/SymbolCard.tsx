@@ -52,7 +52,8 @@ export function SymbolCard({ card, onJump, onClose }: SymbolCardProps) {
           {single.doc ? <pre className="symbol-card-doc">{single.doc}</pre> : null}
           <button type="button" className="symbol-card-jump" onClick={() => onJump(single)}>
             <CornerDownRight size={12} />
-            跳到定义（{describeLocation(single)}）
+            {single.kind === 'variable' ? '跳到赋值' : '跳到定义'}（
+            {describeLocation(single)}）
           </button>
         </div>
       ) : null}
@@ -76,7 +77,9 @@ export function SymbolCard({ card, onJump, onClose }: SymbolCardProps) {
       ) : null}
 
       {!card.loading && card.truncated ? (
-        <p className="symbol-card-note">已扫描前 4000 个文件，结果可能不完整</p>
+        // 具体截断原因有多个（文件总数、目录项总数、解析预算），
+        // 不要写死数字：写「4000 个文件」会掩盖解析预算先耗尽的情况。
+        <p className="symbol-card-note">项目较大，只搜索了一部分，结果可能不完整</p>
       ) : null}
     </div>
   );

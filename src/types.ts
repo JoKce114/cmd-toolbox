@@ -260,7 +260,7 @@ export type LoginItemResult = { ok: true } | { ok: false; message: string };
 export type SymbolMatch = {
   relPath: string;
   line: number;
-  kind: 'function' | 'method' | 'class';
+  kind: 'function' | 'method' | 'class' | 'variable';
   name: string;
   owner: string;
   namespace: string;
