@@ -8,7 +8,7 @@ import { CodeMirrorHost } from './CodeMirrorHost';
 import { findModule } from '../modules/catalog';
 import type { EditorModule } from '../modules/catalog';
 import { enqueueMinify, isMinifiable, minifiedName, nextMinifySeq } from '../modules/minify';
-import type { Group, Tab } from '../types';
+import type { Group, SymbolMatch, Tab } from '../types';
 import type { TerminalThemeMode } from '../theme';
 import type { KeyBindingMap } from '../editorKeymap';
 import type { EditorFontFamily } from '../prefs';
@@ -88,6 +88,10 @@ export function EditorPane({
   const [markingResolved, setMarkingResolved] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [pendingClose, setPendingClose] = useState<string | null>(null);
+  const [gotoLine, setGotoLine] = useState<number | null>(null);
+  // 跨文件跳转时 activePath 先切换、文件内容后到达。这里先记下目标行，
+  // 等内容真正加载完再交给 CodeMirrorHost，否则会被 clamp 到空文档的第 1 行。
+  const pendingGotoRef = useRef<{ relPath: string; line: number } | null>(null);
 
   const rootRef = useRef<HTMLElement>(null);
   const fileRef = useRef(file);
@@ -211,6 +215,35 @@ export function EditorPane({
     void open(relPath);
   };
 
+  // 目标文件内容就绪后再定位：open() 是异步的，先把 loading 状态的空文档挂上去，
+  // 此时设置 gotoLine 会被 CodeMirrorHost clamp 到第 1 行并提前复位。
+  useEffect(() => {
+    const pending = pendingGotoRef.current;
+    if (!pending) return;
+    const target = files[pending.relPath];
+    if (pending.relPath !== activePath) {
+      // 用户中途切走或加载失败：放弃这次待定位，避免以后重新打开该文件时误跳
+      if (!target || !target.loading) pendingGotoRef.current = null;
+      return;
+    }
+    if (!target || target.loading) return;
+    pendingGotoRef.current = null;
+    setGotoLine(pending.line);
+  }, [activePath, files]);
+
+  const jumpToSymbol = useCallback(
+    (match: SymbolMatch) => {
+      if (match.relPath === activePathRef.current) {
+        pendingGotoRef.current = null;
+        setGotoLine(match.line);
+        return;
+      }
+      pendingGotoRef.current = { relPath: match.relPath, line: match.line };
+      void open(match.relPath);
+    },
+    [open],
+  );
+
   // 文件树的「生成 xxx.min.js」：读磁盘上的源文件、压缩、写出产物。
   // 用磁盘内容而不是编辑器内容——从文件树压缩的文件可能根本没打开过。
   const canMinify = (relPath: string) => isMinifiable(relPath);
@@ -269,6 +302,16 @@ export function EditorPane({
         : null
       : ['js', 'mjs', 'cjs', 'jsx'].includes(lang) && enabledModules.includes('diag-js')
         ? findModule('diag-js') ?? null
+        : null;
+
+  // 符号跳转模块的判定与上面的诊断模块保持一致：同样按 lang 和开关状态挑。
+  const referenceModule: EditorModule | null =
+    lang === 'php'
+      ? enabledModules.includes('ref-php')
+        ? findModule('ref-php') ?? null
+        : null
+      : ['js', 'mjs', 'cjs', 'jsx'].includes(lang) && enabledModules.includes('ref-js')
+        ? findModule('ref-js') ?? null
         : null;
 
   return (
@@ -409,11 +452,11 @@ export function EditorPane({
               bracketMatching={bracketMatching}
               showWhitespace={showWhitespace}
               diagnosticModule={diagnosticModule}
-              // TODO(Task 8): 以下四行是占位值，接入符号跳转时必须替换
-              referenceEnabled={false}
+              referenceEnabled={Boolean(referenceModule)}
               projectPath={group.path}
-              onJumpToSymbol={() => {}}
-              gotoLine={null}
+              onJumpToSymbol={jumpToSymbol}
+              gotoLine={gotoLine}
+              onGotoLineApplied={() => setGotoLine(null)}
               onFontSizeDelta={onFontSizeDelta}
               onChange={(value) => update(activePath, value)}
               onConflictCountChange={setConflictCount}

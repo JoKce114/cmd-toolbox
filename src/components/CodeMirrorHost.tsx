@@ -64,8 +64,9 @@ export type CodeMirrorHostProps = {
   projectPath: string;
   onJumpToSymbol: (match: SymbolMatch) => void;
   gotoLine: number | null;
-  // 定位完成后通知上层把 gotoLine 复位为 null，避免切文件时再次误滚
-  onGotoLineApplied?: () => void;
+  // 定位完成后通知上层把 gotoLine 复位为 null。必填：漏传时 prevGotoLineRef
+  // 永远不会回到 null，第二次跳转起会被静默忽略。
+  onGotoLineApplied: () => void;
   onFontSizeDelta?: (delta: number) => void;
   onChange: (value: string) => void;
   onConflictCountChange?: (count: number) => void;
@@ -599,7 +600,7 @@ export function CodeMirrorHost({
       effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
     });
     view.focus();
-    onGotoLineAppliedRef.current?.();
+    onGotoLineAppliedRef.current();
   }, [gotoLine, filePath]);
 
   // Ctrl + 滚轮调整字号，与终端行为一致（TerminalPane 用的是同一套判定）。
