@@ -250,10 +250,12 @@ async function openFile(page, relPath) {
   await entry.click();
   // 等面板标题切到目标文件、且正文已经载入。固定 sleep 在慢机器上不够、
   // 快机器上又白等；.cm-content 可能在切换前就命中旧编辑器，不能单独依赖。
+  // 面板标题（pane-path）显示的是文件名，不是完整相对路径。
+  const displayName = relPath.split('/').pop() || relPath;
   await waitFor(
     async () => {
       const path = await currentPanePath(page).catch(() => '');
-      if (!path.endsWith(relPath)) return false;
+      if (!path.endsWith(displayName)) return false;
       const text = await page.locator('.cm-content').first().innerText().catch(() => '');
       return text.trim().length > 0;
     },
