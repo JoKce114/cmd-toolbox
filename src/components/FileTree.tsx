@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { FormEvent, ReactElement } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import type { FormEvent, ReactElement, ReactNode } from 'react';
 import {
   ChevronRight,
   ChevronsDownUp,
@@ -8,10 +8,13 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  Pencil,
   RefreshCw,
 } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
-import type { FileEntry, Group, MenuState } from '../types';
+import { canPaste, pasteTargetDir } from '../fileClipboard';
+import type { FileClip } from '../fileClipboard';
+import type { FileEntry, Group, MenuEntry, MenuState } from '../types';
 import { Modal } from './Modal';
 import { PopupMenu } from './PopupMenu';
 import { minifiedName } from '../modules/minify';
@@ -23,11 +26,16 @@ type FileTreeProps = {
   onMinify: (relPath: string) => void;
   canMinify: (relPath: string) => boolean;
   onError: (message: string) => void;
+  clip: FileClip | null;
+  onClipChange: (clip: FileClip | null) => void;
+  onRequestDelete: (relPath: string) => void;
 };
 
 type DirState = Record<string, FileEntry[] | undefined>;
 
 type PendingCreate = { kind: 'file' | 'directory'; relDir: string };
+
+type PendingRename = { relPath: string; relDir: string; currentName: string };
 
 // Trae / VS Code 风格的自然排序：
 // 目录在前，然后按名称比较，名称里的数字段按数值比较
@@ -58,11 +66,15 @@ export function FileTree({
   onMinify,
   canMinify,
   onError,
+  clip,
+  onClipChange,
+  onRequestDelete,
 }: FileTreeProps) {
   const [children, setChildren] = useState<DirState>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']));
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
+  const [pendingRename, setPendingRename] = useState<PendingRename | null>(null);
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
   const pendingRevealRef = useRef('');
   const reloadingRef = useRef(false);
@@ -140,6 +152,33 @@ export function FileTree({
     [group.path, loadDir, onOpen, pendingCreate],
   );
 
+  const createFile = useCallback((relDir: string) => {
+    setPendingCreate({ kind: 'file', relDir });
+  }, []);
+
+  const createFolder = useCallback((relDir: string) => {
+    setPendingCreate({ kind: 'directory', relDir });
+  }, []);
+
+  // 重命名也走输入弹窗：Electron 渲染进程不支持 window.prompt（实测会抛错）。
+  // 用独立状态而不是复用 pendingCreate，因为两者语义与校验规则不同：
+  // 重命名允许保持原名（此时直接关闭弹窗，不发请求）。
+  const submitRename = useCallback(
+    async (name: string) => {
+      if (!pendingRename) return;
+      const { relPath, relDir, currentName } = pendingRename;
+      if (name === currentName) {
+        setPendingRename(null);
+        return;
+      }
+      const toRel = relDir ? `${relDir}/${name}` : name;
+      await window.api.files.move(group.path, relPath, toRel);
+      setPendingRename(null);
+      await loadDir(relDir);
+    },
+    [group.path, loadDir, pendingRename],
+  );
+
   useEffect(() => {
     setChildren({});
     setExpanded(new Set(['']));
@@ -197,23 +236,158 @@ export function FileTree({
     });
   };
 
+  const pasteInto = useCallback(
+    async (targetDir: string) => {
+      const check = canPaste(clip, group.path);
+      if (!clip || !check.ok) {
+        onError(check.ok ? '剪贴板为空' : check.reason);
+        return;
+      }
+      const toRel = pasteTargetDir(clip, targetDir);
+      try {
+        await window.api.files.move(group.path, clip.relPath, toRel);
+        if (clip.kind === 'cut') onClipChange(null);
+        await loadDir(targetDir);
+        setExpanded((previous) => new Set(previous).add(targetDir));
+        // 目录被移动后原目录的内容也失效了，整棵树重列一次最稳
+        await reloadAll();
+      } catch (error) {
+        onError(toErrorMessage(error));
+      }
+    },
+    [clip, group.path, loadDir, onClipChange, onError, reloadAll],
+  );
+
+  // 绝对路径要转成 Windows 分隔符，相对路径保持树里的 / 写法。
+  // 仓库没有暴露 path.separator，用 group.path 自身判断分隔符最可靠。
+  const copyPath = useCallback(
+    async (relPath: string, relative: boolean) => {
+      const sep = group.path.includes('\\') ? '\\' : '/';
+      const absolute = `${group.path}${sep}${relPath.split('/').join(sep)}`;
+      try {
+        await window.api.clipboard.write(relative ? relPath : absolute);
+        onError(`已复制${relative ? '相对' : ''}路径`);
+      } catch (error) {
+        onError(toErrorMessage(error));
+      }
+    },
+    [group.path, onError],
+  );
+
+  const requestRename = useCallback((entry: FileEntry) => {
+    setPendingRename({
+      relPath: entry.relPath,
+      relDir: ancestorsOf(entry.relPath).pop() || '',
+      currentName: entry.name,
+    });
+  }, []);
+
+  // 右键菜单按目标分两套：文件/文件夹一套，空白处一套。
   const openRowMenu = (event: React.MouseEvent, entry: FileEntry) => {
-    if (entry.isDir || !canMinify(entry.relPath)) return;
     event.preventDefault();
     event.stopPropagation();
-    // 目标名与实际写入路径用同一个函数算，避免菜单文案和产物不一致
-    const target = minifiedName(entry.relPath);
-    const name = target.split('/').pop() || target;
+    const dir = entry.isDir ? entry.relPath : ancestorsOf(entry.relPath).pop() || '';
+    const paste = canPaste(clip, group.path);
+
+    const items: MenuEntry[] = [
+      {
+        type: 'item',
+        id: 'new-file',
+        label: '新建文件',
+        onSelect: () => createFile(dir),
+      },
+      {
+        type: 'item',
+        id: 'new-folder',
+        label: '新建文件夹',
+        onSelect: () => createFolder(dir),
+      },
+      { type: 'separator', id: 'sep-new' },
+      {
+        type: 'item',
+        id: 'copy',
+        label: '复制',
+        onSelect: () =>
+          onClipChange({ kind: 'copy', relPath: entry.relPath, projectPath: group.path }),
+      },
+      {
+        type: 'item',
+        id: 'cut',
+        label: '剪切',
+        onSelect: () =>
+          onClipChange({ kind: 'cut', relPath: entry.relPath, projectPath: group.path }),
+      },
+      {
+        type: 'item',
+        id: 'paste',
+        label: '粘贴',
+        disabled: !paste.ok,
+        onSelect: () => void pasteInto(dir),
+      },
+      { type: 'separator', id: 'sep-edit' },
+      {
+        type: 'item',
+        id: 'rename',
+        label: '重命名',
+        onSelect: () => requestRename(entry),
+      },
+      {
+        type: 'item',
+        id: 'copy-path',
+        label: '复制路径',
+        onSelect: () => void copyPath(entry.relPath, false),
+      },
+      {
+        type: 'item',
+        id: 'copy-rel-path',
+        label: '复制相对路径',
+        onSelect: () => void copyPath(entry.relPath, true),
+      },
+      { type: 'separator', id: 'sep-danger' },
+      {
+        type: 'item',
+        id: 'delete',
+        label: '删除',
+        onSelect: () => onRequestDelete(entry.relPath),
+      },
+    ];
+
+    // 保留既有的「生成 xxx.min.js」
+    if (!entry.isDir && canMinify(entry.relPath)) {
+      const target = minifiedName(entry.relPath);
+      const name = target.split('/').pop() || target;
+      items.push({ type: 'separator', id: 'sep-minify' });
+      items.push({
+        type: 'item',
+        id: 'file-minify',
+        label: `生成 ${name}`,
+        onSelect: () => onMinify(entry.relPath),
+      });
+    }
+
+    setMenu({ x: event.clientX, y: event.clientY, items });
+  };
+
+  const openBlankMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const paste = canPaste(clip, group.path);
     setMenu({
       x: event.clientX,
       y: event.clientY,
       items: [
+        { type: 'item', id: 'blank-new-file', label: '新建文件', onSelect: () => createFile('') },
+        { type: 'item', id: 'blank-new-folder', label: '新建文件夹', onSelect: () => createFolder('') },
         {
           type: 'item',
-          id: 'file-minify',
-          label: `生成 ${name}`,
-          onSelect: () => onMinify(entry.relPath),
+          id: 'blank-paste',
+          label: '粘贴',
+          disabled: !paste.ok,
+          onSelect: () => void pasteInto(''),
         },
+        { type: 'separator', id: 'blank-sep' },
+        { type: 'item', id: 'blank-refresh', label: '刷新', onSelect: () => void reloadAll() },
+        { type: 'item', id: 'blank-collapse', label: '全部折叠', onSelect: collapseAll },
       ],
     });
   };
@@ -267,7 +441,7 @@ export function FileTree({
           className="icon-btn"
           title="新建文件夹"
           aria-label="新建文件夹"
-          onClick={() => setPendingCreate({ kind: 'directory', relDir: createTargetDir() })}
+          onClick={() => createFolder(createTargetDir())}
         >
           <FolderPlus size={13} />
         </button>
@@ -276,7 +450,7 @@ export function FileTree({
           className="icon-btn"
           title="新建文件"
           aria-label="新建文件"
-          onClick={() => setPendingCreate({ kind: 'file', relDir: createTargetDir() })}
+          onClick={() => createFile(createTargetDir())}
         >
           <FilePlus size={13} />
         </button>
@@ -299,27 +473,52 @@ export function FileTree({
           <ChevronsDownUp size={13} />
         </button>
       </div>
-      <div className="file-tree">
+      <div className="file-tree" onContextMenu={openBlankMenu}>
         {renderDir('', 0)}
         {menu ? <PopupMenu state={menu} onClose={() => setMenu(null)} /> : null}
       </div>
       {pendingCreate ? (
-        <CreateEntryModal
-          kind={pendingCreate.kind}
-          relDir={pendingCreate.relDir}
+        <NamePromptModal
+          title={pendingCreate.kind === 'file' ? '新建文件' : '新建文件夹'}
+          subtitle={`位置：${pendingCreate.relDir || '项目根目录'}`}
+          icon={pendingCreate.kind === 'file' ? <FilePlus size={16} /> : <FolderPlus size={16} />}
+          label={pendingCreate.kind === 'file' ? '文件名' : '文件夹名'}
+          placeholder={pendingCreate.kind === 'file' ? '例如：index.ts' : '例如：components'}
+          submitLabel="创建"
+          busyLabel="创建中…"
           onClose={() => setPendingCreate(null)}
           onSubmit={submitCreate}
+        />
+      ) : null}
+      {pendingRename ? (
+        <NamePromptModal
+          title="重命名"
+          subtitle={`位置：${pendingRename.relDir || '项目根目录'}`}
+          icon={<Pencil size={16} />}
+          label="新名称"
+          placeholder={pendingRename.currentName}
+          initialValue={pendingRename.currentName}
+          submitLabel="重命名"
+          busyLabel="处理中…"
+          onClose={() => setPendingRename(null)}
+          onSubmit={submitRename}
         />
       ) : null}
     </div>
   );
 }
 
-// 新建文件 / 文件夹的输入弹窗。Electron 渲染进程不支持 window.prompt，
-// 统一走项目里的 Modal。
-type CreateEntryModalProps = {
-  kind: 'file' | 'directory';
-  relDir: string;
+// 新建 / 重命名共用的「输入名字」弹窗。Electron 渲染进程不支持 window.prompt，
+// 统一走项目里的 Modal。两种用途各自持有状态，只共用这层输入与校验 UI。
+type NamePromptModalProps = {
+  title: string;
+  subtitle: string;
+  icon: ReactNode;
+  label: string;
+  placeholder: string;
+  initialValue?: string;
+  submitLabel: string;
+  busyLabel: string;
   onClose: () => void;
   onSubmit: (name: string) => Promise<void>;
 };
@@ -333,11 +532,22 @@ function validateName(raw: string): string {
   return '';
 }
 
-function CreateEntryModal({ kind, relDir, onClose, onSubmit }: CreateEntryModalProps) {
-  const [value, setValue] = useState('');
+function NamePromptModal({
+  title,
+  subtitle,
+  icon,
+  label,
+  placeholder,
+  initialValue = '',
+  submitLabel,
+  busyLabel,
+  onClose,
+  onSubmit,
+}: NamePromptModalProps) {
+  const [value, setValue] = useState(initialValue);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const isFile = kind === 'file';
+  const inputId = useId();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -359,25 +569,25 @@ function CreateEntryModal({ kind, relDir, onClose, onSubmit }: CreateEntryModalP
 
   return (
     <Modal
-      title={isFile ? '新建文件' : '新建文件夹'}
-      subtitle={`位置：${relDir || '项目根目录'}`}
-      icon={isFile ? <FilePlus size={16} /> : <FolderPlus size={16} />}
+      title={title}
+      subtitle={subtitle}
+      icon={icon}
       width={420}
       onClose={onClose}
       closeDisabled={busy}
     >
       <form className="modal-form" onSubmit={submit}>
         <div className="field">
-          <label className="field-label" htmlFor="file-tree-new-name">
-            {isFile ? '文件名' : '文件夹名'}
+          <label className="field-label" htmlFor={inputId}>
+            {label}
           </label>
           <input
-            id="file-tree-new-name"
+            id={inputId}
             className="text-input"
             value={value}
             data-autofocus
             spellCheck={false}
-            placeholder={isFile ? '例如：index.ts' : '例如：components'}
+            placeholder={placeholder}
             onChange={(event) => {
               setValue(event.target.value);
               setError('');
@@ -397,7 +607,7 @@ function CreateEntryModal({ kind, relDir, onClose, onSubmit }: CreateEntryModalP
             取消
           </button>
           <button type="submit" className="btn btn-primary" disabled={busy}>
-            {busy ? '创建中…' : '创建'}
+            {busy ? busyLabel : submitLabel}
           </button>
         </div>
       </form>

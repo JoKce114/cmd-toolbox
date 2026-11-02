@@ -3,11 +3,13 @@ import { Save, Search, X } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import { useEditorFiles } from '../useEditorFiles';
 import { FileTree } from './FileTree';
+import { ConfirmDialog } from './ConfirmDialog';
 import { SearchPanel } from './SearchPanel';
 import { CodeMirrorHost } from './CodeMirrorHost';
 import { findModule } from '../modules/catalog';
 import type { EditorModule } from '../modules/catalog';
 import { enqueueMinify, isMinifiable, minifiedName, nextMinifySeq } from '../modules/minify';
+import type { FileClip } from '../fileClipboard';
 import type { Group, SymbolMatch, Tab } from '../types';
 import type { TerminalThemeMode } from '../theme';
 import type { KeyBindingMap } from '../editorKeymap';
@@ -83,6 +85,8 @@ export function EditorPane({
     setActivePath,
   } = useEditorFiles(group, onError);
 
+  const [fileClip, setFileClip] = useState<FileClip | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [conflictCount, setConflictCount] = useState(0);
   const [hadConflict, setHadConflict] = useState(false);
   const [markingResolved, setMarkingResolved] = useState(false);
@@ -287,6 +291,20 @@ export function EditorPane({
     [group.path, onToast, open],
   );
 
+  const confirmDelete = useCallback(async () => {
+    const relPath = pendingDelete;
+    if (!relPath) return;
+    setPendingDelete(null);
+    try {
+      // 先关掉指向该文件的页签，否则会留下指向不存在文件的编辑器
+      if (files[relPath]) close(relPath);
+      await window.api.files.trash(group.path, relPath);
+      onToast(`已删除 ${relPath}`, 'success');
+    } catch (error) {
+      onToast(toErrorMessage(error), 'error');
+    }
+  }, [pendingDelete, files, close, group.path, onToast]);
+
   const requestClose = () => {
     if (hasDirty) {
       const names = openPaths.filter((item) => files[item].dirty).join('、');
@@ -446,6 +464,9 @@ export function EditorPane({
             onMinify={runMinify}
             canMinify={canMinify}
             onError={onError}
+            clip={fileClip}
+            onClipChange={setFileClip}
+            onRequestDelete={setPendingDelete}
           />
         )}
         <div className="editor-main">
@@ -510,6 +531,20 @@ export function EditorPane({
             </div>
           </div>
         </div>
+      ) : null}
+
+      {pendingDelete ? (
+        <ConfirmDialog
+          title="删除到回收站"
+          message={
+            files[pendingDelete]?.dirty
+              ? `「${pendingDelete}」有未保存的修改，删除后不可恢复。确定删除到回收站吗？`
+              : `确定把「${pendingDelete}」删除到回收站吗？`
+          }
+          confirmLabel="删除"
+          onClose={() => setPendingDelete(null)}
+          onConfirm={confirmDelete}
+        />
       ) : null}
     </section>
   );
