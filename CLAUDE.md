@@ -422,7 +422,8 @@ node tests/device-emulation-probe.mjs
 - **索引失效有两条路**：应用内保存（`fs:write` / `fs:write-minified`）后主进程调用
   `symbols.invalidate(projectPath)` 立刻丢内存索引，下次查询同步重建；
   外部改动（git 切分支等）靠 10 分钟 TTL 后台重建，期间继续用旧索引。
-  **磁盘索引只是缓存**，删掉只会让下次重建。
+  **磁盘索引只是缓存**，删掉只会让下次重建。其余改盘通道（`fs:create-file` /
+  `fs:create-dir` / `fs:copy` / `fs:move` / `fs:trash`）见「文件树与对比」小节。
 - **`currentPath` 来自渲染进程，必须过 `resolveWithin`**：除了 `..` 词法越界，
   还要挡「项目内的符号链接指向项目外」，否则读它等于读项目外的文件。
 - **`self::` / `static::` / `$this->` 的接收者不是类名**，要按光标行号找出所在类
@@ -450,8 +451,9 @@ node tests/device-emulation-probe.mjs
 ### 文件树与对比
 
 - **所有文件操作都经 `resolveWithin`**（`desktop/file-api.js`）。`createFile` 用
-  `fsp.open(..., 'wx')`、`createDir` 对目标目录**不带** `recursive`、`copy` 与 `move`
-  先 `lstat` 目标——除「仅改大小写」的重命名外，**目标已存在一律报错，绝不覆盖**。
+  `fsp.open(..., 'wx')`、`createDir` 对目标目录**不带** `recursive`、**`copy` 总是、
+  `move` 仅在非纯大小写重命名时**先 `lstat` 目标——除「仅改大小写」的重命名外，
+  **目标已存在一律报错，设计上绝不覆盖**。
   父目录可以用 `recursive: true` 创建，这不算覆盖。
 - **`move` 必须放行纯大小写重命名**：Windows 文件系统不区分大小写，`lstat(to)`
   命中的就是源文件本身，不能据此判冲突（否则 `a.txt → A.txt` 永远失败）。实现是先
@@ -482,8 +484,8 @@ node tests/device-emulation-probe.mjs
   （文件取父目录，目录取自身）。不要照需求稿写成「选中项若是目录就用它」。
 - **侧栏宽度可拖拽**：默认 220、最小 160、上限为容器宽度的一半，持久化在
   `cmd-toolbox.editor.sidebar-width`，**只在松手时写盘**。多个编辑器实例通过自定义
-  事件 `editor-sidebar-width-change` 同步（`storage` 事件兜跨窗口）。隐藏页签的容器
-  宽度量出来是 0，此时不能套用「最小 160」的上限，否则会把同步来的宽度夹成 160。
+  事件 `editor-sidebar-width-change` 同步（`storage` 事件兜跨窗口）。**隐藏页签实测
+  宽度为 0 时，上限应视为无穷**（此时不能取最小宽度），否则同步来的宽度会被夹成 160。
 - **左栏两个折叠区用 `useCollapsedSection`**，id 是 `editor-open-editors` 与
   `editor-file-tree`，状态存 `cmd-toolbox.sidebar.collapsed.<id>`。文件区是 `is-grow`
   （吃掉剩余高度并自己滚动）。
