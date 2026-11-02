@@ -546,6 +546,8 @@ if (!hasLock) {
     });
     mcpConfig.installGlobal(mcp);
     loginItem.repairOnStartup();
+    // Release 列表落盘，重启应用后不必重新打 GitHub API
+    updates.configure({ cacheFile: path.join(app.getPath('userData'), 'update-cache.json') });
     registerIpc();
     createWindow();
     updater.init(send, () => {

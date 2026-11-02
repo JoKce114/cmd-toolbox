@@ -757,7 +757,8 @@ export default function App() {
             url: result.url,
           });
         } else {
-          pushToast(`已是最新版本（${result.current}）`, 'success');
+          const suffix = result.warning ? `（${result.warning}）` : '';
+          pushToast(`已是最新版本（${result.current}）${suffix}`, 'success');
         }
         return;
       }

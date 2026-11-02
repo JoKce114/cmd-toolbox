@@ -31,19 +31,29 @@ const release = {
   html_url: 'https://github.com/JoKce114/cmd-toolbox/releases/tag/v9.9.0',
   body: '## [9.9.0] - 2026-10-30\n\n### 测试更新\n\n**浏览器刷新**\n\n- 第一项改动\n  - 嵌套说明\n- 第二项改动\n\n按 `F5` 即可刷新',
 };
-let hits = 0;
+let ymlHits = 0;
+let apiHits = 0;
 const server = createServer((req, res) => {
-  hits += 1;
+  if (req.url.startsWith('/latest.yml')) {
+    ymlHits += 1;
+    res.writeHead(200, { 'content-type': 'text/yaml' });
+    res.end('version: 9.9.0\nfiles:\n  - url: CmdToolbox-9.9.0-setup.exe\n');
+    return;
+  }
+  apiHits += 1;
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(JSON.stringify([release]));
 });
 await new Promise((done) => server.listen(0, '127.0.0.1', done));
 const apiUrl = `http://127.0.0.1:${server.address().port}/releases`;
+const ymlUrl = `http://127.0.0.1:${server.address().port}/latest.yml`;
 
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 delete env.CMDTOOLBOX_NO_UPDATE;
 env.CMDTOOLBOX_UPDATE_API = apiUrl;
+// latest.yml 现在是判断「有没有新版」的主数据源，假服务器必须一起提供
+env.CMDTOOLBOX_UPDATE_YML = ymlUrl;
 
 const app = await electron.launch({
   executablePath: resolve(root, 'node_modules/electron/dist/electron.exe'),
@@ -77,6 +87,7 @@ const settingsBtn = page.locator('.titlebar-settings');
 
 console.log('1. 启动检查发现新版本');
 await dot.waitFor({ state: 'attached', timeout: 20000 });
+ok(ymlHits >= 1, '检查更新先读 latest.yml');
 ok(true, '设置按钮旁出现红色圆点');
 ok(
   (await settingsBtn.getAttribute('title')).includes('有新版本'),
@@ -134,11 +145,11 @@ await modal.waitFor({ state: 'detached', timeout: 10000 });
 ok((await dot.count()) === 1, '关掉公告后红点仍然在');
 
 console.log('3. 后台轮询只刷新红点，不弹公告');
-const hitsBefore = hits;
+const hitsBefore = apiHits;
 await page.waitForTimeout(4000);
 ok((await modal.count()) === 0, '后台检查没有弹窗');
 ok((await dot.count()) === 1, '后台检查后红点仍在');
-ok(hits >= hitsBefore, '后台检查确实发起了请求');
+ok(apiHits >= hitsBefore, '后台检查确实发起了请求');
 
 console.log('4. 设置面板显示新版本与手动更新入口');
 await settingsBtn.click();
@@ -153,7 +164,7 @@ ok(
 await page.screenshot({ path: join(shots, 'update-settings.png') });
 
 console.log('5. 手动检查弹出公告');
-const hitsBeforeManual = hits;
+const hitsBeforeManual = apiHits;
 await page.getByRole('button', { name: '检查更新', exact: true }).click();
 await page.waitForTimeout(1500);
 ok((await modal.count()) === 1, '手动检查后发现新版本会弹公告');
@@ -162,7 +173,7 @@ ok(
   '手动检查的公告标题正确',
 );
 // 主进程有 5 分钟缓存，命中缓存时不会重新请求，这也是正常的
-ok(hits >= hitsBeforeManual, '手动检查复用同一个接口（命中缓存时不再发请求）');
+ok(apiHits >= hitsBeforeManual, '手动检查复用同一个接口（命中缓存时不再发请求）');
 await page.getByRole('button', { name: '稍后', exact: true }).click();
 await modal.waitFor({ state: 'detached', timeout: 10000 });
 

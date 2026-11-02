@@ -178,6 +178,9 @@ export type UpdateCheckResult =
       releases: ReleaseNote[];
       availableReleases: ReleaseNote[];
       announce: UpdateAnnounce;
+      // 限流或断网时退回稍早的缓存结果，这里是给用户看的说明
+      warning?: string;
+      stale?: boolean;
     }
   | { ok: false; message: string };
 

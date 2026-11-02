@@ -1,4 +1,7 @@
 import { createRequire } from 'node:module';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const updates = require('../desktop/updates.js');
@@ -11,12 +14,37 @@ function assert(condition, message) {
 }
 
 function makeFetch(payload, status = 200, headers = {}) {
+  // latest.yml 走同一个响应：大部分用例本就该退回 API 分支
   return async () => ({
     ok: status >= 200 && status < 300,
     status,
     headers: { get: (name) => headers[name.toLowerCase()] ?? null },
+    text: async () => (typeof payload === 'string' ? payload : JSON.stringify(payload)),
     json: async () => payload,
   });
+}
+
+// 按 URL 分流的假实现：yml 和 api 各自返回不同内容，并记录各自被打了几次
+function routerFetch(routes) {
+  const calls = [];
+  const impl = async (url) => {
+    const key = String(url).includes('latest.yml') ? 'yml' : 'api';
+    calls.push(key);
+    const route = routes[key];
+    if (!route) throw new Error(`用例没有预期到 ${key} 请求`);
+    const status = route.status ?? 200;
+    const headers = route.headers ?? {};
+    const body = route.body ?? '';
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      headers: { get: (name) => headers[name.toLowerCase()] ?? null },
+      text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+      json: async () => body,
+    };
+  };
+  impl.count = (key) => calls.filter((item) => item === key).length;
+  return impl;
 }
 
 console.log('1. 版本号比较');
@@ -247,5 +275,95 @@ const broken = await updates.checkForUpdate('1.0.0', '1.0.0', async () => {
   throw error;
 });
 assert(broken.ok === false && broken.message.includes('超时'), '超时/中断给出可读提示');
+
+console.log('5. latest.yml 作为主数据源');
+updates.resetCache();
+const ymlNoUpdate = await updates.checkForUpdate(
+  '1.5.1',
+  '1.5.1',
+  routerFetch({ yml: { body: 'version: 1.5.1\nfiles:\n  - url: a.exe\n' } }),
+);
+assert(
+  ymlNoUpdate.ok === true && ymlNoUpdate.hasUpdate === false,
+  'latest.yml 与当前版本相同 → 已是最新，不碰 API',
+);
+assert(ymlNoUpdate.latest === 'v1.5.1', 'latest.yml 的版本号补上 v 前缀');
+assert(ymlNoUpdate.ymlOnly === true, '走的是 yml 分支');
+
+updates.resetCache();
+const ymlFetch = routerFetch({
+  yml: { body: 'version: 1.1.0\n' },
+  api: { body: [release] },
+});
+const ymlUpdate = await updates.checkForUpdate('1.0.0', '1.0.0', ymlFetch);
+assert(ymlUpdate.hasUpdate === true && ymlUpdate.releases.length === 1, '有新版本才去取说明');
+assert(ymlFetch.count('api') === 1, 'API 只请求一次');
+
+updates.resetCache();
+const upgradedFetch = routerFetch({
+  yml: { body: 'version: 1.1.0\n' },
+  api: { body: [release] },
+});
+const justUpdated = await updates.checkForUpdate('1.1.0', '1.0.0', upgradedFetch);
+assert(
+  justUpdated.announce === 'updated' && justUpdated.releases.length === 1,
+  '刚升级完要展示改了什么，同样取说明',
+);
+assert(upgradedFetch.count('api') === 1, '“已更新到”公告也需要 API');
+
+console.log('6. API 限流时的降级与退避');
+updates.resetCache();
+const resetSoon = Math.floor((Date.now() + 20 * 60 * 1000) / 1000);
+const blocked = routerFetch({
+  yml: { body: 'version: 1.1.0\n' },
+  api: { status: 403, headers: { 'x-ratelimit-reset': String(resetSoon) } },
+});
+const ymlOnly = await updates.checkForUpdate('1.0.0', '1.0.0', blocked);
+assert(ymlOnly.ok === true && ymlOnly.hasUpdate === true, 'API 被限流仍能报出新版本');
+assert(ymlOnly.releases.length === 0, '拿不到说明时公告为空，而不是整体报错');
+assert(Boolean(ymlOnly.warning) && ymlOnly.warning.includes('频繁'), '附带限流说明');
+
+// 没有给 api 路由：真发出去会抛错，正好验证退避期内不再打 API
+const backedOff = await updates.checkForUpdate(
+  '1.0.0',
+  '1.0.0',
+  routerFetch({ yml: { body: 'version: 1.1.0\n' } }),
+);
+assert(
+  backedOff.ok === true && backedOff.warning.includes('频繁'),
+  '限流恢复前不再请求 API',
+);
+
+console.log('7. Release 列表落盘');
+const dir = await mkdtemp(join(tmpdir(), 'cmdtb-updates-'));
+const cacheFile = join(dir, 'update-cache.json');
+updates.configure({ cacheFile });
+updates.resetCache();
+
+const firstRun = await updates.checkForUpdate(
+  '1.0.0',
+  '1.0.0',
+  routerFetch({ yml: { body: 'version: 1.1.0\n' }, api: { body: [release] } }),
+);
+assert(firstRun.hasUpdate === true, '首次检查拿到新版本');
+const saved = JSON.parse(await readFile(cacheFile, 'utf8'));
+assert(
+  Array.isArray(saved.releases) && saved.releases.length === 1,
+  '抓到的列表写进磁盘缓存',
+);
+
+// 模拟重启：只清内存，保留磁盘文件
+updates.resetCache({ keepDisk: true });
+const afterRestart = await updates.checkForUpdate('1.0.0', '1.0.0', async () => {
+  throw new Error('重启后不该再请求网络');
+});
+assert(
+  afterRestart.ok === true && afterRestart.hasUpdate === true,
+  '重启后直接复用磁盘缓存',
+);
+
+updates.configure({ cacheFile: null });
+updates.resetCache();
+await rm(dir, { recursive: true, force: true });
 
 console.log(`\n全部通过：${passed} 项`);

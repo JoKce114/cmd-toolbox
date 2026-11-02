@@ -110,9 +110,12 @@ function updateStatusText(
   if (busy) return '正在检查…';
   if (!update) return '点击右侧按钮检查是否有新版本';
   if (!update.ok) return update.message;
-  if (update.hasUpdate) return '有新版本可用，见下方';
-  if (!update.latest) return '还没有发布任何版本';
-  return `已是最新版本（${update.current}）`;
+  const base = update.hasUpdate
+    ? '有新版本可用，见下方'
+    : !update.latest
+      ? '还没有发布任何版本'
+      : `已是最新版本（${update.current}）`;
+  return update.warning ? `${base}（${update.warning}）` : base;
 }
 
 function updaterStatusText(updater: UpdaterState | undefined): string {

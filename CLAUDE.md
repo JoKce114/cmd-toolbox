@@ -111,6 +111,31 @@ node-pty 1.1.0 用的是 node-addon-api（Node-API，ABI 稳定），已在 Elec
 | `desktop/updates.js` | 查 GitHub API：有没有新版本、版本号、更新说明、是否该弹公告。5 分钟缓存 |
 | `desktop/updater.js` | 包着 `electron-updater`：下载安装包、重启安装 |
 
+- **判断「有没有新版」用 `latest.yml`，不是 GitHub API。** 未认证 REST API 只有
+  **60 次/小时，且按出口 IP 计**（代理/VPN 常是共享 IP），所以旧实现经常弹
+  「GitHub 接口请求过于频繁」。现在先取
+  `https://github.com/<repo>/releases/latest/download/latest.yml`
+  （Release 静态附件，走 CDN，**不占 API 配额**）：
+
+  | 场景 | 是否请求 `/releases` |
+  |---|---|
+  | latest.yml 版本 ≤ 当前版本 | 否，一次都不打 |
+  | 有新版本 → 要展示说明 | 是 |
+  | 刚升级完 → 「已更新到」公告要列本次改动 | 是 |
+  | latest.yml 404（还没传这个附件） | 是，退回旧逻辑 |
+
+  不要改回「每次检查都打 API」。带 `If-None-Match` 的 304 **仍然扣配额**（实测），
+  靠条件请求省不下来。
+- **API 结果落盘**到 `userData/update-cache.json`，由 `main.js` 在 `whenReady` 里
+  `updates.configure({ cacheFile })` 指定。重启应用后 5 分钟内直接用缓存，
+  开发时反复重启不会打爆配额。
+- **被限流时退避到 `X-RateLimit-Reset`**（没有这个头就退避 15 分钟），期间不再
+  请求 API。有旧缓存就返回旧数据并带 `warning`，设置面板显示为
+  「已是最新版本（…）（GitHub 接口请求过于频繁，约 N 分钟后自动恢复）」。
+  这种情况下 latest.yml 仍然能回答「有没有新版」，只是公告里没有正文。
+- 测试用 `CMDTOOLBOX_UPDATE_API` / `CMDTOOLBOX_UPDATE_YML` 覆盖两个地址。
+  **假服务器必须同时提供 `latest.yml`**，只提供 `/releases` 会让检查停在 yml 分支。
+
 - 只有 `app.isPackaged` 时自动更新才可用，开发模式返回 `{ ok: false, message: '开发模式下不支持自动更新' }`
 - `autoDownload = true`、`autoInstallOnAppQuit = false`：自动下载，但何时重启由用户点按钮
 - 检查更新有三种模式（`App.tsx` 的 `runUpdateCheck`）：
@@ -130,7 +155,7 @@ node-pty 1.1.0 用的是 node-addon-api（Node-API，ABI 稳定），已在 Elec
 ### 离线可跑（不需要 GUI）
 
 ```bash
-node tests/updates.mjs       # 版本比较、Release 解析、公告判定
+node tests/updates.mjs       # 版本比较、Release 解析、公告判定、yml 主源、限流退避、落盘缓存
 node tests/git-core.mjs      # Git 后端逻辑
 node tests/git-pull.mjs      # 拉取/推送/上游修复
 node tests/commit-diff.mjs   # 提交 patch 切分
