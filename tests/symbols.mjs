@@ -147,4 +147,46 @@ assert(
 assert(!nestedDecls.some((d) => d.name === 'innerFn'), '函数体内的具名函数不被收集');
 assert(!nestedDecls.some((d) => d.kind === 'function' && d.name === ''), '闭包（匿名函数）不被收集');
 
+console.log('2. JS 声明提取');
+const jsSource = [
+  '/**',
+  ' * 全局函数说明',
+  ' */',
+  'function plainFn(a, b) {',
+  '  return a + b;',
+  '}',
+  '',
+  '/** 类说明 */',
+  'class Widget {',
+  '  render() {}',
+  '}',
+  '',
+  'const arrowFn = (x) => x * 2;',
+  'let notAFunction = 1;',
+  '// function commentedJs() {}',
+  'const text = "function insideJsString() {}";',
+].join(NL);
+
+const jsDecls = symbols.parseJsSymbols(jsSource, 'js');
+const jsFn = jsDecls.find((d) => d.name === 'plainFn');
+assert(Boolean(jsFn), '识别出函数声明 plainFn');
+assert(jsFn.signature === 'function plainFn(a, b)', `JS 签名到 { 为止，实际 ${jsFn.signature}`);
+assert(jsFn.doc === '全局函数说明', 'JS docblock 正确');
+assert(jsFn.line === 4, `JS 函数行号，实际 ${jsFn.line}`);
+
+const jsClass = jsDecls.find((d) => d.name === 'Widget');
+assert(Boolean(jsClass) && jsClass.kind === 'class', '识别出类 Widget');
+assert(jsClass.doc === '类说明', '单行 docblock 也能提取');
+
+const jsArrow = jsDecls.find((d) => d.name === 'arrowFn');
+assert(Boolean(jsArrow), '识别出箭头函数赋值的变量');
+assert(jsArrow.signature.includes('arrowFn'), `箭头函数签名含变量名，实际 ${jsArrow.signature}`);
+
+assert(!jsDecls.some((d) => d.name === 'notAFunction'), '普通变量不算函数声明');
+assert(!jsDecls.some((d) => d.name === 'commentedJs'), '注释掉的 JS 函数不算声明');
+assert(!jsDecls.some((d) => d.name === 'insideJsString'), '字符串里的同名不算声明');
+
+const jsxDecls = symbols.parseJsSymbols('export function App() {\n  return <div />;\n}\n', 'jsx');
+assert(jsxDecls.some((d) => d.name === 'App'), 'JSX 文件能正常解析');
+
 console.log(`\n全部通过：${passed} 项`);

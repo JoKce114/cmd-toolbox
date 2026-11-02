@@ -31,9 +31,12 @@ function cleanDoc(raw) {
 
 // 从节点源码里截出声明头：遇到 { 或 => 就停，压平空白。
 // 比用 AST 重新拼参数更忠实（能保留默认值和类型写法的原样）。
+// php-parser 的偏移在 loc.start.offset，acorn 则直接给 start/end，两种都认。
 function sourceSignature(text, node, stops) {
-  const start = node && node.loc && node.loc.start && node.loc.start.offset;
-  const end = node && node.loc && node.loc.end && node.loc.end.offset;
+  const locStart = node && node.loc && node.loc.start && node.loc.start.offset;
+  const locEnd = node && node.loc && node.loc.end && node.loc.end.offset;
+  const start = typeof locStart === 'number' ? locStart : node && node.start;
+  const end = typeof locEnd === 'number' ? locEnd : node && node.end;
   if (typeof start !== 'number' || typeof end !== 'number' || end <= start) return '';
   let slice = text.slice(start, end);
   let cut = slice.length;
@@ -144,4 +147,109 @@ function parsePhpSymbols(text) {
   return out;
 }
 
-module.exports = { parsePhpSymbols, cleanDoc };
+// JSDoc 只有紧贴声明时才认：从声明起点往前跳过空白，必须正好接在 */ 上
+function jsDocBefore(text, index) {
+  let cursor = index - 1;
+  while (cursor >= 0 && /\s/.test(text[cursor])) cursor -= 1;
+  if (cursor < 1 || text[cursor] !== '/' || text[cursor - 1] !== '*') return '';
+  const closing = cursor + 1;
+  const opening = text.lastIndexOf('/**', closing);
+  if (opening < 0) return '';
+  return cleanDoc(text.slice(opening, closing));
+}
+
+function walkJs(node, text, out) {
+  if (!node || typeof node !== 'object' || typeof node.type !== 'string') return;
+
+  if (node.type === 'FunctionDeclaration' && node.id && node.id.name) {
+    out.push({
+      kind: 'function',
+      name: node.id.name,
+      owner: '',
+      namespace: '',
+      line: node.loc ? node.loc.start.line : 1,
+      signature: sourceSignature(text, node, ['{']),
+      doc: jsDocBefore(text, node.start),
+    });
+    return;
+  }
+
+  if (node.type === 'ClassDeclaration' && node.id && node.id.name) {
+    out.push({
+      kind: 'class',
+      name: node.id.name,
+      owner: '',
+      namespace: '',
+      line: node.loc ? node.loc.start.line : 1,
+      signature: `class ${node.id.name}`,
+      doc: jsDocBefore(text, node.start),
+    });
+    return;
+  }
+
+  if (node.type === 'VariableDeclarator' && node.id && node.id.name && node.init) {
+    const init = node.init;
+    if (init.type === 'ArrowFunctionExpression' || init.type === 'FunctionExpression') {
+      out.push({
+        kind: 'function',
+        name: node.id.name,
+        owner: '',
+        namespace: '',
+        line: node.loc ? node.loc.start.line : 1,
+        signature: sourceSignature(text, node, ['=>']),
+        doc: jsDocBefore(text, node.start),
+      });
+      return;
+    }
+  }
+
+  for (const key of Object.keys(node)) {
+    if (key === 'loc' || key === 'start' || key === 'end') continue;
+    const value = node[key];
+    if (Array.isArray(value)) {
+      for (const item of value) walkJs(item, text, out);
+    } else if (value && typeof value === 'object') {
+      walkJs(value, text, out);
+    }
+  }
+}
+
+function parseJsSymbols(text, lang) {
+  const source = String(text || '');
+  if (!source.trim()) return [];
+  let parser;
+  try {
+    const acorn = require('acorn');
+    if (lang === 'jsx') {
+      const jsx = require('acorn-jsx');
+      const plugin = typeof jsx === 'function' ? jsx : jsx.default;
+      parser = acorn.Parser.extend(plugin());
+    } else {
+      parser = acorn.Parser;
+    }
+  } catch {
+    return [];
+  }
+
+  let ast;
+  try {
+    ast = parser.parse(source, {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      locations: true,
+      allowHashBang: true,
+    });
+  } catch {
+    return [];
+  }
+
+  const out = [];
+  try {
+    walkJs(ast, source, out);
+  } catch {
+    return [];
+  }
+  return out;
+}
+
+module.exports = { parsePhpSymbols, parseJsSymbols, cleanDoc };
