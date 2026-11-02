@@ -3539,7 +3539,20 @@ p {
 
 .editor-pane.theme-dark .editor-sidebar {
   background: #141519;
-  border-right-color: #23252b;
+}
+
+/* .section-header:hover 是给浅色侧栏配的 #ececf1，暗色编辑器里会闪出一块亮色 */
+.editor-pane.theme-dark .editor-sidebar .section-header:hover {
+  background: #23252b;
+}
+
+.editor-pane.theme-dark .split-resizer::before {
+  background: #23252b;
+}
+
+.editor-pane.theme-dark .split-resizer:hover::before,
+.editor-pane.theme-dark .split-resizer.is-dragging::before {
+  background: var(--accent);
 }
 
 .editor-pane.theme-dark .file-row {
@@ -4836,13 +4849,13 @@ p {
   cursor: pointer;
 }
 
-/* 「打开的编辑器」与文件树共用 .file-row；两者都放在 EditorSidebar 里 */
+/* 「打开的编辑器」与文件树共用 .file-row；两者都放在 EditorSidebar 里。
+   宽度由内联 flex 给出（可拖拽），分界线交给 .split-resizer。 */
 .editor-sidebar {
-  flex: 0 0 220px;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--border);
   background: #fbfbfd;
 }
 

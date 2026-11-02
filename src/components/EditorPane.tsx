@@ -3,6 +3,8 @@ import { Save, Search, X } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import { useEditorFiles } from '../useEditorFiles';
 import { FileTree } from './FileTree';
+import { EditorSidebar } from './EditorSidebar';
+import { OpenEditors } from './OpenEditors';
 import { ConfirmDialog } from './ConfirmDialog';
 import { SearchPanel } from './SearchPanel';
 import { CodeMirrorHost } from './CodeMirrorHost';
@@ -507,31 +509,42 @@ export function EditorPane({
       ) : null}
 
       <div className="editor-body">
-        {searchOpen ? (
-          <SearchPanel
-            group={group}
-            onOpen={(relPath) => {
-              requestOpen(relPath);
-              setSearchOpen(false);
-            }}
-            onClose={() => setSearchOpen(false)}
-            onError={onError}
-          />
-        ) : (
-          <FileTree
-            group={group}
-            activePath={activePath}
-            onOpen={requestOpen}
-            onMinify={runMinify}
-            canMinify={canMinify}
-            onError={onError}
-            onToast={onToast}
-            clip={fileClip}
-            onClipChange={setFileClip}
-            onRequestDelete={requestDelete}
-            onAfterRename={handleAfterRename}
-          />
-        )}
+        <EditorSidebar
+          openEditors={
+            <OpenEditors
+              openPaths={openPaths}
+              activePath={activePath}
+              onSelect={(relPath) => setActivePath(relPath)}
+            />
+          }
+          fileTree={
+            searchOpen ? (
+              <SearchPanel
+                group={group}
+                onOpen={(relPath) => {
+                  requestOpen(relPath);
+                  setSearchOpen(false);
+                }}
+                onClose={() => setSearchOpen(false)}
+                onError={onError}
+              />
+            ) : (
+              <FileTree
+                group={group}
+                activePath={activePath}
+                onOpen={requestOpen}
+                onMinify={runMinify}
+                canMinify={canMinify}
+                onError={onError}
+                onToast={onToast}
+                clip={fileClip}
+                onClipChange={setFileClip}
+                onRequestDelete={requestDelete}
+                onAfterRename={handleAfterRename}
+              />
+            )
+          }
+        />
         <div className="editor-main">
           {activePath ? (
             <CodeMirrorHost
