@@ -174,6 +174,8 @@ node tests/commit-diff.mjs   # 提交 patch 切分
 node tests/login-item.mjs     # 开机自启动（假 app，不碰注册表）
 node tests/status.mjs         # AI 状态分类、未读状态迁移
 node tests/symbols.mjs        # 符号提取、项目查询、排序（离线）
+node tests/file-ops.mjs       # 新建/复制/移动/删除到回收站（临时目录，不碰真实回收站）
+node tests/diff-from-text.mjs # 文本差异生成 unified diff
 ```
 
 - `tests/login-item.mjs` 用假 `app` 对象，**不会**读写真实注册表。
@@ -200,6 +202,7 @@ node tests/tab-status.mjs        # AI 页签状态灯与未读
 node tests/tab-groups.mjs        # 标签组：建组/改名/改色/折叠/拖拽/重启恢复
 node tests/editor-modules.mjs    # 压缩、语法诊断、外部改动自动重载
 node tests/editor-goto-def.mjs   # Ctrl+点击弹卡片与跳转
+node tests/editor-file-tree.mjs  # 文件树工具栏、右键操作、侧栏拖拽与对比
 node tests/module-catalog.mjs    # 模块清单与默认开关（离线）
 node tests/clipboard-image.mjs   # 剪贴板图片识别（会占用系统剪贴板）
 node tests/device-emulation-probe.mjs
@@ -443,6 +446,63 @@ node tests/device-emulation-probe.mjs
   此时设置 `gotoLine` 会被 clamp 到第 1 行且不会重跑。必须等目标文件
   `loading` 变 `false` 后再设置 `gotoLine`。
 - 模块关闭时 Ctrl+点击**不拦截**，保持 CodeMirror 原生多光标行为。
+
+### 文件树与对比
+
+- **所有文件操作都经 `resolveWithin`**（`desktop/file-api.js`）。`createFile` 用
+  `fsp.open(..., 'wx')`、`createDir` 对目标目录**不带** `recursive`、`copy` 与 `move`
+  先 `lstat` 目标——除「仅改大小写」的重命名外，**目标已存在一律报错，绝不覆盖**。
+  父目录可以用 `recursive: true` 创建，这不算覆盖。
+- **`move` 必须放行纯大小写重命名**：Windows 文件系统不区分大小写，`lstat(to)`
+  命中的就是源文件本身，不能据此判冲突（否则 `a.txt → A.txt` 永远失败）。实现是先
+  改到临时名再改到目标名，第二步失败要改回原名。`lstat` 与 `rename` 之间的 TOCTOU
+  是有意保留的，别改成 `COPYFILE_EXCL`——会丢目录属性、拖慢大文件。
+- **`copy` 是真复制，不能实现成移动**：设计稿要求「剪切粘贴 = 移动」「复制粘贴 =
+  真复制」。用 `fsp.cp({ recursive: true, errorOnExist: true, force: false })`，
+  不要用 read+write——那样拷不了目录、也会破坏二进制。失败时删掉目标半成品，且只
+  清理本次新建的祖先目录，用户原有目录不能碰。
+- **删除走 `shell.trashItem`**（系统回收站），不用 `unlink`；单测通过注入 shell
+  验证，不碰真实回收站。**必须先等 trash 成功再关页签**（`EditorPane.confirmDelete`），
+  失败时页签原样保留——反了会留下指向不存在文件的编辑器。有未保存修改时确认框要点明
+  「不可恢复」；删目录时按 `relPath + '/'` 前缀收集其下 dirty 页签并报数量，
+  目录路径本身不在 `files` 里。
+- **所有改盘 IPC 成功后都调 `symbols.invalidate(projectPath)`**：`main.js` 的
+  `fs:write`、`fs:write-minified`、`fs:create-file`、`fs:create-dir`、`fs:copy`、
+  `fs:move`、`fs:trash` 都要调，文件树的「刷新」也会先失效一次。漏了会表现为新建的
+  文件 Ctrl+点击查不到定义。不要只在保存时清。
+- **文件剪贴板是应用内的**（`src/fileClipboard.ts`），不碰系统剪贴板。比较项目路径前
+  必须归一：反斜杠转 `/`、去尾斜杠与结尾 `/.`、转小写；空项目路径要 fail-closed
+  拒绝，不能当成同一项目。复制粘贴后**保留**剪贴板（可连续粘到多个目录），
+  剪切粘贴后**清空**。
+- **新建 / 重命名用 `Modal`（`NamePromptModal`），不要用 `window.prompt`**——Electron
+  渲染进程没有实现它，调用会直接抛错。名字校验：非空、不能是 `.` / `..`、
+  不能含 `/ \ < > : " | ? *`。
+- **新建落点没有「选中目录」这回事**：文件树没有选中态。工具栏两个按钮统一落在
+  **当前打开文件所在目录**，没打开文件时落在项目根；右键菜单落在被点那行的目录
+  （文件取父目录，目录取自身）。不要照需求稿写成「选中项若是目录就用它」。
+- **侧栏宽度可拖拽**：默认 220、最小 160、上限为容器宽度的一半，持久化在
+  `cmd-toolbox.editor.sidebar-width`，**只在松手时写盘**。多个编辑器实例通过自定义
+  事件 `editor-sidebar-width-change` 同步（`storage` 事件兜跨窗口）。隐藏页签的容器
+  宽度量出来是 0，此时不能套用「最小 160」的上限，否则会把同步来的宽度夹成 160。
+- **左栏两个折叠区用 `useCollapsedSection`**，id 是 `editor-open-editors` 与
+  `editor-file-tree`，状态存 `cmd-toolbox.sidebar.collapsed.<id>`。文件区是 `is-grow`
+  （吃掉剩余高度并自己滚动）。
+- **对比的三种编辑器模式共用 `DiffPane` 的 `text` 变体**：与磁盘版本、两文件互比、
+  与 Git HEAD 都由 `buildTextPatch`（`src/diffFromText.ts`）在渲染进程算 unified diff，
+  `text` 变体不读磁盘也不读 git。**不要写成「复用 git 的 patch」**：HEAD 模式只用
+  `git.fileDiff(..., 'HEAD')` 取 `baseContent`，patch 仍在渲染侧生成；`DiffPane` 的
+  `change` / `commit` 变体才直接消费 git patch。
+- **`git.fileDiff` 的 `base` 是可选的**：不传是「暂存区 vs 工作区」（普通 `git diff`），
+  传 `'HEAD'` 才是「HEAD vs 工作区」。带 base 且文件未跟踪时 git 没有可比版本，
+  后端直接拼「全部新增」的 patch；Windows 下 `--no-index NUL` 会 ENOENT，不要改回去。
+- **对比打开期间编辑器仍可编辑，patch 必须跟内存内容实时重算（300ms 防抖）**。
+  基准文本在打开对比时就取好存进 `DiffSource`，重算只依赖两个 content 字符串；
+  不要每次按键都重读磁盘 / git，也不要不防抖。
+- **开关对比不能卸载编辑器**：`CodeMirrorHost` 始终挂在同一位置，对比只改父容器
+  `.editor-diff-split` 的 flex。撤销栈、光标和滚动位置才能保留；不要写成
+  `diffTarget ? 对比 : 编辑器` 的条件渲染。
+- **不做文件快捷键、不做树内拖拽移动**：需求明确不要快捷键；拖拽移动要处理树内拖放、
+  跨目录与视觉反馈，工作量远大于本次其它功能。侧栏拖拽只调宽度，不移动文件。
 
 ## 界面约定
 - 标题栏底色是 `--surface: #ffffff`，红点（`.titlebar-update-dot`）用
