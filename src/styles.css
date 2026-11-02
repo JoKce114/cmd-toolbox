@@ -4830,3 +4830,37 @@ p {
 .cm-editor.cm-symbol-clickable .cm-content {
   cursor: pointer;
 }
+
+/* 「打开的编辑器」与文件树共用 .file-row；两者都放在 EditorSidebar 里 */
+.editor-sidebar {
+  flex: 0 0 220px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: #fbfbfd;
+}
+
+.editor-sidebar-section {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 文件区吃掉剩余高度，它自己滚动 */
+.editor-sidebar-section.is-grow {
+  flex: 1;
+}
+
+.editor-sidebar-section .file-tree {
+  flex: 1;
+  min-height: 0;
+  border-right: 0;
+}
+
+.file-tree-empty {
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
