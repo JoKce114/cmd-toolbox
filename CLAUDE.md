@@ -601,14 +601,20 @@ node tests/device-emulation-probe.mjs
   `pty-host.js` 的缓冲按尾部截断到 32000 字符，旧内容会前移，用相对长度做
   `baseOffset` 会在缓冲填满后永远切不到新内容（`job_output` 直接读到空串）。
   现在 `pty-host.js` 用单调递增的 `totalLength` 记录绝对偏移，并提供
-  `getOutputSlice(id, fromOffset)`；`jobs.js` 的 cursor 就是 `endOffset`，
-  **只增不减**。请求的偏移早于缓冲区起点时返回 `truncated: true`。
+  `getOutputSlice(id, fromOffset)`。`jobs.js` 的 cursor 取 `normalizeSlice` 里的
+  `Math.max(endOffset, fromOffset)`——**单调不减**，不是纯 `endOffset`。
+  请求的偏移早于缓冲区起点时返回 `truncated: true`。
 - **返回给 AI 的输出必须过 `cleanOutput`**（`ai-tools/ansi.js`）：pty 里全是 CSI/OSC
   序列与 `\r` 重绘，不清理等于给 AI 一堆乱码。注意**不要**改
   `ptyHost.getOutputSlice` / `getLastOutput` 的原始缓冲——`get_pane_content`
   仍需要原始输出。
-- **job 只存在内存里**，绑定 sessionId；session 关闭或应用退出即丢弃，不落盘。
-  已结束的 job 保留 30 分钟供 `job_output` 轮询，之后清理。
+- **job 只存在内存里**，绑定 sessionId，不落盘。**session 关闭时只释放占用**
+  （`release()` 清 `activeBySession` 与订阅，该终端可被再次使用），job 记录仍留在
+  `jobs` Map 里，`job_output` 仍能读到 `finalOutput` 快照——此时 pty-host 的缓冲
+  已经删了，退出快照是唯一来源。
+- **已结束的 job 保留 30 分钟，但清理是惰性的**：`pruneJobs()` 只在
+  `terminal_run` 开头调用，长期没有新命令时旧记录会一直留着，不要按字面理解成
+  「定时清理」。应用退出时随进程一起丢弃。
 - **`terminal_run` 不传 pane 时按项目（groupKey）复用 AI 终端**，不是全局复用：
   同项目内 `aiOwned && !exited && isOpen(sessionId) && 无正在跑的任务`，
   没有才新建。项目取 `args.project`（项目名或 groupKey）、最近一次建终端的项目，
