@@ -554,12 +554,16 @@ node tests/device-emulation-probe.mjs
   （空仓库没有 HEAD）；两边都拿不到或得到 `HEAD` 才算游离 HEAD，返回 `reason: 'detached'`。
 - **空仓库（还没有任何提交）返回 `reason: 'no-commit'`**：发布前先
   `rev-parse --verify --quiet HEAD` 确认有提交，不要等 `git push` 输出 refspec 错误再猜。
-- **发布被拒时先补写上游配置再返回 `reason: 'rejected'`**：远端已有同名分叉分支时
+- **只有真正的非快进 / 分叉才补写上游配置并返回 `reason: 'rejected'`**：远端已有同名分叉分支时
   `push -u` 被拒且不会写上游，后端会紧接着串行执行
   `git config branch.<branch>.remote <remote>` 与
   `git config branch.<branch>.merge refs/heads/<branch>`（必须串行，否则争用
   `.git/config.lock`），再返回被拒结果。漏掉这步，后续「拉取合并 / 拉取变基」
   会立刻撞上 `no-upstream`，只剩强制推送一条路。
+- **判定分叉只认 `non-fast-forward` / `fetch first` / `stale info`，不要用裸 `rejected`**：
+  `[remote rejected] ... (pre-receive hook declined)` 这类 hook / 保护分支拒绝里远端
+  根本没有该分支，按分叉处理会补写出指向不存在远端分支的上游配置，之后 `git status`
+  报 upstream 但分支栏的「发布」入口已经消失。这类拒绝应直接抛错，并带出服务端给出的拒绝原因。
 - **不要在 `no-upstream` 时提示用户去终端执行 `git push -u`**——那正是这条路径原本不可用的原因。
 - `tests/git-pull.mjs` 覆盖发布、远端优先级、空仓库与游离 HEAD；`tests/git-panel.mjs` 的 5e 覆盖界面。
 
