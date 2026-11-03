@@ -258,4 +258,42 @@ assert(
   '游离 HEAD 返回 detached',
 );
 
+console.log('17. 发布被拒时补写上游，后续拉取不再报 no-upstream');
+const rejectRepo = clone('publish-reject');
+syncSeed();
+writeFileSync(join(seed, 'remote-only.txt'), 'r\n');
+run(seed, ['add', '-A']);
+run(seed, ['commit', '-qm', 'remote ahead']);
+run(seed, ['push', '-q', 'origin', 'main:publish-reject-feature']);
+run(rejectRepo, ['checkout', '-q', '-b', 'publish-reject-feature']);
+writeFileSync(join(rejectRepo, 'local.txt'), 'l\n');
+run(rejectRepo, ['add', '-A']);
+run(rejectRepo, ['commit', '-qm', 'local publish commit']);
+const rejectPush = await git.push(rejectRepo);
+assert(rejectPush.ok === false && rejectPush.reason === 'rejected', '发布被拒返回 rejected');
+assert(
+  run(rejectRepo, ['config', '--get', 'branch.publish-reject-feature.remote']).trim() === 'origin',
+  '被拒后补写 branch.remote',
+);
+assert(
+  run(rejectRepo, ['config', '--get', 'branch.publish-reject-feature.merge']).trim() ===
+    'refs/heads/publish-reject-feature',
+  '被拒后补写 branch.merge',
+);
+// 渲染侧推送失败后会先静默 fetch 再刷新状态，这里按同样顺序模拟
+await git.fetchRemote(rejectRepo);
+const pullAfterReject = await git.pull(rejectRepo);
+assert(
+  pullAfterReject.ok === false && pullAfterReject.reason === 'diverged',
+  '补写上游后拉取得 diverged 而不是 no-upstream',
+);
+
+console.log('18. 没有提交时不能发布');
+const noCommitRepo = mkdtempSync(join(tmpdir(), 'publish-nocommit-'));
+run(noCommitRepo, ['init', '-b', 'main']);
+run(noCommitRepo, ['remote', 'add', 'origin', base]);
+const noCommitPush = await git.push(noCommitRepo);
+assert(noCommitPush.ok === false && noCommitPush.reason === 'no-commit', '没有提交时返回 no-commit');
+assert(noCommitPush.message.includes('提交'), '提示说明没有提交');
+
 console.log(`\n全部通过：${passed} 项`);

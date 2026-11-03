@@ -458,6 +458,12 @@ async function push(projectPath, options = {}) {
     return { ok: false, reason: 'detached', message: '当前不在任何分支上，无法发布分支' };
   }
 
+  // 空仓库（尚无提交）没有可推送的对象，git 只会输出 refspec 错误
+  const head = await runGit(projectPath, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  if (!head.ok) {
+    return { ok: false, reason: 'no-commit', message: '当前分支还没有任何提交，无法发布' };
+  }
+
   const remotes = await listRemotes(projectPath);
   if (!remotes.length) {
     return { ok: false, reason: 'no-remote', message: '没有配置远端仓库，无法发布分支' };
@@ -476,7 +482,14 @@ async function push(projectPath, options = {}) {
   const result = await runGit(projectPath, args, { timeout: PUSH_TIMEOUT });
   if (result.ok) return { ok: true, upstream: `${remote}/${branch}`, published: true };
   const failure = pushFailure(result);
-  if (failure) return failure;
+  if (failure) {
+    // push -u 被拒时不会写入上游配置，这里补上，否则后续「拉取合并 / 拉取变基」
+    // 会立刻撞上 no-upstream，只剩强制推送一条路。两次 config 必须串行，
+    // 并发写会争用 .git/config.lock；失败也不掩盖原始结果。
+    await runGit(projectPath, ['config', `branch.${branch}.remote`, remote]);
+    await runGit(projectPath, ['config', `branch.${branch}.merge`, `refs/heads/${branch}`]);
+    return failure;
+  }
   throw new Error(cleanError(result.error, result.stderr));
 }
 
