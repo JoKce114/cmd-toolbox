@@ -124,6 +124,12 @@ contextBridge.exposeInMainWorld('api', {
     trash: (projectPath, relPath) => invoke('fs:trash', projectPath, relPath),
   },
 
+  bridge: {
+    reply: (requestId, ok, payload) =>
+      ipcRenderer.send('bridge:reply', requestId, ok, payload),
+    onRequest: (handler) => subscribe('bridge:request', handler),
+  },
+
   panes: {
     sync: (panes) => ipcRenderer.send('panes:sync', panes),
     attachBrowser: (tabId, webContentsId) =>

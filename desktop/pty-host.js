@@ -229,18 +229,28 @@ function spawnSession(payload, send) {
 
   let exitNotified = false;
   let lastOutput = '';
+  // 缓冲区按尾部截断，旧内容会前移；totalLength 是单调递增的绝对偏移，
+  // 用来把 AI 侧的 cursor 换算到当前缓冲区里的真实位置。
+  let totalLength = 0;
   const onData = (data) => {
+    totalLength += data.length;
     lastOutput = `${lastOutput}${data}`;
     if (lastOutput.length > 32000) lastOutput = lastOutput.slice(-32000);
     const session = sessions.get(id);
-    if (session) session.lastOutput = lastOutput;
+    if (session) {
+      session.lastOutput = lastOutput;
+      session.totalLength = totalLength;
+    }
     send('pty:data', id, data);
+    emitGlobalData(id, data);
   };
   const onExit = (code, signal) => {
     if (exitNotified) return;
     exitNotified = true;
+    const finalOutput = { text: lastOutput, endOffset: totalLength };
     sessions.delete(id);
     send('pty:exit', id, code, signal);
+    emitGlobalExit(id, code, finalOutput);
   };
 
   const attempt = createPtySession(shell, cwd, cols, rows);
@@ -268,7 +278,8 @@ function spawnSession(payload, send) {
     groupKey,
     cwd,
     shellId: shell.id,
-    lastOutput: '',
+    lastOutput,
+    totalLength,
   });
 
   return { id };
@@ -374,6 +385,44 @@ function closeAll() {
   for (const id of [...sessions.keys()]) killSession(id);
 }
 
+// AI 的 terminal_run 需要监听所有会话的输出与退出，又不该复用渲染进程的订阅
+const globalDataHandlers = new Set();
+const globalExitHandlers = new Set();
+
+function subscribeAllData(handler) {
+  if (typeof handler !== 'function') return () => {};
+  globalDataHandlers.add(handler);
+  return () => globalDataHandlers.delete(handler);
+}
+
+function subscribeAllExit(handler) {
+  if (typeof handler !== 'function') return () => {};
+  globalExitHandlers.add(handler);
+  return () => globalExitHandlers.delete(handler);
+}
+
+function emitGlobalData(id, data) {
+  for (const handler of globalDataHandlers) {
+    try {
+      handler(id, data);
+    } catch {
+      // 单个订阅者失败不影响其它订阅者
+    }
+  }
+}
+
+// 会话退出时 sessions 里已经删掉了这条记录，getLastOutput 读不到东西，
+// 所以把最后一帧输出一起带给订阅者（terminal_run 的 done 结果要用）。
+function emitGlobalExit(id, code, data) {
+  for (const handler of globalExitHandlers) {
+    try {
+      handler(id, code, data);
+    } catch {
+      // 同上
+    }
+  }
+}
+
 function isOpen(id) {
   return sessions.has(id);
 }
@@ -383,9 +432,31 @@ function getLastOutput(id) {
   return session && session.lastOutput ? session.lastOutput : '';
 }
 
+// 按绝对偏移取输出。缓冲区只保留最近 32K，起点由 totalLength 反推；
+// 请求的 fromOffset 早于缓冲区起点时，返回从起点开始的内容并标记 truncated。
+function getOutputSlice(id, fromOffset) {
+  const session = sessions.get(id);
+  if (!session) return { text: '', startOffset: 0, endOffset: 0, truncated: false };
+  const text = session.lastOutput || '';
+  const endOffset =
+    typeof session.totalLength === 'number' ? session.totalLength : text.length;
+  const startOffset = Math.max(0, endOffset - text.length);
+  const requested = Number.isFinite(Number(fromOffset))
+    ? Math.floor(Number(fromOffset))
+    : startOffset;
+  const from = Math.max(requested, startOffset);
+  return {
+    text: from <= endOffset ? text.slice(from - startOffset) : '',
+    startOffset: from,
+    endOffset,
+    truncated: requested < startOffset,
+  };
+}
+
 module.exports = {
   setExtraEnv,
   getLastOutput,
+  getOutputSlice,
   spawnSession,
   writeSession,
   wheelSession,
@@ -397,4 +468,6 @@ module.exports = {
   interruptCliSessions,
   closeAll,
   isOpen,
+  subscribeAllData,
+  subscribeAllExit,
 };

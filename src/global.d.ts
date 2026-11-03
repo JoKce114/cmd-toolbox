@@ -32,6 +32,7 @@ export interface SessionTab {
   paneNo: number;
   descriptor: string;
   custom: boolean;
+  aiOwned?: boolean;
   cwd: string;
   url?: string;
   device?: import('./types').DeviceProfile | null;
@@ -241,6 +242,20 @@ declare global {
           toRel: string,
         ) => Promise<{ ok: boolean }>;
         trash: (projectPath: string, relPath: string) => Promise<{ ok: boolean }>;
+      };
+      bridge: {
+        reply: (
+          requestId: string,
+          ok: boolean,
+          payload?: { message?: string; code?: string; [key: string]: unknown },
+        ) => void;
+        onRequest: (
+          handler: (message: {
+            requestId: string;
+            op: string;
+            payload: Record<string, unknown>;
+          }) => void,
+        ) => () => void;
       };
       panes: {
         sync: (panes: Array<Record<string, unknown>>) => void;

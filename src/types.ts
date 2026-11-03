@@ -73,6 +73,7 @@ export type Tab = {
   filePath?: string;
   diffChange?: GitChange;
   diffCommit?: CommitRef;
+  aiOwned?: boolean;
   exited: boolean;
   exitCode?: number;
 };

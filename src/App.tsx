@@ -128,6 +128,7 @@ function toSessionTab(tab: Tab) {
     paneNo: tab.paneNo,
     descriptor: tab.descriptor,
     custom: tab.custom,
+    aiOwned: Boolean(tab.aiOwned),
     cwd: tab.cwd,
     url: tab.url || '',
     device: tab.device || null,
@@ -625,6 +626,7 @@ export default function App() {
                 descriptor:
                   saved.custom && saved.descriptor ? saved.descriptor : '浏览器',
                 custom: saved.custom,
+                aiOwned: Boolean(saved.aiOwned),
                 cwd: group.path,
                 url: saved.url || 'about:blank',
                 device: saved.device || null,
@@ -650,6 +652,7 @@ export default function App() {
                 paneNo,
                 descriptor: saved.descriptor || '差异',
                 custom: saved.custom,
+                aiOwned: Boolean(saved.aiOwned),
                 cwd: group.path,
                 diffChange: saved.diffChange?.path ? saved.diffChange : undefined,
                 diffCommit: saved.diffCommit?.hash ? saved.diffCommit : undefined,
@@ -683,6 +686,7 @@ export default function App() {
                 paneNo,
                 descriptor: saved.descriptor || '编辑器',
                 custom: saved.custom,
+                aiOwned: Boolean(saved.aiOwned),
                 cwd: group.path,
                 filePath: saved.filePath || '',
                 exited: false,
@@ -715,6 +719,7 @@ export default function App() {
                   ? saved.descriptor
                   : defaultTabTitle(shell.label),
               custom: saved.custom,
+              aiOwned: Boolean(saved.aiOwned),
               cwd: group.path,
               conversationId: saved.conversationId || '',
               exited: false,
@@ -1685,13 +1690,19 @@ export default function App() {
         groupName: group?.name || '',
         sessionId: tab.sessionId,
         exited: tab.exited,
+        // AI 控制面靠这个标记复用「AI 创建的终端」，不能只凭标题猜
+        aiOwned: Boolean(tab.aiOwned),
       };
     });
     window.api.panes.sync(panes);
   }, [groupsByKey, tabsByGroup]);
 
   const createBrowser = useCallback(
-    (group: Group, url = 'about:blank') => {
+    (
+      group: Group,
+      url = 'about:blank',
+      options: { aiOwned?: boolean; focus?: boolean } = {},
+    ): Tab | void => {
       if (!group.exists) {
         pushToast('项目目录不存在，请先编辑项目路径', 'error');
         return;
@@ -1710,22 +1721,27 @@ export default function App() {
         custom: false,
         cwd: group.path,
         url,
+        aiOwned: Boolean(options.aiOwned),
         exited: false,
       };
       applyTabs({ ...tabsRef.current, [group.key]: insertTabIntoList(groupTabs, tab, tabGroupId) });
-      setActiveGroupKey(group.key);
-      const onRight =
-        (focusSideByGroupRef.current[group.key] || 'left') === 'right' &&
-        (rightIdsByGroupRef.current[group.key] || []).length > 0;
-      if (onRight) {
-        setRightIdsByGroup((previous) => ({
-          ...previous,
-          [group.key]: [...(previous[group.key] || []), tab.id],
-        }));
-        setRightActiveByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
-      } else {
-        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+      // 焦点相关状态全部受 options.focus 控制：AI 页签不应把用户切到别的项目或页签
+      if (options.focus !== false) {
+        setActiveGroupKey(group.key);
+        const onRight =
+          (focusSideByGroupRef.current[group.key] || 'left') === 'right' &&
+          (rightIdsByGroupRef.current[group.key] || []).length > 0;
+        if (onRight) {
+          setRightIdsByGroup((previous) => ({
+            ...previous,
+            [group.key]: [...(previous[group.key] || []), tab.id],
+          }));
+          setRightActiveByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+        } else {
+          setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+        }
       }
+      return tab;
     },
     [applyTabs, inheritedTabGroupId, pushToast],
   );
@@ -1960,11 +1976,15 @@ export default function App() {
   );
 
   const createTerminal = useCallback(
-    async (group: Group, shellId?: string): Promise<Tab | null> => {
+    async (
+      group: Group,
+      shellId?: string,
+      options: { aiOwned?: boolean; focus?: boolean } = {},
+    ): Promise<Tab | null> => {
       if (!info) return null;
       if (shellId === 'browser') {
-        createBrowser(group);
-        return null;
+        // 透传 AI 标记与焦点选项，并把页签返回给调用方，避免「建出来了却报失败」
+        return createBrowser(group, 'about:blank', options) ?? null;
       }
       const shell = findLaunchTarget(info, shellId);
       if (!shell) {
@@ -2003,9 +2023,12 @@ export default function App() {
           shellId: shell.id,
           seq,
           paneNo: nextPaneNo(groupTabs.map((item) => item.paneNo)),
-          descriptor: defaultTabTitle(shell.label),
-          custom: false,
+          // AI 打开的终端固定显示「AI 终端」，不随 shell 类型跳变；custom: true
+          // 让重启 shell / 会话恢复都保留这个标题，不会被 defaultTabTitle 覆盖回去
+          descriptor: options.aiOwned ? 'AI 终端' : defaultTabTitle(shell.label),
+          custom: Boolean(options.aiOwned),
           cwd: group.path,
+          aiOwned: Boolean(options.aiOwned),
           exited: false,
         };
 
@@ -2013,18 +2036,21 @@ export default function App() {
           ...tabsRef.current,
           [group.key]: insertTabIntoList(groupTabs, tab, tabGroupId),
         });
-        setActiveGroupKey(group.key);
-        const onRight =
-          (focusSideByGroupRef.current[group.key] || 'left') === 'right' &&
-          (rightIdsByGroupRef.current[group.key] || []).length > 0;
-        if (onRight) {
-          setRightIdsByGroup((previous) => ({
-            ...previous,
-            [group.key]: [...(previous[group.key] || []), tab.id],
-          }));
-          setRightActiveByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
-        } else {
-          setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+        // 焦点相关状态全部受 options.focus 控制：AI 页签不应把用户切到别的项目或页签
+        if (options.focus !== false) {
+          setActiveGroupKey(group.key);
+          const onRight =
+            (focusSideByGroupRef.current[group.key] || 'left') === 'right' &&
+            (rightIdsByGroupRef.current[group.key] || []).length > 0;
+          if (onRight) {
+            setRightIdsByGroup((previous) => ({
+              ...previous,
+              [group.key]: [...(previous[group.key] || []), tab.id],
+            }));
+            setRightActiveByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+          } else {
+            setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+          }
         }
         return tab;
       } catch (error) {
@@ -2108,6 +2134,126 @@ export default function App() {
     },
     [applyTabs, setGroupUntitledContents],
   );
+
+  // AI 通过 MCP 请求建页签：真正建页签的代码在渲染进程，主进程只能通过桥接委托。
+  // createTerminal / closeTabs 声明在本段之上，ref 直接取当前值即可，不会踩到 TDZ。
+  const createTerminalRef = useRef(createTerminal);
+  createTerminalRef.current = createTerminal;
+  const closeTabsRef = useRef(closeTabs);
+  closeTabsRef.current = closeTabs;
+  // activeGroupKeyRef 已在文件上方定义，直接复用，不要重复声明
+
+  useEffect(() => {
+    const bridge = window.api?.bridge;
+    if (!bridge) return;
+
+    // groupKey 或项目名都能命中。显式传了 project 却没命中时必须返回 null，
+    // 不能回退到当前激活项目：否则 AI 以为在项目 A 执行，实际写进项目 B，
+    // 输出也会被归到别的项目。只有 project 为空（未指定）时才用当前激活项目。
+    const findGroup = (wanted: string): Group | null => {
+      const key = wanted.trim();
+      if (!key) return groupsByKeyRef.current.get(activeGroupKeyRef.current) || null;
+      return (
+        groupsByKeyRef.current.get(key) ||
+        [...groupsByKeyRef.current.values()].find(
+          (item) => item.name && item.name.toLowerCase() === key.toLowerCase(),
+        ) ||
+        null
+      );
+    };
+    const noProjectMessage = (wanted: string) =>
+      wanted.trim() ? `找不到项目 ${wanted.trim()}` : '当前没有激活项目';
+
+    return bridge.onRequest(async ({ requestId, op, payload }) => {
+      // 回包失败（例如窗口正在销毁）不能再往上抛，否则会变成未处理的 Promise 拒绝
+      const reply = (ok: boolean, body?: unknown) => {
+        try {
+          void Promise.resolve(
+            bridge.reply(requestId, ok, (body ?? {}) as Record<string, unknown>),
+          ).catch(() => {});
+        } catch {
+          // 渲染进程已不可用，没有别的通道能上报这次回包失败
+        }
+      };
+      try {
+        if (!payload || typeof payload !== 'object') {
+          reply(false, { code: 'bad-request', message: '请求缺少 payload' });
+          return;
+        }
+        if (op === 'create-terminal') {
+          // project 可能是项目名，也可能为空（用当前激活项目）
+          const wanted = String(payload.groupKey || '');
+          const group = findGroup(wanted);
+          if (!group) {
+            reply(false, { code: 'no-project', message: noProjectMessage(wanted) });
+            return;
+          }
+          const tab = await createTerminalRef.current(
+            group,
+            typeof payload.shellId === 'string' ? payload.shellId : undefined,
+            { aiOwned: true, focus: false },
+          );
+          if (!tab) {
+            reply(false, { code: 'ui-unavailable', message: '终端创建失败' });
+            return;
+          }
+          reply(true, {
+            tabId: tab.id,
+            paneNo: tab.paneNo,
+            pane: `#${tab.paneNo}`,
+            sessionId: tab.sessionId,
+            groupKey: group.key,
+          });
+          return;
+        }
+        if (op === 'create-browser') {
+          const wanted = String(payload.groupKey || '');
+          const group = findGroup(wanted);
+          if (!group) {
+            reply(false, { code: 'no-project', message: noProjectMessage(wanted) });
+            return;
+          }
+          const tab = createBrowserRef.current(
+            group,
+            typeof payload.url === 'string' && payload.url ? payload.url : 'about:blank',
+            { aiOwned: true, focus: false },
+          ) as Tab | undefined;
+          if (!tab) {
+            reply(false, { code: 'ui-unavailable', message: '浏览器创建失败' });
+            return;
+          }
+          reply(true, {
+            tabId: tab.id,
+            paneNo: tab.paneNo,
+            pane: `#${tab.paneNo}`,
+            groupKey: group.key,
+          });
+          return;
+        }
+        if (op === 'close-pane') {
+          const groupKey = String(payload.groupKey || '');
+          const tabId = String(payload.tabId || '');
+          // closeTabs 对不存在的页签返回 true，所以必须先只读校验存在性，
+          // 否则「页签不存在」和「用户取消未保存确认」会被混成同一个结果
+          const exists = (tabsRef.current[groupKey] || []).some((tab) => tab.id === tabId);
+          if (!exists) {
+            reply(false, { code: 'pane-not-found', message: '页签已不存在' });
+            return;
+          }
+          const closed = closeTabsRef.current(groupKey, [tabId]);
+          if (!closed) {
+            reply(false, { code: 'cancelled', message: '用户取消关闭' });
+            return;
+          }
+          reply(true, { closed: true });
+          return;
+        }
+        reply(false, { code: 'bad-request', message: `未知操作：${op}` });
+      } catch (error) {
+        reply(false, { code: 'ui-unavailable', message: toErrorMessage(error) });
+      }
+    });
+  }, []);
 
   const createTabGroup = useCallback(
     (groupKey: string, tabId: string) => {
@@ -2385,10 +2531,13 @@ export default function App() {
       const shell = info ? findLaunchTarget(info, tab.shellId) : undefined;
       const fallback = isBrowserTab(tab)
         ? '浏览器'
-        : defaultTabTitle(shell?.label || '终端');
+        : tab.aiOwned
+          ? 'AI 终端'
+          : defaultTabTitle(shell?.label || '终端');
       const value = rawDescriptor.trim().slice(0, 30);
       const descriptor = value || fallback;
-      const custom = Boolean(value) && value !== fallback;
+      // AI 终端即使留空恢复默认，也要保持固定标题，不能被 shell 名称顶掉
+      const custom = tab.aiOwned ? true : Boolean(value) && value !== fallback;
       const currentTabs = tabsRef.current[tab.groupKey] || [];
       applyTabs({
         ...tabsRef.current,
@@ -3523,9 +3672,11 @@ export default function App() {
           defaultDescriptor={
             isBrowserTab(renameContext.tab)
               ? '浏览器'
-              : defaultTabTitle(
-                  findLaunchTarget(info, renameContext.tab.shellId)?.label || '终端',
-                )
+              : renameContext.tab.aiOwned
+                ? 'AI 终端'
+                : defaultTabTitle(
+                    findLaunchTarget(info, renameContext.tab.shellId)?.label || '终端',
+                  )
           }
           onClose={closeRenameModal}
           onSave={(descriptor) => renameTab(renameContext.tab, descriptor)}

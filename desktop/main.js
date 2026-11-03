@@ -15,6 +15,7 @@ const updater = require('./updater');
 const symbols = require('./symbols');
 const { createLoginItem } = require('./login-item');
 const { listShells, listTools, resolveShell } = require('./shells');
+const aiBridge = require('./ai-bridge');
 
 const APP_NAME = 'Cmd Toolbox';
 const APP_ID = 'local.cmd.toolbox';
@@ -176,6 +177,20 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
+
+  // 每次重建窗口都重新注入：闭包读的是模块级 mainWindow，窗口换了也能发到新窗口。
+  // 窗口不在时必须抛错而不是静默跳过：ai-bridge 靠 send 抛错立即 reject，
+  // 否则请求会干等满 15s，AI 会误以为操作还在进行。
+  aiBridge.configure({
+    send: (payload) => {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        const error = new Error('窗口未就绪，无法执行该操作');
+        error.code = 'ui-unavailable';
+        throw error;
+      }
+      mainWindow.webContents.send('bridge:request', payload);
+    },
+  });
 }
 
 function registerIpc() {
@@ -581,6 +596,10 @@ function registerIpc() {
     return true;
   });
 
+  ipcMain.on('bridge:reply', (_event, requestId, ok, payload) => {
+    aiBridge.settle(requestId, Boolean(ok), payload);
+  });
+
   ipcMain.on('panes:sync', (_event, next) => {
     paneApi.setPanes(Array.isArray(next) ? next : []);
   });
@@ -623,6 +642,20 @@ if (!hasLock) {
     const mcp = await paneApi.start({
       dataDir: app.getPath('userData'),
       getTerminalOutput: (sessionId) => ptyHost.getLastOutput(sessionId),
+      // terminal_run 需要直接读写 pty，并监听所有会话的输出/退出
+      jobs: (jobTools) => {
+        jobTools.configure({
+          writeSession: (sessionId, data) => ptyHost.writeSession(sessionId, data),
+          // 绝对偏移切片：缓冲区按尾部截断，cursor 不能直接用缓冲长度
+          getOutputSlice: (sessionId, fromOffset) =>
+            ptyHost.getOutputSlice(sessionId, fromOffset),
+          isOpen: (sessionId) => ptyHost.isOpen(sessionId),
+          findPane: (ref) => paneApi.findPaneForTool(ref),
+          panes: () => paneApi.listPanesForTool(),
+          subscribeData: (handler) => ptyHost.subscribeAllData(handler),
+          subscribeExit: (handler) => ptyHost.subscribeAllExit(handler),
+        });
+      },
       // 网页里的 target="_blank"：http(s) 在同一个项目里开新的浏览器页签，
       // mailto 交给系统，其余丢弃
       openUrlInNewTab: (tabId, url) => {
