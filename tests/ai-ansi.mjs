@@ -36,4 +36,8 @@ assert(cleanOutput('') === '', '空字符串原样返回');
 console.log('8. 退格删除前一个字符');
 assert(cleanOutput('abc\x08d\n') === 'abd', '退格生效');
 
+console.log('9. CRLF 换行（Windows pty）');
+assert(cleanOutput('a\r\nb\r\n') === 'a\nb', 'CRLF 换行正常分列');
+assert(cleanOutput('10%\r50%\r100%\r\n') === '100%', 'CRLF 与回车覆盖组合');
+
 console.log(`\n全部通过：${passed} 项`);
