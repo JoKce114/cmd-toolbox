@@ -626,6 +626,7 @@ export default function App() {
                 descriptor:
                   saved.custom && saved.descriptor ? saved.descriptor : '浏览器',
                 custom: saved.custom,
+                aiOwned: Boolean(saved.aiOwned),
                 cwd: group.path,
                 url: saved.url || 'about:blank',
                 device: saved.device || null,
@@ -651,6 +652,7 @@ export default function App() {
                 paneNo,
                 descriptor: saved.descriptor || '差异',
                 custom: saved.custom,
+                aiOwned: Boolean(saved.aiOwned),
                 cwd: group.path,
                 diffChange: saved.diffChange?.path ? saved.diffChange : undefined,
                 diffCommit: saved.diffCommit?.hash ? saved.diffCommit : undefined,
@@ -684,6 +686,7 @@ export default function App() {
                 paneNo,
                 descriptor: saved.descriptor || '编辑器',
                 custom: saved.custom,
+                aiOwned: Boolean(saved.aiOwned),
                 cwd: group.path,
                 filePath: saved.filePath || '',
                 exited: false,
@@ -716,6 +719,7 @@ export default function App() {
                   ? saved.descriptor
                   : defaultTabTitle(shell.label),
               custom: saved.custom,
+              aiOwned: Boolean(saved.aiOwned),
               cwd: group.path,
               conversationId: saved.conversationId || '',
               exited: false,

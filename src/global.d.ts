@@ -32,6 +32,7 @@ export interface SessionTab {
   paneNo: number;
   descriptor: string;
   custom: boolean;
+  aiOwned?: boolean;
   cwd: string;
   url?: string;
   device?: import('./types').DeviceProfile | null;
