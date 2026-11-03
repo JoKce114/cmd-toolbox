@@ -171,6 +171,7 @@ try {
   assert(names.includes('open_terminal'), '列出 open_terminal');
   assert(names.includes('open_browser'), '列出 open_browser');
   assert(names.includes('close_pane'), '列出 close_pane');
+  assert(names.includes('terminal_interrupt'), '列出 terminal_interrupt');
 
   console.log('2. open_terminal 建出终端页签');
   const beforeTabs = await page.locator('.tab').count();
@@ -384,6 +385,95 @@ try {
     `未命中时返回 timeout（实际 status=${timeoutResult.status}）`,
   );
   assert(waitedMs >= 700, `确实等满了超时时间（实际等了 ${waitedMs}ms）`);
+
+  console.log('11. 显式 project 不存在时返回 no-project，不回退到激活项目');
+  // 静默回退会让 AI 以为在项目 A 执行，实际写进项目 B，输出也被归错项目。
+  const tabsBeforeMissing = await page.locator('.tab').count();
+  const missingTerminal = await mcpCall('open_terminal', { project: 'no-such-project-9f3a' }).then(
+    () => 'no-error',
+    (error) => String(error.message),
+  );
+  assert(
+    missingTerminal.includes('no-project') &&
+      missingTerminal.includes('no-such-project-9f3a'),
+    `create-terminal 未命中项目返回 no-project 并说明项目名（实际：${missingTerminal.slice(0, 200)}）`,
+  );
+  const missingBrowser = await mcpCall('open_browser', {
+    project: 'no-such-project-9f3a',
+    url: 'about:blank',
+  }).then(
+    () => 'no-error',
+    (error) => String(error.message),
+  );
+  assert(
+    missingBrowser.includes('no-project') &&
+      missingBrowser.includes('no-such-project-9f3a'),
+    `create-browser 未命中项目返回 no-project 并说明项目名（实际：${missingBrowser.slice(0, 200)}）`,
+  );
+  assert(
+    (await page.locator('.tab').count()) === tabsBeforeMissing,
+    '未命中项目时没有偷偷在当前激活项目建页签',
+  );
+
+  console.log('12. 持续输出命令可被 terminal_interrupt 中断并复用终端');
+  // ping -t 永不安静，quiet 不会触发；3 秒后 terminal_run 只能返回 running。
+  const pingPromise = mcpCall('terminal_run', {
+    command: 'ping -t 127.0.0.1',
+    pane: run.pane,
+    quietMs: 1500,
+    timeoutMs: 3000,
+  });
+  const pingResult = await pingPromise;
+  assert(
+    pingResult.status === 'running',
+    `持续输出命令超时返回 running（实际 status=${pingResult.status}）`,
+  );
+  assert(
+    typeof pingResult.hint === 'string' && pingResult.hint.includes('terminal_interrupt'),
+    `running 回包提示中断手段（实际：${JSON.stringify(pingResult.hint)}）`,
+  );
+  // 占用期间 terminal_send 仍然拒绝（任意输入会喂给正在跑的进程）
+  const blockedSend = await mcpCall('terminal_send', {
+    pane: run.pane,
+    text: 'echo should-not-run',
+  }).then(
+    () => 'no-error',
+    (error) => String(error.message),
+  );
+  assert(
+    blockedSend.includes('pane-busy') && blockedSend.includes('terminal_interrupt'),
+    `占用期间 terminal_send 返回 pane-busy 并提示 terminal_interrupt（实际：${blockedSend.slice(0, 200)}）`,
+  );
+  const interrupted = await mcpCall('terminal_interrupt', { pane: run.pane });
+  assert(interrupted.ok === true, 'terminal_interrupt 在占用期间仍然成功');
+  assert(
+    interrupted.jobId === pingResult.jobId,
+    `中断回包带上正在跑的 jobId（${interrupted.jobId} / ${pingResult.jobId}）`,
+  );
+  // Ctrl+C 让 ping 退出，输出安静后旧 job 释放占用
+  await waitFor(
+    async () => {
+      const state = await mcpCall('job_output', {
+        jobId: pingResult.jobId,
+        cursor: pingResult.cursor,
+      });
+      return state.status !== 'running';
+    },
+    '中断后旧任务释放占用',
+    15000,
+  );
+  const afterInterrupt = await mcpCall('terminal_run', {
+    command: 'echo after-interrupt-ok',
+    pane: run.pane,
+  });
+  assert(
+    afterInterrupt.status === 'done' || afterInterrupt.status === 'idle',
+    `中断后终端可再次执行命令（实际 status=${afterInterrupt.status}）`,
+  );
+  assert(
+    afterInterrupt.output.includes('after-interrupt-ok'),
+    `中断后新命令正常拿到输出（实际：${String(afterInterrupt.output).slice(0, 200)}）`,
+  );
 } finally {
   await app.close();
   rmSync(dataDir, { recursive: true, force: true });

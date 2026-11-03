@@ -9,7 +9,8 @@ const MAX_TIMEOUT_MS = 600000;
 // terminal_wait 单独用 30 秒缺省，和工具描述保持一致
 const DEFAULT_WAIT_TIMEOUT_MS = 30000;
 // pattern 由 AI 生成，灾难性回溯会卡住主进程；terminal_wait 只匹配最近这一段输出。
-const MAX_MATCH_CHARS = 64 * 1024;
+// 数值必须与 pty-host 的 32000 字符尾部缓冲一致：更早的内容已经丢弃，写大了只会误导 AI。
+const MAX_MATCH_CHARS = 32000;
 // 新建页签后要等渲染进程把 panes:sync 送到主进程，findPane 才能定位。
 // 轮询到命中即返回，比固定 sleep 更快也更稳。
 const PANE_SYNC_TIMEOUT_MS = 3000;
@@ -230,6 +231,8 @@ function finish(entry, status, options = {}) {
   if (status === 'running') {
     // 总超时先回包，但命令可能还在跑：保留占用与订阅，
     // 等退出或安静后再释放，避免下一条命令和它抢同一个 pty。
+    entry.result.hint =
+      '命令可能仍在持续输出；如果它不会自行安静（如 ping -t），用 terminal_interrupt 发送 Ctrl+C 结束';
     settlePromise(entry, entry.result);
     return;
   }
@@ -270,7 +273,10 @@ async function terminalRun(args = {}) {
   }
   const runningJobId = activeBySession.get(sessionId);
   if (runningJobId) {
-    const error = fail('pane-busy', `该终端还有任务在跑（jobId ${runningJobId}）`);
+    const error = fail(
+      'pane-busy',
+      `该终端还有任务在跑（jobId ${runningJobId}）；要中断它请用 terminal_interrupt`,
+    );
     error.jobId = runningJobId;
     throw error;
   }
@@ -366,7 +372,10 @@ function terminalSend(args = {}) {
   }
   const runningJobId = activeBySession.get(sessionId);
   if (runningJobId) {
-    const error = fail('pane-busy', `该终端还有任务在跑（jobId ${runningJobId}）`);
+    const error = fail(
+      'pane-busy',
+      `该终端还有任务在跑（jobId ${runningJobId}）；要中断它请用 terminal_interrupt`,
+    );
     error.jobId = runningJobId;
     throw error;
   }
@@ -379,6 +388,28 @@ function terminalSend(args = {}) {
     throw fail('ui-unavailable', (error && error.message) || String(error));
   }
   return { ok: true, pane: `#${pane.paneNo}`, submitted: submit };
+}
+
+// 发送 Ctrl+C。terminal_send 在任务运行期间被占用表挡住，但 ping -t 这类命令
+// 会一直输出、永远不安静，超时后就没有别的退出路径了。
+// 任意按键都不能在占用期间放行：输入会进入正在跑的那个进程的 stdin（或残留在
+// shell 的待执行缓冲里），其输出仍会被算进旧 job，AI 分不清哪些是自己新发的命令。
+// 中断只是让当前命令停下来，不会产生一条新命令，所以单独开一个入口、绕过占用检查。
+function terminalInterrupt(args = {}) {
+  const pane = resolvePane(args.pane);
+  if (!pane) throw fail('pane-not-found', '请用 list_panes 查看终端编号');
+  const sessionId = pane.sessionId;
+  if (!sessionId || !isOpen(sessionId)) {
+    throw fail('pane-not-found', '该终端已退出');
+  }
+  const runningJobId = activeBySession.get(sessionId) || null;
+  try {
+    // 不补回车：Ctrl+C 是单个控制字节，附加 \r 会在交互式 CLI 里多留一行空输入
+    writeSession(sessionId, '\x03');
+  } catch (error) {
+    throw fail('ui-unavailable', (error && error.message) || String(error));
+  }
+  return { ok: true, pane: `#${pane.paneNo}`, jobId: runningJobId };
 }
 
 // 等某段输出出现。先查一次当前缓冲再订阅新数据——等服务就绪时，
@@ -481,7 +512,7 @@ const TOOLS = [
   {
     name: 'terminal_run',
     description:
-      '在终端里执行一条命令并等待结果。等到进程退出、或输出连续 quietMs 无变化、或超时后返回。返回 status（done/idle/running）、exitCode、output、pane、jobId、cursor。不传 pane 时自动复用同项目的 AI 终端页签。',
+      '在终端里执行一条命令并等待结果。等到进程退出、或输出连续 quietMs 无变化、或超时后返回。返回 status（done/idle/running）、exitCode、output、pane、jobId、cursor。返回 running 说明命令可能仍在持续输出，不会自行结束的可用 terminal_interrupt 发送 Ctrl+C。不传 pane 时自动复用同项目的 AI 终端页签。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -513,7 +544,7 @@ const TOOLS = [
   {
     name: 'terminal_send',
     description:
-      '向已有终端发送按键。submit 默认 true（补回车）；交互式 CLI 逐键输入时传 false。该终端有任务在跑时返回 pane-busy。',
+      '向已有终端发送按键。submit 默认 true（补回车）；交互式 CLI 逐键输入时传 false。该终端有任务在跑时返回 pane-busy；要中断正在跑的命令请用 terminal_interrupt。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -525,9 +556,21 @@ const TOOLS = [
     },
   },
   {
+    name: 'terminal_interrupt',
+    description:
+      '向终端发送 Ctrl+C（\\x03）中断正在运行的命令。即使该终端上有 terminal_run 任务在跑也允许，用于终止 ping -t 这类持续输出、不会自行安静的进程。中断后命令退出或输出安静时任务会自动释放占用，随后可继续 terminal_run。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pane: { type: 'string', description: '目标终端，如 #3' },
+      },
+      required: ['pane'],
+    },
+  },
+  {
     name: 'terminal_wait',
     description:
-      '等待终端输出匹配某个正则。先匹配已有输出，再等新输出；pattern 只会在最近 64K 字符的输出内匹配。用于等服务启动就绪、等交互式 CLI 打出提示。返回 status（matched/timeout/exited）与匹配片段；会话中途退出时返回 exited 及退出前的最后输出。',
+      '等待终端输出匹配某个正则。先匹配已有输出，再等新输出；pattern 只会在最近 32000 字符的输出内匹配（与 pty-host 缓冲上限一致）。用于等服务启动就绪、等交互式 CLI 打出提示。返回 status（matched/timeout/exited）与匹配片段；会话中途退出时返回 exited 及退出前的最后输出。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -545,6 +588,7 @@ function call(name, args) {
   if (name === 'terminal_run') return terminalRun(args || {});
   if (name === 'job_output') return jobOutput(args || {});
   if (name === 'terminal_send') return terminalSend(args || {});
+  if (name === 'terminal_interrupt') return terminalInterrupt(args || {});
   if (name === 'terminal_wait') return terminalWait(args || {});
   throw new Error(`未知工具：${name}`);
 }

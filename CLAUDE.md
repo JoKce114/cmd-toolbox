@@ -597,6 +597,15 @@ node tests/device-emulation-probe.mjs
   这条不能省——提前释放会让下一条命令写进同一个 pty，两条输出交错，
   前后两个 job 的 cursor 都会被污染。期间其它 `terminal_run` / `terminal_send`
   返回 `pane-busy` 并带上正在跑的 jobId。
+- **持续输出且不会安静的命令必须有退出路径**：`ping -t` 这类命令 quiet 永不触发，
+  总超时只回 `running`、占用一直保留。因此提供 `terminal_interrupt`（向 pty 写
+  `\x03`），它**绕过 `activeBySession` 检查**，任务运行期间也允许。不要改成放行
+  任意 `terminal_send`：那些输入会进入正在跑的命令的 stdin（或留在 shell 待执行
+  缓冲里），其输出仍会被算进旧 job，AI 分不清哪些是新命令。
+- **显式传入的 project 未命中时返回 `no-project`，不能回退到当前激活项目**
+  （`App.tsx` 的 `findGroup`）：静默回退会让 AI 以为在项目 A 执行，实际写进项目 B，
+  输出也会被归错项目。只有 project 为空/未传时才用当前激活项目。
+  `create-terminal` 与 `create-browser` 两个 op 都要遵守。
 - **输出 cursor 用绝对字符偏移，不能用 `getLastOutput().length` 当基线**。
   `pty-host.js` 的缓冲按尾部截断到 32000 字符，旧内容会前移，用相对长度做
   `baseOffset` 会在缓冲填满后永远切不到新内容（`job_output` 直接读到空串）。
@@ -628,8 +637,8 @@ node tests/device-emulation-probe.mjs
   （`App.tsx` 恢复浏览器 / 差异 / 编辑器 / 终端页签，每个分支都要带
   `aiOwned: Boolean(saved.aiOwned)`）、以及 `src/global.d.ts` 的 `SessionTab`
   类型声明。漏一处，重启后标记就丢了，空页签会被别的任务误复用。
-- **`terminal_wait` 只在当前缓冲内匹配**：实测窗口约 32K（`MAX_MATCH_CHARS`
-  写的是 64K，但受 pty-host 32000 字符缓冲上限约束，实际只有最近 32K）。
+- **`terminal_wait` 只在当前缓冲内匹配**：`MAX_MATCH_CHARS = 32000`，与 pty-host
+  的尾部缓冲上限一致（工具描述也写 32000，别再写 64K）。
   先扫一次已有输出再订阅新数据；同时监听退出，会话中途退出返回 `exited`
   并带回退出前的最后一帧快照（此时 pty-host 的缓冲已删除）。
   缺省超时 30 秒，上限 10 分钟。

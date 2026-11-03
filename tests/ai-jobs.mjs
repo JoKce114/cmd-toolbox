@@ -26,6 +26,18 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // 假 pty：buffer 里的偏移是单调递增的绝对偏移。
 // getOutputSlice 按 pty-host 的契约返回一段切片：text 的首字符对应 startOffset。
 let buffer = '';
+// buffer[0] 的绝对偏移。模拟 pty-host 的尾部缓冲：追加超过 bufferCap 时旧内容前移。
+let bufferStart = 0;
+let bufferCap = Infinity;
+const bufferEnd = () => bufferStart + buffer.length;
+function appendOutput(text) {
+  buffer += text;
+  if (buffer.length > bufferCap) {
+    const excess = buffer.length - bufferCap;
+    buffer = buffer.slice(-bufferCap);
+    bufferStart += excess;
+  }
+}
 const written = [];
 const dataHandlers = new Set();
 const exitHandlers = new Set();
@@ -33,14 +45,18 @@ const openSessions = new Set([SESSION_ID]);
 const extraPanes = new Map();
 
 function emitData(text) {
-  buffer += text;
+  appendOutput(text);
   // 处理器可能在回调里退订，先快照
   for (const handler of [...dataHandlers]) handler(SESSION_ID, text);
 }
 
 function emitExit(code, exitOutput) {
-  const snapshot =
-    exitOutput || { text: buffer, startOffset: 0, endOffset: buffer.length, truncated: false };
+  const snapshot = exitOutput || {
+    text: buffer,
+    startOffset: bufferStart,
+    endOffset: bufferEnd(),
+    truncated: false,
+  };
   for (const handler of [...exitHandlers]) handler(SESSION_ID, code, snapshot);
 }
 
@@ -62,14 +78,16 @@ jobs.configure({
     if (sessionId !== SESSION_ID) {
       return { text: '', startOffset: 0, endOffset: 0, truncated: false };
     }
-    const total = buffer.length;
+    const endOffset = bufferEnd();
     const requested = Number(fromOffset);
-    const from = Math.min(Math.max(0, Number.isFinite(requested) ? Math.floor(requested) : 0), total);
+    const requestedOffset = Number.isFinite(requested) ? Math.floor(requested) : bufferStart;
+    // 与 pty-host.getOutputSlice 相同：请求早于缓冲区起点时从起点开始并标记 truncated
+    const from = Math.max(requestedOffset, bufferStart);
     return {
-      text: buffer.slice(from),
+      text: from <= endOffset ? buffer.slice(from - bufferStart) : '',
       startOffset: from,
-      endOffset: total,
-      truncated: false,
+      endOffset,
+      truncated: requestedOffset < bufferStart,
     };
   },
   isOpen: (sessionId) => openSessions.has(sessionId),
@@ -136,7 +154,7 @@ assert(
 assert(streamResult.output.includes('chunk-150'), '回包包含最后一次推送的输出');
 
 console.log('3. 进程退出返回 done 与真实退出码');
-const beforeExit = buffer.length;
+const beforeExit = bufferEnd();
 const run2 = jobs.call('terminal_run', { command: 'ls', pane: '#3', quietMs: 5000 });
 await sleep(5);
 emitData('file-a.txt\r\nfile-b.txt\r\n');
@@ -196,7 +214,7 @@ await expectCode(
 );
 
 console.log('7. job_output 增量 cursor 不重复');
-const beforeIncrement = buffer.length;
+const beforeIncrement = bufferEnd();
 const runIncrement = jobs.call('terminal_run', { command: 'echo inc', pane: '#3', quietMs: 40 });
 await sleep(5);
 emitData('inc-one\r\n');
@@ -292,11 +310,29 @@ try {
 }
 assert(timedResult.status === 'running', '总超时返回 running');
 assert(timedResult.exitCode === null, 'running 回包不带退出码');
+assert(
+  typeof timedResult.hint === 'string' && timedResult.hint.includes('terminal_interrupt'),
+  'running 回包提示用 terminal_interrupt 中断',
+);
 await expectCode(
   () => jobs.call('terminal_run', { command: 'next', pane: '#3' }),
   'pane-busy',
   '超时回包后占用仍保留，下一条命令被拒绝',
 );
+
+// 占用期间直接放行任意 terminal_send 会把输入喂给正在跑的进程，输出仍被算进旧 job；
+// 中断是唯一例外：它只让当前命令停下来，不产生新命令。
+written.length = 0;
+const interrupt = jobs.call('terminal_interrupt', { pane: '#3' });
+assert(interrupt.ok === true, 'terminal_interrupt 在任务占用期间仍然允许');
+assert(lastWrite().data === '\x03', '中断只写入 Ctrl+C，不补回车');
+assert(interrupt.jobId === timedResult.jobId, '中断回包带上正在跑的 jobId');
+await expectCode(
+  () => jobs.call('terminal_interrupt', { pane: '#999' }),
+  'pane-not-found',
+  'terminal_interrupt 的未知 pane 返回 pane-not-found',
+);
+
 emitExit(0);
 await sleep(5);
 const afterRelease = await jobs.call('terminal_run', {
@@ -305,5 +341,55 @@ const afterRelease = await jobs.call('terminal_run', {
   quietMs: 20,
 });
 assert(afterRelease.status === 'idle', '进程退出释放占用后可再次运行');
+
+console.log('12. 缓冲区截断后 job_output 仍能读到新增内容且 cursor 不回退');
+// 复现之前 Critical 修复的核心场景：pty-host 只保留尾部 32000 字符，
+// 任务起点被挤出缓冲区后，从旧 cursor 读取必须标记 truncated、拿到当前缓冲里的
+// 新内容，并且 cursor 单调不减。这里用一个小 cap 让截断容易触发。
+bufferCap = 64;
+// 立刻按新 cap 截断之前的旧输出，让本用例的起点从当前缓冲区末尾开始，
+// 否则第一次追加时才截断，bufferStart 仍会落在任务起点之前。
+appendOutput('');
+const beforeTrunc = jobs.call('terminal_run', { command: 'trunc-start', pane: '#3', quietMs: 20 });
+await sleep(5);
+emitData('BEGIN-MARK\r\n');
+const truncStart = await beforeTrunc;
+const startCursor = truncStart.cursor;
+assert(startCursor > 0, '截断用例拿到非零的绝对 cursor');
+// 推入远超 cap 的内容，把 BEGIN-MARK 挤出缓冲区
+emitData(`${'x'.repeat(bufferCap + 40)}\r\nTAIL-MARK\r\n`);
+assert(
+  bufferStart > startCursor,
+  `缓冲区起点已越过任务起点（起点 ${bufferStart} > cursor ${startCursor}）`,
+);
+const afterTrunc = jobs.call('job_output', { jobId: truncStart.jobId, cursor: startCursor });
+assert(afterTrunc.truncated === true, '从已被丢弃的偏移读取时标记 truncated');
+assert(afterTrunc.output.includes('TAIL-MARK'), '仍能读到截断后缓冲区里的新增内容');
+assert(afterTrunc.cursor >= startCursor, 'cursor 不回退');
+assert(
+  afterTrunc.cursor === bufferEnd(),
+  `cursor 追到当前绝对末尾（${afterTrunc.cursor} / ${bufferEnd()}）`,
+);
+const truncCursor = afterTrunc.cursor;
+emitData('AFTER-TRUNC\r\n');
+const afterIncrement = jobs.call('job_output', { jobId: truncStart.jobId, cursor: truncCursor });
+assert(afterIncrement.output.includes('AFTER-TRUNC'), '截断后按 cursor 继续读到新增内容');
+assert(afterIncrement.truncated === false, '从当前 cursor 起再读不算截断');
+assert(
+  afterIncrement.cursor === bufferEnd() && afterIncrement.cursor > truncCursor,
+  '后续读取的 cursor 继续前进',
+);
+bufferCap = Infinity;
+
+console.log('13. terminal_wait 的匹配窗口与 pty-host 缓冲一致');
+const waitTool = jobs.TOOLS.find((tool) => tool.name === 'terminal_wait');
+assert(
+  typeof waitTool?.description === 'string' && waitTool.description.includes('32000'),
+  '工具描述写明 32000 字符',
+);
+assert(
+  typeof waitTool?.description === 'string' && !waitTool.description.includes('64K'),
+  '工具描述不再出现过期的 64K',
+);
 
 console.log(`\n全部通过：${passed} 项`);

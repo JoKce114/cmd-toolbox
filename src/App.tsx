@@ -2144,19 +2144,22 @@ export default function App() {
     const bridge = window.api?.bridge;
     if (!bridge) return;
 
-    // groupKey 或项目名都能命中；都没命中时退回当前激活项目
+    // groupKey 或项目名都能命中。显式传了 project 却没命中时必须返回 null，
+    // 不能回退到当前激活项目：否则 AI 以为在项目 A 执行，实际写进项目 B，
+    // 输出也会被归到别的项目。只有 project 为空（未指定）时才用当前激活项目。
     const findGroup = (wanted: string): Group | null => {
       const key = wanted.trim();
-      if (key) {
-        const matched =
-          groupsByKeyRef.current.get(key) ||
-          [...groupsByKeyRef.current.values()].find(
-            (item) => item.name && item.name.toLowerCase() === key.toLowerCase(),
-          );
-        if (matched) return matched;
-      }
-      return groupsByKeyRef.current.get(activeGroupKeyRef.current) || null;
+      if (!key) return groupsByKeyRef.current.get(activeGroupKeyRef.current) || null;
+      return (
+        groupsByKeyRef.current.get(key) ||
+        [...groupsByKeyRef.current.values()].find(
+          (item) => item.name && item.name.toLowerCase() === key.toLowerCase(),
+        ) ||
+        null
+      );
     };
+    const noProjectMessage = (wanted: string) =>
+      wanted.trim() ? `找不到项目 ${wanted.trim()}` : '当前没有激活项目';
 
     return bridge.onRequest(async ({ requestId, op, payload }) => {
       // 回包失败（例如窗口正在销毁）不能再往上抛，否则会变成未处理的 Promise 拒绝
@@ -2176,9 +2179,10 @@ export default function App() {
         }
         if (op === 'create-terminal') {
           // project 可能是项目名，也可能为空（用当前激活项目）
-          const group = findGroup(String(payload.groupKey || ''));
+          const wanted = String(payload.groupKey || '');
+          const group = findGroup(wanted);
           if (!group) {
-            reply(false, { code: 'no-project', message: '找不到该项目' });
+            reply(false, { code: 'no-project', message: noProjectMessage(wanted) });
             return;
           }
           const tab = await createTerminalRef.current(
@@ -2200,9 +2204,10 @@ export default function App() {
           return;
         }
         if (op === 'create-browser') {
-          const group = findGroup(String(payload.groupKey || ''));
+          const wanted = String(payload.groupKey || '');
+          const group = findGroup(wanted);
           if (!group) {
-            reply(false, { code: 'no-project', message: '找不到该项目' });
+            reply(false, { code: 'no-project', message: noProjectMessage(wanted) });
             return;
           }
           const tab = createBrowserRef.current(
