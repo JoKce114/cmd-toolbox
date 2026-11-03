@@ -133,6 +133,7 @@ export type GitStatus =
       upstream: string;
       ahead: number;
       behind: number;
+      remotes: string[];
       changes: GitChange[];
       hasChanges: boolean;
       stagedCount: number;
@@ -143,7 +144,15 @@ export type GitPullStrategy = 'ff' | 'merge' | 'rebase';
 
 export type GitSyncFailure = {
   ok: false;
-  reason: 'no-upstream' | 'diverged' | 'conflict' | 'rejected' | 'multiple-branches';
+  reason:
+    | 'no-upstream'
+    | 'diverged'
+    | 'conflict'
+    | 'rejected'
+    | 'multiple-branches'
+    | 'detached'
+    | 'no-remote'
+    | 'no-commit';
   message: string;
   conflicted?: string[];
 };
@@ -152,7 +161,7 @@ export type GitPullResult =
   | { ok: true; strategy: GitPullStrategy; branch: string; upstream: string }
   | GitSyncFailure;
 
-export type GitPushResult = { ok: true; upstream: string } | GitSyncFailure;
+export type GitPushResult = { ok: true; upstream: string; published: boolean } | GitSyncFailure;
 
 export type SyncPrompt = {
   kind: 'push-rejected' | 'diverged' | 'multiple-branches';
