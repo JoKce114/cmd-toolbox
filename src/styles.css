@@ -2533,6 +2533,7 @@ p {
 
 .tab-ai-icon {
   flex: 0 0 auto;
+  align-self: center;
   margin-right: 3px;
   color: #7c3aed;
 }

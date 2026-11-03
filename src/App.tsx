@@ -128,6 +128,7 @@ function toSessionTab(tab: Tab) {
     paneNo: tab.paneNo,
     descriptor: tab.descriptor,
     custom: tab.custom,
+    aiOwned: Boolean(tab.aiOwned),
     cwd: tab.cwd,
     url: tab.url || '',
     device: tab.device || null,
