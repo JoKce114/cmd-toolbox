@@ -351,6 +351,106 @@ function jobOutput(args = {}) {
   };
 }
 
+// 向已有终端写按键。与 terminal_run 共用 activeBySession 占用表：
+// 同一会话上还有任务在跑时拒绝，否则两条命令的输出会交错，job 的 cursor 也会被污染。
+function terminalSend(args = {}) {
+  const pane = resolvePane(args.pane);
+  if (!pane) throw fail('pane-not-found', '请用 list_panes 查看终端编号');
+  const sessionId = pane.sessionId;
+  if (!sessionId || !isOpen(sessionId)) {
+    throw fail('pane-not-found', '该终端已退出');
+  }
+  const runningJobId = activeBySession.get(sessionId);
+  if (runningJobId) {
+    const error = fail('pane-busy', `该终端还有任务在跑（jobId ${runningJobId}）`);
+    error.jobId = runningJobId;
+    throw error;
+  }
+  const text = String(args.text ?? '');
+  // submit 默认 true：补回车。交互式 CLI 逐键输入时传 false，原样发送。
+  const submit = args.submit !== false;
+  try {
+    writeSession(sessionId, submit ? `${text}\r` : text);
+  } catch (error) {
+    throw fail('ui-unavailable', (error && error.message) || String(error));
+  }
+  return { ok: true, pane: `#${pane.paneNo}`, submitted: submit };
+}
+
+// 等某段输出出现。先查一次当前缓冲再订阅新数据——等服务就绪时，
+// 关键字往往在调用 terminal_wait 之前就已经打出来了。
+function terminalWait(args = {}) {
+  const pane = resolvePane(args.pane);
+  if (!pane) throw fail('pane-not-found', '请用 list_panes 查看终端编号');
+  const pattern = String(args.pattern || '');
+  if (!pattern) throw fail('bad-request', 'pattern 不能为空');
+  let regex;
+  try {
+    regex = new RegExp(pattern);
+  } catch {
+    // MCP 只透传 message，原生 SyntaxError 对 AI 没有诊断价值
+    throw fail('bad-request', 'pattern 不是合法的正则');
+  }
+  const timeoutMs = clampTimeout(args.timeoutMs || 30000);
+  const sessionId = pane.sessionId;
+  if (!sessionId || !isOpen(sessionId)) {
+    throw fail('pane-not-found', '该终端已退出');
+  }
+  const paneLabel = `#${pane.paneNo}`;
+
+  // 每次都读全量缓冲：pattern 可能跨 chunk，只拼增量容易漏掉边界。
+  const readText = () => cleanOutput(normalizeSlice(getOutputSlice(sessionId, 0), 0).text);
+
+  return new Promise((resolve) => {
+    let timer = null;
+    let offData = null;
+    let settled = false;
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      if (offData) {
+        const off = offData;
+        offData = null;
+        off();
+      }
+    };
+    const succeed = (match) => {
+      if (settled) return;
+      settled = true;
+      const output = readText();
+      cleanup();
+      resolve({ status: 'matched', match, output, pane: paneLabel });
+    };
+    const finish = (status) => {
+      if (settled) return;
+      settled = true;
+      const output = readText();
+      cleanup();
+      resolve({ status, output, pane: paneLabel });
+    };
+
+    const existing = regex.exec(readText());
+    if (existing) {
+      succeed(existing[0]);
+      return;
+    }
+
+    const off = subscribeData((dataSessionId) => {
+      if (dataSessionId !== sessionId) return;
+      const found = regex.exec(readText());
+      if (found) succeed(found[0]);
+    });
+    // subscribeData 若同步回调并命中，settled 已置位，这里补一次退订
+    if (settled) {
+      off();
+      return;
+    }
+    offData = off;
+    timer = setTimeout(() => finish('timeout'), timeoutMs);
+  });
+}
+
 const TOOLS = [
   {
     name: 'terminal_run',
@@ -384,12 +484,42 @@ const TOOLS = [
       required: ['jobId'],
     },
   },
+  {
+    name: 'terminal_send',
+    description:
+      '向已有终端发送按键。submit 默认 true（补回车）；交互式 CLI 逐键输入时传 false。该终端有任务在跑时返回 pane-busy。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pane: { type: 'string', description: '目标终端，如 #3' },
+        text: { type: 'string', description: '要发送的按键，空串表示只发回车' },
+        submit: { type: 'boolean', description: '是否补回车，默认 true' },
+      },
+      required: ['pane', 'text'],
+    },
+  },
+  {
+    name: 'terminal_wait',
+    description:
+      '等待终端输出匹配某个正则。先匹配已有输出，再等新输出。用于等服务启动就绪、等交互式 CLI 打出提示。返回 status（matched/timeout）与匹配片段。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pane: { type: 'string', description: '目标终端，如 #3' },
+        pattern: { type: 'string', description: '正则字符串' },
+        timeoutMs: { type: 'number', description: '默认 30000，上限 600000' },
+      },
+      required: ['pane', 'pattern'],
+    },
+  },
 ];
 
-// job_output 是纯读，保持同步返回（离线用例按同步取值）；terminal_run 返回 Promise。
+// job_output 是纯读，保持同步返回（离线用例按同步取值）；terminal_run / terminal_wait 返回 Promise。
 function call(name, args) {
   if (name === 'terminal_run') return terminalRun(args || {});
   if (name === 'job_output') return jobOutput(args || {});
+  if (name === 'terminal_send') return terminalSend(args || {});
+  if (name === 'terminal_wait') return terminalWait(args || {});
   throw new Error(`未知工具：${name}`);
 }
 
