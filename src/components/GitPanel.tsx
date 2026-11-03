@@ -203,6 +203,11 @@ export function GitPanel({
   const aheadCount = status && status.ok ? status.ahead : 0;
   // 提交块里已经有「推送」时不再重复显示分支栏按钮
   const showBarPush = aheadCount > 0 && phase !== 'committed' && phase !== 'pushing';
+  // 没有上游 = 分支还没发布过；此时「发布」代替「推送」，一次完成建上游与推送
+  const unpublished = Boolean(
+    status && status.ok && !status.upstream && status.branch !== '游离 HEAD',
+  );
+  const canPublish = Boolean(unpublished && status && status.ok && status.remotes.length > 0);
 
   const pathsFor = (change: GitChange) =>
     change.origPath ? [change.origPath, change.path] : [change.path];
@@ -466,6 +471,19 @@ export function GitPanel({
               <span>{pushBusy ? '推送中…' : '推送'}</span>
             </button>
           ) : null}
+
+          {canPublish ? (
+            <button
+              type="button"
+              className="git-publish-button"
+              title={`把 ${status.branch} 发布到远端并建立上游`}
+              disabled={pushBusy || pullBusy}
+              onClick={runBarPush}
+            >
+              <ArrowUp size={12} className={pushBusy ? 'is-spinning' : undefined} />
+              <span>{pushBusy ? '发布中…' : '发布'}</span>
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -544,7 +562,13 @@ export function GitPanel({
               {phase === 'committed' || phase === 'pushing' ? (
                 <>
                   <ArrowUp size={13} />
-                  {phase === 'pushing' ? '推送中…' : '推送'}
+                  {phase === 'pushing'
+                    ? unpublished
+                      ? '发布中…'
+                      : '推送中…'
+                    : unpublished
+                      ? '发布'
+                      : '推送'}
                 </>
               ) : (
                 <>
