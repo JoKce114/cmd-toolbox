@@ -112,7 +112,30 @@ assert(typeof result1.jobId === 'string' && result1.jobId.length > 0, '返回非
 assert(result1.output.includes('hi there'), 'idle 回包带上本次命令的输出');
 assert(typeof result1.cursor === 'number' && result1.cursor > 0, 'idle 回包带上绝对 cursor');
 
-console.log('2. 进程退出返回 done 与真实退出码');
+console.log('2. 输出持续期间不结算（data 会重新计时 quiet）');
+// 每次 data 到达都应把 quiet 定时器往后推。若 subscribeData 只是收下了回调
+// 而不重新计时，下面的任务会在第一次 armQuiet 起的 100ms 就返回。
+const streamStart = Date.now();
+const runStreaming = jobs.call('terminal_run', {
+  command: 'stream',
+  pane: '#3',
+  quietMs: 100,
+});
+for (const at of [0, 50, 100, 150]) {
+  const wait = at - (Date.now() - streamStart);
+  if (wait > 0) await sleep(wait);
+  emitData(`chunk-${at}\r\n`);
+}
+const streamResult = await runStreaming;
+const streamElapsed = Date.now() - streamStart;
+assert(streamResult.status === 'idle', '持续输出结束后安静即返回 idle');
+assert(
+  streamElapsed >= 230,
+  `最后一次输出后还要等满 quietMs 才返回（实测 ${streamElapsed}ms，首次计时会约 100ms）`,
+);
+assert(streamResult.output.includes('chunk-150'), '回包包含最后一次推送的输出');
+
+console.log('3. 进程退出返回 done 与真实退出码');
 const beforeExit = buffer.length;
 const run2 = jobs.call('terminal_run', { command: 'ls', pane: '#3', quietMs: 5000 });
 await sleep(5);
@@ -124,7 +147,7 @@ assert(result2.exitCode === 3, '退出码原样带回（不是缺省的 0）');
 assert(result2.output.includes('file-a.txt'), 'done 回包包含退出前的输出');
 assert(result2.cursor > beforeExit, 'done 回包的 cursor 前进了');
 
-console.log('3. 同一 session 并发被拒绝（pane-busy）');
+console.log('4. 同一 session 并发被拒绝（pane-busy）');
 const busyJob = jobs.call('terminal_run', {
   command: 'long-task',
   pane: '#3',
@@ -146,7 +169,7 @@ emitExit(0);
 const busyResult = await busyJob;
 assert(busyResult.status === 'done', '占用方退出后正常结算');
 
-console.log('4. 空命令被拒绝');
+console.log('5. 空命令被拒绝');
 written.length = 0;
 await expectCode(
   () => jobs.call('terminal_run', { command: '   ', pane: '#3' }),
@@ -160,7 +183,7 @@ await expectCode(
   '缺少 command 也返回 bad-request',
 );
 
-console.log('5. timeoutMs 超过 10 分钟被拒绝');
+console.log('6. timeoutMs 超过 10 分钟被拒绝');
 await expectCode(
   () => jobs.call('terminal_run', { command: 'x', pane: '#3', timeoutMs: 700000 }),
   'bad-request',
@@ -172,7 +195,7 @@ await expectCode(
   'terminal_wait 的 timeoutMs 超限返回 bad-request',
 );
 
-console.log('6. job_output 增量 cursor 不重复');
+console.log('7. job_output 增量 cursor 不重复');
 const beforeIncrement = buffer.length;
 const runIncrement = jobs.call('terminal_run', { command: 'echo inc', pane: '#3', quietMs: 40 });
 await sleep(5);
@@ -188,7 +211,7 @@ const incOver = jobs.call('job_output', { jobId: resultIncrement.jobId, cursor: 
 assert(incOver.output === '', 'cursor 越界时读不到内容');
 assert(incOver.cursor === incFirst.cursor + 9999, '越界 cursor 不回退');
 
-console.log('7. terminal_wait 先匹配已有输出');
+console.log('8. terminal_wait 先匹配已有输出');
 const waitMatched = await jobs.call('terminal_wait', {
   pane: '#3',
   pattern: 'inc-one',
@@ -198,7 +221,7 @@ assert(waitMatched.status === 'matched', '已有输出命中时立即返回 matc
 assert(waitMatched.match === 'inc-one', '带回命中的片段');
 assert(waitMatched.pane === '#3', '带回窗格编号');
 
-console.log('8. terminal_send 的 submit 语义');
+console.log('9. terminal_send 的 submit 语义');
 written.length = 0;
 const sentDefault = jobs.call('terminal_send', { pane: '#3', text: 'quit' });
 assert(sentDefault.ok === true, 'terminal_send 返回 ok');
@@ -206,7 +229,7 @@ assert(lastWrite().data === 'quit\r', 'submit 默认补回车');
 jobs.call('terminal_send', { pane: '#3', text: 'q', submit: false });
 assert(lastWrite().data === 'q', 'submit:false 原样发送不补回车');
 
-console.log('9. 路径与参数错误码');
+console.log('10. 路径与参数错误码');
 await expectCode(
   () => jobs.call('terminal_run', { command: 'x', pane: '#999' }),
   'pane-not-found',
@@ -250,15 +273,25 @@ await expectCode(
   '非法正则返回 bad-request',
 );
 
-console.log('10. 总超时返回 running 且占用不释放');
-const timedJob = jobs.call('terminal_run', {
-  command: 'slow-task',
-  pane: '#3',
-  timeoutMs: 40,
-  quietMs: 60000,
-});
-const timedResult = await timedJob;
+console.log('11. 总超时返回 running 且占用不释放');
+// 这个用例验证的是「超时返回后占用不释放」。
+// clampQuiet 会把 quietMs 截到不超过 timeoutMs，所以没法靠调大 quietMs 让
+// quiet 定时器晚到；这里持续推 data，把 quiet 的重计时刻始终保持在超时之后，
+// 这样 timeout 是确定性的胜出方，不依赖两个定时器同刻到期的先后顺序。
+const feed = setInterval(() => emitData('.'), 5);
+let timedResult;
+try {
+  timedResult = await jobs.call('terminal_run', {
+    command: 'slow-task',
+    pane: '#3',
+    timeoutMs: 40,
+    quietMs: 60000,
+  });
+} finally {
+  clearInterval(feed);
+}
 assert(timedResult.status === 'running', '总超时返回 running');
+assert(timedResult.exitCode === null, 'running 回包不带退出码');
 await expectCode(
   () => jobs.call('terminal_run', { command: 'next', pane: '#3' }),
   'pane-busy',
