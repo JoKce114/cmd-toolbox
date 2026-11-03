@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { webContents } = require('electron');
+const paneTools = require('./ai-tools/panes');
 
 const DEFAULT_PORT = 17382;
 
@@ -188,7 +189,7 @@ async function paneContent(pane) {
   };
 }
 
-const MCP_TOOLS = [
+const BUILTIN_TOOLS = [
   {
     name: 'list_panes',
     description:
@@ -257,7 +258,14 @@ const MCP_TOOLS = [
   },
 ];
 
+// 传输层只负责汇总工具表：内置的读取类工具留在本文件，建/关页签的工具
+// 来自 ai-tools/panes.js。
+const MCP_TOOLS = [...BUILTIN_TOOLS, ...paneTools.TOOLS];
+
 async function callMcpTool(name, args) {
+  if (paneTools.TOOLS.some((tool) => tool.name === name)) {
+    return paneTools.call(name, args || {}, { findPane, panes, groupKeyOf: () => '' });
+  }
   const pane = args && args.pane;
   if (name === 'list_panes') return dispatch('GET', '/panes', {});
   if (name === 'get_pane_content') {
@@ -348,6 +356,8 @@ async function dispatch(method, pathname, body) {
     return {
       panes: panes.map((pane) => ({
         paneNo: pane.paneNo,
+        id: pane.id,
+        groupKey: pane.groupKey || '',
         ref: `#${pane.paneNo}`,
         scopedRef: pane.groupName ? `${pane.groupName}#${pane.paneNo}` : `#${pane.paneNo}`,
         kind: pane.kind,
