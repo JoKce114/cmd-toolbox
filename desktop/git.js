@@ -430,8 +430,10 @@ async function merge(projectPath, branch) {
 
 function pushFailure(result) {
   const text = `${result.stdout}\n${result.stderr}`;
-  // 非快进是分叉场景，交给上层弹出「拉取合并 / 拉取变基 / 强制推送」的选择
-  if (/non-fast-forward|fetch first|\[rejected\]|rejected/i.test(text)) {
+  // 只认真正的非快进 / 分叉。裸 rejected 会命中 hook 或保护分支拒绝
+  // （`[remote rejected] ... (pre-receive hook declined)`），那时远端根本
+  // 没有该分支，按分叉处理会补写出指向不存在远端分支的上游配置。
+  if (/non-fast-forward|fetch first|stale info/i.test(text)) {
     return {
       ok: false,
       reason: 'rejected',
@@ -439,6 +441,15 @@ function pushFailure(result) {
     };
   }
   return null;
+}
+
+// hook / 保护分支拒绝写成 `! [remote rejected] a -> b (原因)`，
+// cleanError 只会取到最后那行 `error: failed to push some refs`，把原因丢掉，
+// 这里优先把拒绝原因带给用户
+function remoteRejection(result) {
+  const text = `${result.stdout}\n${result.stderr}`;
+  const match = text.match(/!\s*\[(?:remote )?rejected\][^\n]*\(([^)]+)\)/i);
+  return match ? `远端拒绝了推送（${match[1].trim()}）` : '';
 }
 
 async function push(projectPath, options = {}) {
@@ -449,7 +460,7 @@ async function push(projectPath, options = {}) {
     if (result.ok) return { ok: true, upstream, published: false };
     const failure = pushFailure(result);
     if (failure) return failure;
-    throw new Error(cleanError(result.error, result.stderr));
+    throw new Error(remoteRejection(result) || cleanError(result.error, result.stderr));
   }
 
   // 没有上游 = 分支还没发布过，push -u 一次完成建上游和推送
@@ -490,7 +501,7 @@ async function push(projectPath, options = {}) {
     await runGit(projectPath, ['config', `branch.${branch}.merge`, `refs/heads/${branch}`]);
     return failure;
   }
-  throw new Error(cleanError(result.error, result.stderr));
+  throw new Error(remoteRejection(result) || cleanError(result.error, result.stderr));
 }
 
 async function init(projectPath) {
@@ -527,7 +538,7 @@ async function pull(projectPath, options = {}) {
     return {
       ok: false,
       reason: 'no-upstream',
-      message: `当前分支没有上游，无法拉取。请先在终端执行 git push -u origin ${branch}`,
+      message: '当前分支没有上游，无法拉取。请先在源代码管理面板点击「发布」把分支发布到远端',
     };
   }
 

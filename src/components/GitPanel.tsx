@@ -214,7 +214,8 @@ export function GitPanel({
       status.ok &&
       status.remotes.length > 0 &&
       phase !== 'committed' &&
-      phase !== 'pushing',
+      phase !== 'pushing' &&
+      phase !== 'committing',
   );
 
   const pathsFor = (change: GitChange) =>

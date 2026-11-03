@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -295,5 +295,51 @@ run(noCommitRepo, ['remote', 'add', 'origin', base]);
 const noCommitPush = await git.push(noCommitRepo);
 assert(noCommitPush.ok === false && noCommitPush.reason === 'no-commit', '没有提交时返回 no-commit');
 assert(noCommitPush.message.includes('提交'), '提示说明没有提交');
+
+console.log('19. pre-receive hook 拒绝时不当作分叉，也不补写上游');
+const hookRemote = mkdtempSync(join(tmpdir(), 'publish-hook-remote-'));
+run(hookRemote, ['init', '--bare', '-b', 'main']);
+const hookDir = join(hookRemote, 'hooks');
+mkdirSync(hookDir, { recursive: true });
+const preReceive = join(hookDir, 'pre-receive');
+writeFileSync(preReceive, '#!/bin/sh\nexit 1\n');
+chmodSync(preReceive, 0o755);
+const hookRepo = mkdtempSync(join(tmpdir(), 'publish-hook-repo-'));
+run(hookRepo, ['init', '-b', 'main']);
+run(hookRepo, ['config', 'user.email', 't@e.com']);
+run(hookRepo, ['config', 'user.name', 'T']);
+run(hookRepo, ['config', 'commit.gpgsign', 'false']);
+writeFileSync(join(hookRepo, 'h.txt'), 'h\n');
+run(hookRepo, ['add', '-A']);
+run(hookRepo, ['commit', '-qm', 'hook base']);
+run(hookRepo, ['remote', 'add', 'origin', hookRemote]);
+run(hookRepo, ['checkout', '-q', '-b', 'hook-feature']);
+writeFileSync(join(hookRepo, 'hf.txt'), 'hf\n');
+run(hookRepo, ['add', '-A']);
+run(hookRepo, ['commit', '-qm', 'hook feature']);
+let hookPush;
+try {
+  hookPush = await git.push(hookRepo);
+} catch (error) {
+  hookPush = { ok: false, reason: 'threw', message: error.message };
+}
+assert(hookPush.ok === false && hookPush.reason !== 'rejected', 'hook 拒绝不返回 rejected');
+assert(/pre-receive hook declined/.test(hookPush.message), '错误信息带出 hook 拒绝原因');
+const configOf = (key) => {
+  try {
+    return run(hookRepo, ['config', '--get', key]).trim();
+  } catch {
+    return '';
+  }
+};
+assert(configOf('branch.hook-feature.remote') === '', '没有补写 branch.remote');
+assert(configOf('branch.hook-feature.merge') === '', '没有补写 branch.merge');
+let hookRemoteExists = true;
+try {
+  run(hookRemote, ['rev-parse', '--verify', '--quiet', 'refs/heads/hook-feature']);
+} catch {
+  hookRemoteExists = false;
+}
+assert(hookRemoteExists === false, '远端确实没有该分支');
 
 console.log(`\n全部通过：${passed} 项`);
