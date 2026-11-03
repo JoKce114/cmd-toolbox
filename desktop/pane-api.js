@@ -264,7 +264,7 @@ const MCP_TOOLS = [...BUILTIN_TOOLS, ...paneTools.TOOLS];
 
 async function callMcpTool(name, args) {
   if (paneTools.TOOLS.some((tool) => tool.name === name)) {
-    return paneTools.call(name, args || {}, { findPane, panes, groupKeyOf: () => '' });
+    return paneTools.call(name, args || {}, { findPane, panes });
   }
   const pane = args && args.pane;
   if (name === 'list_panes') return dispatch('GET', '/panes', {});
