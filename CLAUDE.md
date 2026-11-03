@@ -608,10 +608,15 @@ node tests/device-emulation-probe.mjs
   序列与 `\r` 重绘，不清理等于给 AI 一堆乱码。注意**不要**改
   `ptyHost.getOutputSlice` / `getLastOutput` 的原始缓冲——`get_pane_content`
   仍需要原始输出。
-- **job 只存在内存里**，绑定 sessionId，不落盘。**session 关闭时只释放占用**
-  （`release()` 清 `activeBySession` 与订阅，该终端可被再次使用），job 记录仍留在
-  `jobs` Map 里，`job_output` 仍能读到 `finalOutput` 快照——此时 pty-host 的缓冲
-  已经删了，退出快照是唯一来源。
+- **job 只存在内存里**，绑定 sessionId，不落盘。**命令安静或进程退出（含用户关页签）
+  时都会释放占用**（`release()` 清 `activeBySession` 与订阅），但 job 记录本身不删。
+  释放后能不能接着用，取决于终端还开不开：
+  - 终端仍开着（命令安静结束、或总超时后自行停止）→ 可被下一条命令复用；
+  - 终端已关闭（进程退出触发了 pty 删除，`isOpen` 为 false）→ 后续 `terminal_run`
+    直接返回 `pane-not-found`，需要重新 `open_terminal`，复用判定也要求 `!exited`。
+
+  无论哪种，job 记录都不删，留在 `jobs` Map 里，`job_output` 仍能读到
+  `finalOutput` 快照——终端关闭后 pty-host 的缓冲已经删了，退出快照是唯一来源。
 - **已结束的 job 保留 30 分钟，但清理是惰性的**：`pruneJobs()` 只在
   `terminal_run` 开头调用，长期没有新命令时旧记录会一直留着，不要按字面理解成
   「定时清理」。应用退出时随进程一起丢弃。
