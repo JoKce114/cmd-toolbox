@@ -242,6 +242,20 @@ declare global {
         ) => Promise<{ ok: boolean }>;
         trash: (projectPath: string, relPath: string) => Promise<{ ok: boolean }>;
       };
+      bridge: {
+        reply: (
+          requestId: string,
+          ok: boolean,
+          payload?: { message?: string; code?: string; [key: string]: unknown },
+        ) => void;
+        onRequest: (
+          handler: (message: {
+            requestId: string;
+            op: string;
+            payload: Record<string, unknown>;
+          }) => void,
+        ) => () => void;
+      };
       panes: {
         sync: (panes: Array<Record<string, unknown>>) => void;
         attachBrowser: (tabId: string, webContentsId: number) => void;

@@ -15,6 +15,7 @@ const updater = require('./updater');
 const symbols = require('./symbols');
 const { createLoginItem } = require('./login-item');
 const { listShells, listTools, resolveShell } = require('./shells');
+const aiBridge = require('./ai-bridge');
 
 const APP_NAME = 'Cmd Toolbox';
 const APP_ID = 'local.cmd.toolbox';
@@ -176,6 +177,15 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
+
+  // 每次重建窗口都重新注入：闭包读的是模块级 mainWindow，窗口换了也能发到新窗口。
+  aiBridge.configure({
+    send: (payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('bridge:request', payload);
+      }
+    },
+  });
 }
 
 function registerIpc() {
@@ -579,6 +589,10 @@ function registerIpc() {
   ipcMain.handle('clipboard:write', (_event, text) => {
     if (typeof text === 'string') clipboard.writeText(text);
     return true;
+  });
+
+  ipcMain.on('bridge:reply', (_event, requestId, ok, payload) => {
+    aiBridge.settle(requestId, Boolean(ok), payload);
   });
 
   ipcMain.on('panes:sync', (_event, next) => {
