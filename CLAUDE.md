@@ -577,6 +577,59 @@ node tests/device-emulation-probe.mjs
   `term.write()`（`ptyBus` 先跑全局处理器再跑会话处理器），加上 write 本身是异步的，
   读到的永远是上一帧甚至更早，表现为「快速回答全程不亮蓝」
 
+## AI 控制面（MCP）
+
+`desktop/pane-api.js` 是传输层（HTTP 路由 + token + JSON-RPC），工具实现分在
+`desktop/ai-tools/` 下，**不要把它重新写成一个什么都装的大文件**。
+
+- **主进程要渲染进程做事必须走 `desktop/ai-bridge.js`**。现有通道（`panes:sync`、
+  `browser:open-url`）都是单向 `send`，拿不到返回值；建页签的代码在渲染进程
+  （`App.tsx` 的 `createTerminal` / `createBrowser`），主进程只能委托。
+- **桥接 op 与 MCP 工具名是两套命名**：op 用 kebab-case（`create-terminal`），
+  MCP 工具名用 snake_case（`open_terminal`）。改名字时两处都要改。
+- **窗口未就绪时 `aiBridge.request` 立即 reject（`ui-unavailable`），不排队**。
+  排队会让 AI 以为操作已被接受。渲染进程超时未回包同样按 `ui-unavailable` 处理。
+- **`terminal_run` 的结束条件有三个**：进程退出、连续 `quietMs`（默认 1200ms，
+  上限 60000ms）无输出、总超时（默认 60s，上限 10 分钟）。交互式命令不会退出，
+  靠「安静」判定这一轮结束。三个条件缺一不可。
+- **总超时返回 `running` 后不释放终端占用**：job 已回包但命令可能还在跑，
+  `activeBySession` 继续占着该 session，直到输出安静或进程退出才释放。
+  这条不能省——提前释放会让下一条命令写进同一个 pty，两条输出交错，
+  前后两个 job 的 cursor 都会被污染。期间其它 `terminal_run` / `terminal_send`
+  返回 `pane-busy` 并带上正在跑的 jobId。
+- **输出 cursor 用绝对字符偏移，不能用 `getLastOutput().length` 当基线**。
+  `pty-host.js` 的缓冲按尾部截断到 32000 字符，旧内容会前移，用相对长度做
+  `baseOffset` 会在缓冲填满后永远切不到新内容（`job_output` 直接读到空串）。
+  现在 `pty-host.js` 用单调递增的 `totalLength` 记录绝对偏移，并提供
+  `getOutputSlice(id, fromOffset)`；`jobs.js` 的 cursor 就是 `endOffset`，
+  **只增不减**。请求的偏移早于缓冲区起点时返回 `truncated: true`。
+- **返回给 AI 的输出必须过 `cleanOutput`**（`ai-tools/ansi.js`）：pty 里全是 CSI/OSC
+  序列与 `\r` 重绘，不清理等于给 AI 一堆乱码。注意**不要**改
+  `ptyHost.getOutputSlice` / `getLastOutput` 的原始缓冲——`get_pane_content`
+  仍需要原始输出。
+- **job 只存在内存里**，绑定 sessionId；session 关闭或应用退出即丢弃，不落盘。
+  已结束的 job 保留 30 分钟供 `job_output` 轮询，之后清理。
+- **`terminal_run` 不传 pane 时按项目（groupKey）复用 AI 终端**，不是全局复用：
+  同项目内 `aiOwned && !exited && isOpen(sessionId) && 无正在跑的任务`，
+  没有才新建。项目取 `args.project`（项目名或 groupKey）、最近一次建终端的项目，
+  再退回任意 AI 页签的项目。新建的 AI 页签默认标题「AI 终端」、不随命令变化，
+  避免连续执行时标题反复跳。
+- **AI 页签识别只能靠 `aiOwned`**：`panes:sync` 载荷已补上该字段。
+  **不要**再用「标题是 AI 终端」之类的兜底——用户手动改名后就会误判，
+  把普通终端当成可复用目标。
+- **`aiOwned` 要能跨重启存活，四处缺一不可**：写端 `App.tsx` 的 `toSessionTab`、
+  读端 `desktop/session.js` 的 `normalizeTab`、渲染侧重建设四处
+  （`App.tsx` 恢复浏览器 / 差异 / 编辑器 / 终端页签，每个分支都要带
+  `aiOwned: Boolean(saved.aiOwned)`）、以及 `src/global.d.ts` 的 `SessionTab`
+  类型声明。漏一处，重启后标记就丢了，空页签会被别的任务误复用。
+- **`terminal_wait` 只在当前缓冲内匹配**：实测窗口约 32K（`MAX_MATCH_CHARS`
+  写的是 64K，但受 pty-host 32000 字符缓冲上限约束，实际只有最近 32K）。
+  先扫一次已有输出再订阅新数据；同时监听退出，会话中途退出返回 `exited`
+  并带回退出前的最后一帧快照（此时 pty-host 的缓冲已删除）。
+  缺省超时 30 秒，上限 10 分钟。
+- `tests/ai-ansi.mjs`、`tests/ai-jobs.mjs` 是离线用例；`tests/ai-bridge.mjs` 是端到端，
+  必须独占 17382 端口。
+
 ## IPC 约定
 
 `ipcMain.handle` → `desktop/preload.js` 的 `invoke()` 包装（带 `cleanError`）→
