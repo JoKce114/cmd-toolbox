@@ -1273,7 +1273,10 @@ export default function App() {
           await refreshGit();
           return false;
         }
-        pushToast(`已推送到 ${result.upstream}`, 'success');
+        pushToast(
+          result.published ? `已发布分支 ${result.upstream}` : `已推送到 ${result.upstream}`,
+          'success',
+        );
         await refreshGit();
         return true;
       } catch (error) {

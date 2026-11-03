@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -172,5 +172,174 @@ assert(noUpstreamResult.message.includes('上游'), '没有上游时提示明确
 console.log('10. 没有远程时 fetch 静默成功');
 const noRemoteResult = await git.fetchRemote(noUpstreamDir);
 assert(noRemoteResult.ok === true, 'fetch 在没有远程时不报错');
+
+console.log('11. 未发布的分支可以发布并建立上游');
+const publishRepo = clone('publish');
+run(publishRepo, ['checkout', '-q', '-b', 'feature']);
+const beforePublish = await git.status(publishRepo);
+assert(beforePublish.upstream === '', '新分支没有上游');
+assert(beforePublish.remotes.includes('origin'), 'status 带出远端列表');
+const publishResult = await git.push(publishRepo);
+assert(publishResult.ok === true && publishResult.published === true, '发布成功');
+assert(publishResult.upstream === 'origin/feature', '返回 origin/feature 作为上游');
+const afterPublish = await git.status(publishRepo);
+assert(afterPublish.upstream === 'origin/feature', '发布后上游已建立');
+assert(
+  run(base, ['rev-parse', '--verify', 'refs/heads/feature']).trim() ===
+    run(publishRepo, ['rev-parse', 'HEAD']).trim(),
+  '远端分支指向同一个提交',
+);
+
+console.log('12. 已发布分支再推送时 published 为 false');
+writeFileSync(join(publishRepo, 'feature.txt'), 'f\n');
+run(publishRepo, ['add', '-A']);
+run(publishRepo, ['commit', '-qm', 'feature work']);
+const republish = await git.push(publishRepo);
+assert(republish.ok === true && republish.published === false, '已有上游时 published 为 false');
+assert(republish.upstream === 'origin/feature', '上游保持不变');
+
+console.log('13. 没有远端时返回 no-remote');
+const noRemoteRepo = mkdtempSync(join(tmpdir(), 'publish-noremote-'));
+run(noRemoteRepo, ['init', '-b', 'main']);
+run(noRemoteRepo, ['config', 'user.email', 't@e.com']);
+run(noRemoteRepo, ['config', 'user.name', 'T']);
+run(noRemoteRepo, ['config', 'commit.gpgsign', 'false']);
+writeFileSync(join(noRemoteRepo, 'x.txt'), 'x\n');
+run(noRemoteRepo, ['add', '-A']);
+run(noRemoteRepo, ['commit', '-qm', 'init']);
+const noRemotePush = await git.push(noRemoteRepo);
+assert(noRemotePush.ok === false && noRemotePush.reason === 'no-remote', '没有远端时返回 no-remote');
+assert(noRemotePush.message.includes('远端'), '提示说明没有远端');
+
+console.log('14. 多个远端时 origin 优先，没有 origin 时报错');
+const multiRepo = clone('multi');
+const backup = mkdtempSync(join(tmpdir(), 'publish-backup-'));
+run(backup, ['init', '--bare', '-b', 'main']);
+run(multiRepo, ['remote', 'add', 'upstream', backup]);
+run(multiRepo, ['checkout', '-q', '-b', 'multi-feature']);
+const multiPush = await git.push(multiRepo);
+assert(
+  multiPush.ok === true && multiPush.upstream === 'origin/multi-feature',
+  '多个远端时优先 origin',
+);
+
+const ambiguousRepo = clone('ambiguous');
+run(ambiguousRepo, ['remote', 'rename', 'origin', 'alpha']);
+const beta = mkdtempSync(join(tmpdir(), 'publish-beta-'));
+run(beta, ['init', '--bare', '-b', 'main']);
+run(ambiguousRepo, ['remote', 'add', 'beta', beta]);
+run(ambiguousRepo, ['checkout', '-q', '-b', 'amb-feature']);
+const ambiguousPush = await git.push(ambiguousRepo);
+assert(
+  ambiguousPush.ok === false && ambiguousPush.reason === 'no-remote',
+  '多个远端且无 origin 时返回 no-remote',
+);
+assert(
+  ambiguousPush.message.includes('alpha') && ambiguousPush.message.includes('beta'),
+  '提示列出候选远端',
+);
+
+console.log('15. 只有一个非 origin 远端时使用它');
+const singleRepo = clone('single');
+run(singleRepo, ['remote', 'rename', 'origin', 'only']);
+run(singleRepo, ['checkout', '-q', '-b', 'only-feature']);
+const singlePush = await git.push(singleRepo);
+assert(
+  singlePush.ok === true && singlePush.upstream === 'only/only-feature',
+  '唯一远端被使用',
+);
+
+console.log('16. 游离 HEAD 返回 detached');
+const detachedRepo = clone('detached');
+run(detachedRepo, ['checkout', '-q', '--detach', 'HEAD']);
+const detachedPush = await git.push(detachedRepo);
+assert(
+  detachedPush.ok === false && detachedPush.reason === 'detached',
+  '游离 HEAD 返回 detached',
+);
+
+console.log('17. 发布被拒时补写上游，后续拉取不再报 no-upstream');
+const rejectRepo = clone('publish-reject');
+syncSeed();
+writeFileSync(join(seed, 'remote-only.txt'), 'r\n');
+run(seed, ['add', '-A']);
+run(seed, ['commit', '-qm', 'remote ahead']);
+run(seed, ['push', '-q', 'origin', 'main:publish-reject-feature']);
+run(rejectRepo, ['checkout', '-q', '-b', 'publish-reject-feature']);
+writeFileSync(join(rejectRepo, 'local.txt'), 'l\n');
+run(rejectRepo, ['add', '-A']);
+run(rejectRepo, ['commit', '-qm', 'local publish commit']);
+const rejectPush = await git.push(rejectRepo);
+assert(rejectPush.ok === false && rejectPush.reason === 'rejected', '发布被拒返回 rejected');
+assert(
+  run(rejectRepo, ['config', '--get', 'branch.publish-reject-feature.remote']).trim() === 'origin',
+  '被拒后补写 branch.remote',
+);
+assert(
+  run(rejectRepo, ['config', '--get', 'branch.publish-reject-feature.merge']).trim() ===
+    'refs/heads/publish-reject-feature',
+  '被拒后补写 branch.merge',
+);
+// 渲染侧推送失败后会先静默 fetch 再刷新状态，这里按同样顺序模拟
+await git.fetchRemote(rejectRepo);
+const pullAfterReject = await git.pull(rejectRepo);
+assert(
+  pullAfterReject.ok === false && pullAfterReject.reason === 'diverged',
+  '补写上游后拉取得 diverged 而不是 no-upstream',
+);
+
+console.log('18. 没有提交时不能发布');
+const noCommitRepo = mkdtempSync(join(tmpdir(), 'publish-nocommit-'));
+run(noCommitRepo, ['init', '-b', 'main']);
+run(noCommitRepo, ['remote', 'add', 'origin', base]);
+const noCommitPush = await git.push(noCommitRepo);
+assert(noCommitPush.ok === false && noCommitPush.reason === 'no-commit', '没有提交时返回 no-commit');
+assert(noCommitPush.message.includes('提交'), '提示说明没有提交');
+
+console.log('19. pre-receive hook 拒绝时不当作分叉，也不补写上游');
+const hookRemote = mkdtempSync(join(tmpdir(), 'publish-hook-remote-'));
+run(hookRemote, ['init', '--bare', '-b', 'main']);
+const hookDir = join(hookRemote, 'hooks');
+mkdirSync(hookDir, { recursive: true });
+const preReceive = join(hookDir, 'pre-receive');
+writeFileSync(preReceive, '#!/bin/sh\nexit 1\n');
+chmodSync(preReceive, 0o755);
+const hookRepo = mkdtempSync(join(tmpdir(), 'publish-hook-repo-'));
+run(hookRepo, ['init', '-b', 'main']);
+run(hookRepo, ['config', 'user.email', 't@e.com']);
+run(hookRepo, ['config', 'user.name', 'T']);
+run(hookRepo, ['config', 'commit.gpgsign', 'false']);
+writeFileSync(join(hookRepo, 'h.txt'), 'h\n');
+run(hookRepo, ['add', '-A']);
+run(hookRepo, ['commit', '-qm', 'hook base']);
+run(hookRepo, ['remote', 'add', 'origin', hookRemote]);
+run(hookRepo, ['checkout', '-q', '-b', 'hook-feature']);
+writeFileSync(join(hookRepo, 'hf.txt'), 'hf\n');
+run(hookRepo, ['add', '-A']);
+run(hookRepo, ['commit', '-qm', 'hook feature']);
+let hookPush;
+try {
+  hookPush = await git.push(hookRepo);
+} catch (error) {
+  hookPush = { ok: false, reason: 'threw', message: error.message };
+}
+assert(hookPush.ok === false && hookPush.reason !== 'rejected', 'hook 拒绝不返回 rejected');
+assert(/pre-receive hook declined/.test(hookPush.message), '错误信息带出 hook 拒绝原因');
+const configOf = (key) => {
+  try {
+    return run(hookRepo, ['config', '--get', key]).trim();
+  } catch {
+    return '';
+  }
+};
+assert(configOf('branch.hook-feature.remote') === '', '没有补写 branch.remote');
+assert(configOf('branch.hook-feature.merge') === '', '没有补写 branch.merge');
+let hookRemoteExists = true;
+try {
+  run(hookRemote, ['rev-parse', '--verify', '--quiet', 'refs/heads/hook-feature']);
+} catch {
+  hookRemoteExists = false;
+}
+assert(hookRemoteExists === false, '远端确实没有该分支');
 
 console.log(`\n全部通过：${passed} 项`);
