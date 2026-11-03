@@ -6,6 +6,10 @@ const DEFAULT_QUIET_MS = 1200;
 const MAX_QUIET_MS = 60000;
 const DEFAULT_TIMEOUT_MS = 60000;
 const MAX_TIMEOUT_MS = 600000;
+// terminal_wait 单独用 30 秒缺省，和工具描述保持一致
+const DEFAULT_WAIT_TIMEOUT_MS = 30000;
+// pattern 由 AI 生成，灾难性回溯会卡住主进程；terminal_wait 只匹配最近这一段输出。
+const MAX_MATCH_CHARS = 64 * 1024;
 // 新建页签后要等渲染进程把 panes:sync 送到主进程，findPane 才能定位。
 // 轮询到命中即返回，比固定 sleep 更快也更稳。
 const PANE_SYNC_TIMEOUT_MS = 3000;
@@ -379,6 +383,8 @@ function terminalSend(args = {}) {
 
 // 等某段输出出现。先查一次当前缓冲再订阅新数据——等服务就绪时，
 // 关键字往往在调用 terminal_wait 之前就已经打出来了。
+// 会话中途退出时立刻返回 exited，并把退出广播里的最后一帧快照带回去
+// （此时 pty-host 的缓冲已经删掉，读不到了）。
 function terminalWait(args = {}) {
   const pane = resolvePane(args.pane);
   if (!pane) throw fail('pane-not-found', '请用 list_panes 查看终端编号');
@@ -391,19 +397,26 @@ function terminalWait(args = {}) {
     // MCP 只透传 message，原生 SyntaxError 对 AI 没有诊断价值
     throw fail('bad-request', 'pattern 不是合法的正则');
   }
-  const timeoutMs = clampTimeout(args.timeoutMs || 30000);
+  const requested = Number(args.timeoutMs);
+  const timeoutMs = clampTimeout(
+    Number.isFinite(requested) && requested > 0 ? requested : DEFAULT_WAIT_TIMEOUT_MS,
+  );
   const sessionId = pane.sessionId;
   if (!sessionId || !isOpen(sessionId)) {
     throw fail('pane-not-found', '该终端已退出');
   }
   const paneLabel = `#${pane.paneNo}`;
 
-  // 每次都读全量缓冲：pattern 可能跨 chunk，只拼增量容易漏掉边界。
-  const readText = () => cleanOutput(normalizeSlice(getOutputSlice(sessionId, 0), 0).text);
+  // 每次重读全量缓冲：pattern 可能跨 chunk，只拼增量容易漏掉边界。
+  // 只保留尾部窗口，限制 ReDoS 的影响面。
+  const window = (text) => (text.length > MAX_MATCH_CHARS ? text.slice(-MAX_MATCH_CHARS) : text);
+  const readText = () => window(cleanOutput(normalizeSlice(getOutputSlice(sessionId, 0), 0).text));
+  const readExitText = (snapshot) => window(cleanOutput(normalizeSlice(snapshot, 0).text));
 
   return new Promise((resolve) => {
     let timer = null;
     let offData = null;
+    let offExit = null;
     let settled = false;
 
     const cleanup = () => {
@@ -414,40 +427,53 @@ function terminalWait(args = {}) {
         offData = null;
         off();
       }
+      if (offExit) {
+        const off = offExit;
+        offExit = null;
+        off();
+      }
     };
-    const succeed = (match) => {
+    const settle = (result) => {
       if (settled) return;
       settled = true;
-      const output = readText();
       cleanup();
-      resolve({ status: 'matched', match, output, pane: paneLabel });
-    };
-    const finish = (status) => {
-      if (settled) return;
-      settled = true;
-      const output = readText();
-      cleanup();
-      resolve({ status, output, pane: paneLabel });
+      resolve(result);
     };
 
-    const existing = regex.exec(readText());
+    const initial = readText();
+    const existing = regex.exec(initial);
     if (existing) {
-      succeed(existing[0]);
+      settle({ status: 'matched', match: existing[0], output: initial, pane: paneLabel });
       return;
     }
 
-    const off = subscribeData((dataSessionId) => {
-      if (dataSessionId !== sessionId) return;
-      const found = regex.exec(readText());
-      if (found) succeed(found[0]);
+    const offDataFn = subscribeData((dataSessionId) => {
+      if (dataSessionId !== sessionId || settled) return;
+      const text = readText();
+      const found = regex.exec(text);
+      if (found) settle({ status: 'matched', match: found[0], output: text, pane: paneLabel });
     });
     // subscribeData 若同步回调并命中，settled 已置位，这里补一次退订
     if (settled) {
-      off();
+      offDataFn();
       return;
     }
-    offData = off;
-    timer = setTimeout(() => finish('timeout'), timeoutMs);
+    offData = offDataFn;
+
+    const offExitFn = subscribeExit((exitSessionId, code, exitOutput) => {
+      if (exitSessionId !== sessionId || settled) return;
+      settle({ status: 'exited', output: readExitText(exitOutput), pane: paneLabel });
+    });
+    if (settled) {
+      offExitFn();
+      return;
+    }
+    offExit = offExitFn;
+
+    timer = setTimeout(() => {
+      if (settled) return;
+      settle({ status: 'timeout', output: readText(), pane: paneLabel });
+    }, timeoutMs);
   });
 }
 
@@ -501,7 +527,7 @@ const TOOLS = [
   {
     name: 'terminal_wait',
     description:
-      '等待终端输出匹配某个正则。先匹配已有输出，再等新输出。用于等服务启动就绪、等交互式 CLI 打出提示。返回 status（matched/timeout）与匹配片段。',
+      '等待终端输出匹配某个正则。先匹配已有输出，再等新输出；pattern 只会在最近 64K 字符的输出内匹配。用于等服务启动就绪、等交互式 CLI 打出提示。返回 status（matched/timeout/exited）与匹配片段；会话中途退出时返回 exited 及退出前的最后输出。',
     inputSchema: {
       type: 'object',
       properties: {
