@@ -150,8 +150,8 @@ assert(
 );
 await click(page.getByRole('button', { name: '提交', exact: true }));
 await waitFor(
-  async () => (await page.getByRole('button', { name: '推送', exact: true }).count()) > 0,
-  '提交后按钮变为「推送」',
+  async () => (await page.getByRole('button', { name: '发布', exact: true }).count()) > 0,
+  '提交后按钮变为「发布」',
 );
 assert((await page.locator('.git-message').isEditable()) === false, '输入框变为只读');
 const logged = execFileSync('git', ['log', '-1', '--pretty=%s'], {
@@ -182,7 +182,7 @@ assert(
   '输入框为空时提交按钮禁用',
 );
 
-console.log('5. 推送无上游时保留推送态');
+console.log('5. 没有远端时提交后显示「发布」并提示没有远端');
 // commit 不再自动暂存，第二次提交前同样需要先暂存
 await click(page.locator('.git-group-action[title="全部暂存"]'));
 await waitFor(
@@ -192,18 +192,24 @@ await waitFor(
 await page.locator('.git-message').fill('第二次提交');
 await click(page.getByRole('button', { name: '提交', exact: true }));
 await waitFor(
-  async () => (await page.getByRole('button', { name: '推送', exact: true }).count()) > 0,
-  '第二次提交后按钮变为「推送」',
+  async () => (await page.getByRole('button', { name: '发布', exact: true }).count()) > 0,
+  '第二次提交后按钮变为「发布」',
 );
-await click(page.getByRole('button', { name: '推送', exact: true }));
+await click(page.getByRole('button', { name: '发布', exact: true }));
 await waitFor(
   async () =>
-    (await page.locator('.toast').allInnerTexts()).some((text) => text.includes('上游')),
-  '推送失败提示包含上游信息',
+    (await page.locator('.toast').allInnerTexts()).some((text) =>
+      text.includes('没有配置远端'),
+    ),
+  '发布失败提示说明没有配置远端',
+);
+await waitFor(
+  async () => (await page.getByRole('button', { name: '发布', exact: true }).count()) > 0,
+  '失败后回到「发布」',
 );
 assert(
-  await page.getByRole('button', { name: '推送', exact: true }).isVisible(),
-  '失败后仍停留在「推送」',
+  await page.getByRole('button', { name: '发布', exact: true }).isVisible(),
+  '失败后仍停留在「发布」',
 );
 
 console.log('5b. 分支栏推送按钮按 ahead 常驻');
@@ -258,6 +264,46 @@ assert(
 await waitFor(
   async () => (await page.locator('.git-push-button').count()) === 0,
   '推送完成后按钮消失',
+);
+
+console.log('5e. 未发布分支显示发布按钮并完成发布');
+execFileSync('git', ['checkout', '-q', '-b', 'feature-publish'], { cwd: repo });
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-branch-name').innerText()) === 'feature-publish',
+  '切换到新分支',
+);
+await waitFor(
+  async () => (await page.locator('.git-publish-button').count()) > 0,
+  '未发布分支出现发布按钮',
+);
+assert(
+  (await page.locator('.git-push-button').count()) === 0,
+  '未发布时不显示推送按钮',
+);
+await click(page.locator('.git-publish-button'));
+await waitFor(
+  async () =>
+    (await page.locator('.toast').allInnerTexts()).some((text) => text.includes('已发布')),
+  '发布成功提示',
+);
+assert(
+  execFileSync('git', ['rev-parse', 'feature-publish'], {
+    cwd: remote,
+    encoding: 'utf8',
+  }).trim() ===
+    execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(),
+  '远端已有该分支',
+);
+await waitFor(
+  async () => (await page.locator('.git-publish-button').count()) === 0,
+  '发布完成后按钮消失',
+);
+execFileSync('git', ['checkout', '-q', 'main'], { cwd: repo });
+await click(page.locator('.git-icon-btn'));
+await waitFor(
+  async () => (await page.locator('.git-branch-name').innerText()) === 'main',
+  '回到 main',
 );
 
 console.log('5c. 推送被拒 → 取消 → 切项目 → 拉取合并 → 自动推送');
@@ -459,6 +505,12 @@ await waitFor(
 console.log('10b. 放弃未跟踪目录');
 mkdirSync(join(repo, 'scratch-dir', 'nested'), { recursive: true });
 writeFileSync(join(repo, 'scratch-dir', 'nested', 'x.txt'), 'x\n');
+// 上一节的放弃操作会触发一次刷新，按钮在刷新期间是禁用的；
+// 此时点击会被浏览器丢弃，必须等它恢复可用再点，否则这次刷新看不到新目录
+await waitFor(
+  async () => page.locator('.git-icon-btn').isEnabled(),
+  '刷新按钮空闲',
+);
 await click(page.locator('.git-icon-btn'));
 await waitFor(
   async () =>
@@ -626,6 +678,12 @@ await waitFor(
 await waitFor(
   async () => page.locator('.git-ops-more').isEnabled(),
   '提交结束后操作按钮恢复可用',
+);
+// git log 先于面板刷新更新，提交阶段结束前「修改提交」菜单项仍是禁用的，
+// 这时点它会被忽略、弹窗永远不出现
+await waitFor(
+  async () => page.locator('.git-submit').isEnabled(),
+  '面板提交阶段结束',
 );
 await chooseOpsMenu('修改提交');
 await page.locator('#amend-message').waitFor({ timeout: 8000 });
