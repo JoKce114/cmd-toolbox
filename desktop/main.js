@@ -179,11 +179,16 @@ function createWindow() {
   }
 
   // 每次重建窗口都重新注入：闭包读的是模块级 mainWindow，窗口换了也能发到新窗口。
+  // 窗口不在时必须抛错而不是静默跳过：ai-bridge 靠 send 抛错立即 reject，
+  // 否则请求会干等满 15s，AI 会误以为操作还在进行。
   aiBridge.configure({
     send: (payload) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('bridge:request', payload);
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        const error = new Error('窗口未就绪，无法执行该操作');
+        error.code = 'ui-unavailable';
+        throw error;
       }
+      mainWindow.webContents.send('bridge:request', payload);
     },
   });
 }

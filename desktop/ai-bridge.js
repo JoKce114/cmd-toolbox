@@ -41,9 +41,10 @@ function request(op, payload = {}, timeoutMs) {
 }
 
 function settle(requestId, ok, payload) {
-  const entry = pending.get(String(requestId || ''));
+  const key = String(requestId || '');
+  const entry = pending.get(key);
   if (!entry) return false;
-  pending.delete(requestId);
+  pending.delete(key);
   clearTimeout(entry.timer);
   if (ok) {
     entry.resolve(payload);
