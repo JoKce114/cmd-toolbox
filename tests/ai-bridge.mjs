@@ -1,6 +1,7 @@
 // AI 控制面的端到端测试：带 token 直接打 MCP HTTP 接口，验证
 // open_terminal / open_browser / close_pane 真的在渲染进程建出页签，
-// 并带上 AI 页签标记。
+// 并带上 AI 页签标记；随后在同一页签上验证 terminal_run / job_output /
+// terminal_send / terminal_wait 的执行、复用、增量读取与并发拒绝。
 //
 // 本文件是后续 AI 工具的测试骨架：startApp / mcpCall 可直接复用，
 // 新用例按编号往下追加即可。
@@ -250,6 +251,139 @@ try {
     '页签数 -1',
   );
   assert((await tabInfo(browser.pane)) === null, '被关闭的浏览器页签已从 DOM 消失');
+
+  // ---- 执行命令类工具 ----
+  // 后续用例都复用步骤 2 建的 AI 终端。默认 shell 是 cmd，
+  // 因此命令全部用 cmd 内建写法，不依赖外部程序。
+
+  console.log('5. terminal_run 复用同项目 AI 终端执行命令');
+  const tabsBeforeRun = await page.locator('.tab').count();
+  const run = await mcpCall('terminal_run', { project: 'ai-proj', command: 'echo hello-ai' });
+  assert(
+    run.status === 'done' || run.status === 'idle',
+    `命令结束时返回终态（实际 status=${run.status}）`,
+  );
+  assert(
+    typeof run.output === 'string' && run.output.includes('hello-ai'),
+    `输出含命令结果（实际：${String(run.output).slice(0, 200)}）`,
+  );
+  assert(
+    typeof run.pane === 'string' && run.pane.startsWith('#'),
+    `返回 pane 编号（实际：${JSON.stringify(run.pane)}）`,
+  );
+  assert(typeof run.jobId === 'string' && run.jobId.length > 0, '返回非空 jobId');
+  assert(
+    typeof run.cursor === 'number' && run.cursor > 0,
+    `返回大于 0 的 cursor（实际：${JSON.stringify(run.cursor)}）`,
+  );
+  assert(
+    run.pane === opened.pane,
+    `不传 pane 时复用步骤 2 的 AI 终端（返回 ${run.pane}，期望 ${opened.pane}）`,
+  );
+  // 「复用」不能只看命令跑通：页签数没有增加才说明没有新建
+  const tabsAfterRun = await page.locator('.tab').count();
+  assert(
+    tabsAfterRun === tabsBeforeRun,
+    `复用不新建页签（之前 ${tabsBeforeRun} 个，之后 ${tabsAfterRun} 个）`,
+  );
+  assert((await tabInfo(run.pane)) !== null, `复用的 AI 终端页签仍在 DOM 中（${run.pane}）`);
+
+  console.log('6. job_output 按 cursor 增量读取');
+  const tail = await mcpCall('job_output', { jobId: run.jobId, cursor: run.cursor });
+  assert(
+    typeof tail.cursor === 'number' && tail.cursor >= run.cursor,
+    `cursor 不回退（任务末尾 ${run.cursor}，读回 ${JSON.stringify(tail.cursor)}）`,
+  );
+  assert(
+    typeof tail.output === 'string' && !tail.output.includes('hello-ai'),
+    `从任务末尾 cursor 起不重复返回已读输出（实际：${String(tail.output).slice(0, 200)}）`,
+  );
+  const head = await mcpCall('job_output', { jobId: run.jobId, cursor: 0 });
+  assert(head.output.includes('hello-ai'), 'cursor=0 能读到该任务的输出');
+  assert(
+    head.cursor >= tail.cursor,
+    `从头读取的 cursor 覆盖到末尾（${head.cursor} >= ${tail.cursor}）`,
+  );
+
+  console.log('7. terminal_run 指定 pane 执行');
+  const explicit = await mcpCall('terminal_run', { command: 'echo again-ok', pane: run.pane });
+  assert(
+    explicit.status === 'done' || explicit.status === 'idle',
+    `指定 pane 的命令结束（实际 status=${explicit.status}）`,
+  );
+  assert(
+    explicit.output.includes('again-ok'),
+    `指定 pane 拿到输出（实际：${String(explicit.output).slice(0, 200)}）`,
+  );
+  assert(explicit.pane === run.pane, `返回的 pane 与指定的相同（${explicit.pane}）`);
+
+  console.log('8. 同 pane 并发返回 pane-busy');
+  const tabsBeforeLong = await page.locator('.tab').count();
+  // 长任务每约 1 秒打一行 tick，quietMs 内持续有输出，占用不会被提前释放。
+  // 不要用纯静默的 timeout：它不产生任何输出，1.2 秒后就会被判定 idle 并释放，
+  // 测不到并发拒绝。
+  const longCommand = 'for /l %i in (1,1,5) do @(ping -n 2 127.0.0.1 >nul & echo tick-%i)';
+  const longPromise = mcpCall('terminal_run', {
+    command: longCommand,
+    pane: run.pane,
+    quietMs: 4000,
+    timeoutMs: 30000,
+  });
+  // 断言提前失败时也要吃掉拒绝，避免未处理的 rejection 干扰后续清理
+  longPromise.catch(() => {});
+  const ticked = await mcpCall('terminal_wait', {
+    pane: run.pane,
+    pattern: 'tick-1',
+    timeoutMs: 10000,
+  });
+  assert(
+    ticked.status === 'matched',
+    `长命令确实开始输出，第一条 job 仍在运行（实际 status=${ticked.status}）`,
+  );
+  const busy = await mcpCall('terminal_run', { command: 'echo busy-probe', pane: run.pane }).then(
+    () => 'no-error',
+    (error) => String(error.message),
+  );
+  assert(busy.includes('pane-busy'), `并发命令被拒绝（实际：${busy.slice(0, 200)}）`);
+  const longResult = await longPromise;
+  assert(
+    longResult.status === 'done' || longResult.status === 'idle',
+    `长命令结束后释放占用（实际 status=${longResult.status}）`,
+  );
+  assert(
+    longResult.output.includes('tick-5'),
+    `长命令完整执行到第 5 轮（实际尾部：${String(longResult.output).slice(-300)}）`,
+  );
+  assert(
+    (await page.locator('.tab').count()) === tabsBeforeLong,
+    '并发拒绝没有新建页签',
+  );
+
+  console.log('9. terminal_send 向已有终端发按键');
+  // terminal_send 与 terminal_run 共用占用表：这里能成功，也证明上一条长任务已释放干净。
+  await mcpCall('terminal_send', { pane: run.pane, text: 'echo sent^inel-ok' });
+  // ^ 是 cmd 的转义符：命令回显里是 sent^inel-ok，只有真实输出才是 sentinel-ok，
+  // 这样匹配到的一定是命令结果，而不是终端对输入行的回显。
+  const sent = await mcpCall('terminal_wait', {
+    pane: run.pane,
+    pattern: 'sentinel-ok',
+    timeoutMs: 8000,
+  });
+  assert(sent.status === 'matched', `等到发送命令的输出（实际 status=${sent.status}）`);
+
+  console.log('10. terminal_wait 超时');
+  const waitStart = Date.now();
+  const timeoutResult = await mcpCall('terminal_wait', {
+    pane: run.pane,
+    pattern: 'never-appears-xyz-9f3a',
+    timeoutMs: 1000,
+  });
+  const waitedMs = Date.now() - waitStart;
+  assert(
+    timeoutResult.status === 'timeout',
+    `未命中时返回 timeout（实际 status=${timeoutResult.status}）`,
+  );
+  assert(waitedMs >= 700, `确实等满了超时时间（实际等了 ${waitedMs}ms）`);
 } finally {
   await app.close();
   rmSync(dataDir, { recursive: true, force: true });
