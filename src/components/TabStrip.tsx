@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
-import { ChevronDown, FileCode2, Plus, X } from 'lucide-react';
+import { ChevronDown, FileCode2, Plus, Sparkles, X } from 'lucide-react';
 import { cn } from '../lib';
 import { groupRuns, type TabRun } from '../tabGroups';
 import { MODEL_STATUS_LABEL, type ModelStatus } from '../sessionStatus';
@@ -297,6 +297,7 @@ export function TabStrip({
           inGroup && 'in-group',
           rightTabIds.includes(tab.id) && 'is-right',
           tab.exited && 'exited',
+          tab.aiOwned && 'is-ai',
           draggingId === tab.id && 'is-dragging',
           dropHint && dropHint.id === tab.id && dropHint.position === 'before' && 'drop-before',
           dropHint && dropHint.id === tab.id && dropHint.position === 'after' && 'drop-after',
@@ -305,7 +306,9 @@ export function TabStrip({
         aria-selected={active}
         tabIndex={active ? 0 : -1}
         draggable
-        title={`#${tab.paneNo} · ${group.name} · ${tab.descriptor}\n${tab.cwd}\n双击重命名用途`}
+        title={`#${tab.paneNo} · ${group.name} · ${tab.descriptor}\n${tab.cwd}${
+          tab.aiOwned ? '\n由 AI 打开' : ''
+        }\n双击重命名用途`}
         onClick={() => onSelectTab(tab.id)}
         onDoubleClick={() => onRenameTab(tab)}
         onContextMenu={(event) => onTabMenu(event, tab)}
@@ -325,6 +328,7 @@ export function TabStrip({
         {/* 项目色点在同组里颜色一致、标题也写着项目名，只在退出且没有状态灯时留一个灰点 */}
         {tab.exited && !showLamp ? <span className="tab-dot" /> : null}
         <span className="tab-title">
+          {tab.aiOwned ? <Sparkles size={11} className="tab-ai-icon" /> : null}
           {showLamp ? (
             <span
               className={cn('tab-lamp', `is-${modelStatus}`, unread && 'is-unread')}

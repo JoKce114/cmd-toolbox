@@ -97,6 +97,7 @@ function normalizeTab(value) {
     paneNo: Math.max(0, Math.min(999, Number(value.paneNo) || 0)),
     descriptor,
     custom: Boolean(value.custom),
+    aiOwned: Boolean(value.aiOwned),
     cwd: typeof value.cwd === 'string' ? value.cwd : '',
     url: typeof value.url === 'string' ? value.url.trim().slice(0, 2000) : '',
     device: normalizeDevice(value.device),

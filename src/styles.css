@@ -2523,6 +2523,20 @@ p {
   color: #9a9da5;
 }
 
+.tab.is-ai {
+  background-image: linear-gradient(180deg, rgba(139, 92, 246, 0.1), rgba(139, 92, 246, 0.04));
+}
+
+.tab.is-ai.active {
+  background-image: linear-gradient(180deg, rgba(139, 92, 246, 0.16), rgba(139, 92, 246, 0.06));
+}
+
+.tab-ai-icon {
+  flex: 0 0 auto;
+  margin-right: 3px;
+  color: #7c3aed;
+}
+
 .tab-close {
   flex: 0 0 18px;
   width: 18px;
