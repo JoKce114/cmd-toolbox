@@ -2018,8 +2018,10 @@ export default function App() {
           shellId: shell.id,
           seq,
           paneNo: nextPaneNo(groupTabs.map((item) => item.paneNo)),
-          descriptor: defaultTabTitle(shell.label),
-          custom: false,
+          // AI 打开的终端固定显示「AI 终端」，不随 shell 类型跳变；custom: true
+          // 让重启 shell / 会话恢复都保留这个标题，不会被 defaultTabTitle 覆盖回去
+          descriptor: options.aiOwned ? 'AI 终端' : defaultTabTitle(shell.label),
+          custom: Boolean(options.aiOwned),
           cwd: group.path,
           aiOwned: Boolean(options.aiOwned),
           exited: false,
@@ -2519,10 +2521,13 @@ export default function App() {
       const shell = info ? findLaunchTarget(info, tab.shellId) : undefined;
       const fallback = isBrowserTab(tab)
         ? '浏览器'
-        : defaultTabTitle(shell?.label || '终端');
+        : tab.aiOwned
+          ? 'AI 终端'
+          : defaultTabTitle(shell?.label || '终端');
       const value = rawDescriptor.trim().slice(0, 30);
       const descriptor = value || fallback;
-      const custom = Boolean(value) && value !== fallback;
+      // AI 终端即使留空恢复默认，也要保持固定标题，不能被 shell 名称顶掉
+      const custom = tab.aiOwned ? true : Boolean(value) && value !== fallback;
       const currentTabs = tabsRef.current[tab.groupKey] || [];
       applyTabs({
         ...tabsRef.current,
@@ -3657,9 +3662,11 @@ export default function App() {
           defaultDescriptor={
             isBrowserTab(renameContext.tab)
               ? '浏览器'
-              : defaultTabTitle(
-                  findLaunchTarget(info, renameContext.tab.shellId)?.label || '终端',
-                )
+              : renameContext.tab.aiOwned
+                ? 'AI 终端'
+                : defaultTabTitle(
+                    findLaunchTarget(info, renameContext.tab.shellId)?.label || '终端',
+                  )
           }
           onClose={closeRenameModal}
           onSave={(descriptor) => renameTab(renameContext.tab, descriptor)}

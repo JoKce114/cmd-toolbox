@@ -6,15 +6,13 @@
 // 新用例按编号往下追加即可。
 import { _electron as electron } from 'playwright-core';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const dataDir = mkdtempSync(join(tmpdir(), 'cmdtb-ai-data-'));
 const repo = mkdtempSync(join(tmpdir(), 'cmdtb-ai-repo-'));
-const shotDir = resolve(root, 'test-shots');
-mkdirSync(shotDir, { recursive: true });
 
 execFileSync('git', ['init', '-b', 'main'], { cwd: repo, stdio: 'ignore' });
 execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
@@ -86,6 +84,8 @@ async function waitFor(predicate, message, timeout = 15000) {
   }
 }
 
+// 只接受「真正的成功」：非 2xx、JSON-RPC error、空 content 都必须抛错，
+// 否则错误会被 JSON.parse('') 静默吞成空字符串，伪装成成功返回空值。
 async function mcpCall(name, args = {}) {
   const response = await fetch(`${base}/mcp?token=${token}`, {
     method: 'POST',
@@ -97,14 +97,46 @@ async function mcpCall(name, args = {}) {
       params: { name, arguments: args },
     }),
   });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`MCP ${name} 返回 HTTP ${response.status}：${body.slice(0, 200)}`);
+  }
   const payload = await response.json();
-  const text = payload.result?.content?.[0]?.text ?? '';
-  if (payload.result?.isError) throw new Error(text);
+  if (payload.error) {
+    throw new Error(
+      `MCP ${name} 返回 JSON-RPC 错误：${payload.error.message || JSON.stringify(payload.error)}`,
+    );
+  }
+  const text = payload.result?.content?.[0]?.text;
+  if (payload.result?.isError) {
+    throw new Error(`MCP ${name} 执行失败：${text || '（无错误信息）'}`);
+  }
+  if (typeof text !== 'string' || !text.trim()) {
+    throw new Error(
+      `MCP ${name} 返回了空内容：${JSON.stringify(payload).slice(0, 200)}`,
+    );
+  }
   try {
     return JSON.parse(text);
   } catch {
     return text;
   }
+}
+
+// 按 pane 编号（#N）精确找到一个页签，避免用 first() 被既有页签满足
+async function tabInfo(pane) {
+  return page.evaluate((value) => {
+    const tab = [...document.querySelectorAll('.tab')].find(
+      (node) => node.querySelector('.tab-pane')?.textContent?.trim() === value,
+    );
+    if (!tab) return null;
+    return {
+      isAi: tab.classList.contains('is-ai'),
+      hasIcon: Boolean(tab.querySelector('.tab-ai-icon')),
+      title: tab.querySelector('.tab-func')?.textContent?.trim() || '',
+      text: tab.innerText,
+    };
+  }, pane);
 }
 
 async function addProject(path, name) {
@@ -141,6 +173,11 @@ try {
 
   console.log('2. open_terminal 建出终端页签');
   const beforeTabs = await page.locator('.tab').count();
+  // 记录建之前的 AI 页签数，后面只认「增量」里新增的那一个
+  const aiTabsBefore = await page.locator('.tab.is-ai').count();
+  const aiTerminalTitlesBefore = (
+    await page.locator('.tab.is-ai .tab-func').allInnerTexts()
+  ).filter((title) => title.trim() === 'AI 终端').length;
   const opened = await mcpCall('open_terminal', { project: 'ai-proj' });
   assert(typeof opened.pane === 'string' && opened.pane.startsWith('#'), '返回 pane 编号');
   // scopedRef 形如 #N 或「项目名#N」；新建页签可能尚未同步到 panes，项目名会省略
@@ -154,17 +191,28 @@ try {
     async () => (await page.locator('.tab').count()) === beforeTabs + 1,
     '页签数 +1',
   );
-  assert((await page.locator('.tab').count()) === beforeTabs + 1, '页签数 +1');
-  assert((await page.locator('.tab.is-ai').count()) >= 1, '页签带 AI 标记');
-  assert((await page.locator('.tab.is-ai .tab-ai-icon').count()) >= 1, '页签带 AI 图标');
-  const aiTabText = await page.locator('.tab.is-ai').first().innerText();
-  // 终端页签的 descriptor 来自 defaultTabTitle(shell.label)，默认 shell 是
-  // 命令提示符，所以标题里是「命令提示符」而不是「AI 终端」。
-  assert(aiTabText.includes('命令提示符'), '页签标题为默认终端「命令提示符」');
-  console.log(`  info  页签实际文本：${JSON.stringify(aiTabText)}`);
+  await waitFor(
+    async () => (await page.locator('.tab.is-ai').count()) === aiTabsBefore + 1,
+    'AI 页签数 +1',
+  );
+  const aiTerminalTitlesAfter = (
+    await page.locator('.tab.is-ai .tab-func').allInnerTexts()
+  ).filter((title) => title.trim() === 'AI 终端').length;
+  assert(
+    aiTerminalTitlesAfter === aiTerminalTitlesBefore + 1,
+    '新增且仅新增一个标题为「AI 终端」的页签',
+  );
+  // 用返回的 pane 编号精确定位新页签，避免 first() 命中既有 AI 页签
+  const terminalTab = await tabInfo(opened.pane);
+  assert(terminalTab !== null, `按 pane ${opened.pane} 找到新页签`);
+  assert(terminalTab?.isAi === true, '新增页签带 .tab.is-ai');
+  assert(terminalTab?.hasIcon === true, '新增页签带 .tab-ai-icon');
+  assert(terminalTab?.title === 'AI 终端', '新增页签标题固定为「AI 终端」');
+  console.log(`  info  新页签实际文本：${JSON.stringify(terminalTab?.text)}`);
 
   console.log('3. open_browser 建出浏览器页签');
   const beforeBrowser = await page.locator('.tab').count();
+  const aiBrowserBefore = await page.locator('.tab.is-ai').count();
   const browser = await mcpCall('open_browser', { project: 'ai-proj', url: 'about:blank' });
   assert(typeof browser.pane === 'string' && browser.pane.startsWith('#'), '返回浏览器 pane');
   assert(
@@ -175,11 +223,15 @@ try {
     async () => (await page.locator('.tab').count()) === beforeBrowser + 1,
     '浏览器页签数 +1',
   );
-  assert(
-    (await page.locator('.tab').count()) === beforeBrowser + 1,
-    '浏览器页签数 +1',
+  await waitFor(
+    async () => (await page.locator('.tab.is-ai').count()) === aiBrowserBefore + 1,
+    '浏览器 AI 页签数 +1',
   );
-  assert((await page.locator('.tab.is-ai').count()) >= 2, '浏览器页签同样带 AI 标记');
+  const browserTab = await tabInfo(browser.pane);
+  assert(browserTab !== null, `按 pane ${browser.pane} 找到浏览器页签`);
+  assert(browserTab?.isAi === true, '浏览器页签带 .tab.is-ai');
+  assert(browserTab?.hasIcon === true, '浏览器页签带 .tab-ai-icon');
+  console.log(`  info  浏览器页签实际文本：${JSON.stringify(browserTab?.text)}`);
 
   console.log('4. close_pane 关闭页签');
   // findPane 读的是主进程里由 panes:sync 同步过来的列表，新页签可能还没到；
@@ -197,7 +249,7 @@ try {
     async () => (await page.locator('.tab').count()) === afterOpen - 1,
     '页签数 -1',
   );
-  assert((await page.locator('.tab').count()) === afterOpen - 1, '页签数 -1');
+  assert((await tabInfo(browser.pane)) === null, '被关闭的浏览器页签已从 DOM 消失');
 } finally {
   await app.close();
   rmSync(dataDir, { recursive: true, force: true });
