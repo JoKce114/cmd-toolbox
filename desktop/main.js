@@ -646,7 +646,9 @@ if (!hasLock) {
       jobs: (jobTools) => {
         jobTools.configure({
           writeSession: (sessionId, data) => ptyHost.writeSession(sessionId, data),
-          getLastOutput: (sessionId) => ptyHost.getLastOutput(sessionId),
+          // 绝对偏移切片：缓冲区按尾部截断，cursor 不能直接用缓冲长度
+          getOutputSlice: (sessionId, fromOffset) =>
+            ptyHost.getOutputSlice(sessionId, fromOffset),
           isOpen: (sessionId) => ptyHost.isOpen(sessionId),
           findPane: (ref) => paneApi.findPaneForTool(ref),
           panes: () => paneApi.listPanesForTool(),

@@ -3,6 +3,7 @@ const { cleanOutput } = require('./ansi');
 const aiBridge = require('../ai-bridge');
 
 const DEFAULT_QUIET_MS = 1200;
+const MAX_QUIET_MS = 60000;
 const DEFAULT_TIMEOUT_MS = 60000;
 const MAX_TIMEOUT_MS = 600000;
 // 新建页签后要等渲染进程把 panes:sync 送到主进程，findPane 才能定位。
@@ -13,7 +14,7 @@ const PANE_SYNC_POLL_MS = 50;
 const JOB_RETENTION_MS = 30 * 60 * 1000;
 
 let writeSession = () => {};
-let getLastOutput = () => '';
+let getOutputSlice = () => ({ text: '', startOffset: 0, endOffset: 0, truncated: false });
 let isOpen = () => false;
 let findPane = () => null;
 let listPanes = () => [];
@@ -21,14 +22,15 @@ let subscribeData = () => () => {};
 let subscribeExit = () => () => {};
 
 const jobs = new Map();
+// sessionId -> 占用它的 jobId。超时返回后仍保留，直到进程退出或安静下来，
+// 否则下一条命令会写进同一个 pty，两条命令的输出会交错。
 const activeBySession = new Map();
-// panes:sync 的载荷里暂时没有 aiOwned，terminal_run 自己建出来的终端先在本地
-// 记下 sessionId，下一次不传 pane 时才能复用它。
-const ownedSessions = new Set();
+// 最近一次建终端 / 复用的项目，作为 terminal_run 不传 project 时的缺省目标
+let lastGroupKey = '';
 
 function configure(options = {}) {
   if (typeof options.writeSession === 'function') writeSession = options.writeSession;
-  if (typeof options.getLastOutput === 'function') getLastOutput = options.getLastOutput;
+  if (typeof options.getOutputSlice === 'function') getOutputSlice = options.getOutputSlice;
   if (typeof options.isOpen === 'function') isOpen = options.isOpen;
   if (typeof options.findPane === 'function') findPane = options.findPane;
   if (typeof options.panes === 'function') listPanes = options.panes;
@@ -44,9 +46,9 @@ function fail(code, message) {
 }
 
 // aiBridge 的失败 Error 带 code，但 MCP 只透传 message，这里补上前缀。
-async function createTerminal() {
+async function createTerminal(groupKey) {
   try {
-    return await aiBridge.request('create-terminal', { groupKey: '' });
+    return await aiBridge.request('create-terminal', { groupKey: groupKey || '' });
   } catch (error) {
     const code = error && typeof error.code === 'string' ? error.code : '';
     if (!code) throw error;
@@ -65,9 +67,25 @@ function clampTimeout(value) {
   return Math.floor(number);
 }
 
+function clampQuiet(value, timeoutMs) {
+  const number = Number(value);
+  const base = Number.isFinite(number) && number > 0 ? Math.floor(number) : DEFAULT_QUIET_MS;
+  return Math.max(1, Math.min(base, MAX_QUIET_MS, timeoutMs));
+}
+
+// findPane 在编号跨项目重号时抛 status=409，转成带错误码的回包，
+// 不能让 AI 把它当成「页签不存在」。
 function resolvePane(ref) {
   if (!ref) return null;
-  const pane = findPane(ref);
+  let pane;
+  try {
+    pane = findPane(ref);
+  } catch (error) {
+    if (error && error.status === 409) {
+      throw fail('bad-request', error.message);
+    }
+    throw error;
+  }
   if (!pane) {
     throw fail('pane-not-found', '找不到这个终端窗格，请先用 list_panes 查看');
   }
@@ -77,22 +95,36 @@ function resolvePane(ref) {
   return pane;
 }
 
-function isAiOwned(pane) {
-  return Boolean(pane.aiOwned) || ownedSessions.has(pane.sessionId);
+// project 可以是 groupKey，也可以是项目名（渲染进程的 create-terminal 两者都认）。
+// 复用只认 groupKey，panes 里有 groupKey 和 groupName 可以直接换算。
+function resolveProjectHint(args) {
+  const wanted = typeof args.project === 'string' ? args.project.trim() : '';
+  const items = listPanes();
+  if (wanted) {
+    const lower = wanted.toLowerCase();
+    const hit =
+      items.find((pane) => pane.groupKey === wanted) ||
+      items.find((pane) => String(pane.groupName || '').toLowerCase() === lower);
+    return { groupKey: hit ? String(hit.groupKey || '') : wanted, label: wanted };
+  }
+  if (lastGroupKey) return { groupKey: lastGroupKey, label: lastGroupKey };
+  const aiPane = items.find((pane) => pane.aiOwned === true && pane.groupKey);
+  return aiPane ? { groupKey: String(aiPane.groupKey), label: String(aiPane.groupKey) } : null;
 }
 
-// 复用「AI 创建、未退出、无正在跑的任务」的终端页签。
-function findIdleAiPane() {
+// 复用「AI 创建、未退出、无正在跑的任务」的终端页签，且必须是目标项目。
+function findIdleAiPane(groupKey) {
   return (
     listPanes().find(
       (item) =>
         item &&
         item.kind === 'terminal' &&
-        isAiOwned(item) &&
+        item.aiOwned === true &&
         item.sessionId &&
         !item.exited &&
         isOpen(item.sessionId) &&
-        !activeBySession.has(item.sessionId),
+        !activeBySession.has(item.sessionId) &&
+        (!groupKey || item.groupKey === groupKey),
     ) || null
   );
 }
@@ -109,6 +141,7 @@ async function waitForPane(created) {
       try {
         pane = findPane(ref);
       } catch {
+        // 轮询期间 panes 里可能短暂出现重号，继续等
         pane = null;
       }
       if (pane) return pane;
@@ -121,40 +154,88 @@ async function waitForPane(created) {
 function pruneJobs() {
   const cutoff = Date.now() - JOB_RETENTION_MS;
   for (const [key, entry] of jobs) {
-    if (entry.settled && entry.finishedAt && entry.finishedAt < cutoff) jobs.delete(key);
-  }
-  for (const sessionId of ownedSessions) {
-    if (!isOpen(sessionId)) ownedSessions.delete(sessionId);
+    if (entry.released && entry.finishedAt && entry.finishedAt < cutoff) jobs.delete(key);
   }
 }
 
-function finish(job, status, exitCode, exitOutput) {
-  const entry = jobs.get(job.id);
-  if (!entry || entry.settled) return;
-  entry.settled = true;
+// 把 pty-host 的切片换算成「从 fromOffset 起的新内容 + 绝对 cursor」。
+// fromOffset 早于缓冲区起点时，缓冲区已丢弃那一段，truncated 置位。
+function normalizeSlice(source, fromOffset) {
+  const raw = source && typeof source === 'object' ? source : {};
+  const text = typeof raw.text === 'string' ? raw.text : '';
+  const endOffset = Number.isFinite(raw.endOffset) ? raw.endOffset : text.length;
+  const startOffset = Number.isFinite(raw.startOffset)
+    ? raw.startOffset
+    : Math.max(0, endOffset - text.length);
+  const from = Math.max(fromOffset, startOffset);
+  return {
+    text: from <= endOffset ? text.slice(from - startOffset) : '',
+    // cursor 只增不减：调用方传了越界的 cursor 时也不能让它回退
+    cursor: Math.max(endOffset, fromOffset),
+    truncated: fromOffset < startOffset,
+  };
+}
+
+function takeSlice(entry, fromOffset) {
+  if (entry.finalOutput) return normalizeSlice(entry.finalOutput, fromOffset);
+  return normalizeSlice(getOutputSlice(entry.sessionId, fromOffset), fromOffset);
+}
+
+function currentOffset(sessionId) {
+  const slice = getOutputSlice(sessionId, Number.MAX_SAFE_INTEGER);
+  if (slice && Number.isFinite(slice.endOffset)) return slice.endOffset;
+  return 0;
+}
+
+function release(entry) {
+  if (entry.released) return;
+  entry.released = true;
   entry.finishedAt = Date.now();
-  activeBySession.delete(entry.sessionId);
-  // 进程退出后 pty-host 会立刻删掉会话，getLastOutput 读不到了；
-  // 退出事件把最后一帧输出一起带过来，这里优先用它。
-  const hasExitOutput = typeof exitOutput === 'string';
-  const raw = hasExitOutput ? exitOutput : getLastOutput(entry.sessionId) || '';
-  // 只有退出才缓存快照。idle / running 的会话还活着，job_output 要继续读实时缓冲。
-  if (hasExitOutput) entry.finalRaw = raw;
+  if (activeBySession.get(entry.sessionId) === entry.id) {
+    activeBySession.delete(entry.sessionId);
+  }
+  if (typeof entry.cleanup === 'function') entry.cleanup();
+}
+
+function settlePromise(entry, result) {
+  if (entry.resolved) return;
+  entry.resolved = true;
+  entry.resolve(result);
+}
+
+function finish(entry, status, options = {}) {
+  if (entry.released) return;
+  if (options.exitOutput) {
+    entry.finalOutput = {
+      text: String(options.exitOutput.text || ''),
+      endOffset: Number(options.exitOutput.endOffset) || 0,
+    };
+  }
+  const slice = takeSlice(entry, entry.baseOffset);
+  entry.status = status;
+  entry.exitCode = typeof options.exitCode === 'number' ? options.exitCode : entry.exitCode;
   entry.result = {
     status,
-    exitCode: typeof exitCode === 'number' ? exitCode : null,
-    output: cleanOutput(raw.slice(entry.baseOffset)),
+    exitCode: status === 'done' ? entry.exitCode : null,
+    output: cleanOutput(slice.text),
     pane: `#${entry.paneNo}`,
     jobId: entry.id,
-    cursor: raw.length,
+    cursor: slice.cursor,
+    truncated: slice.truncated,
   };
-  if (typeof entry.cleanup === 'function') entry.cleanup();
-  entry.resolve(entry.result);
+  if (status === 'running') {
+    // 总超时先回包，但命令可能还在跑：保留占用与订阅，
+    // 等退出或安静后再释放，避免下一条命令和它抢同一个 pty。
+    settlePromise(entry, entry.result);
+    return;
+  }
+  release(entry);
+  settlePromise(entry, entry.result);
 }
 
 async function terminalRun(args = {}) {
-  const quietMs = Number(args.quietMs) > 0 ? Math.floor(Number(args.quietMs)) : DEFAULT_QUIET_MS;
   const timeoutMs = clampTimeout(args.timeoutMs);
+  const quietMs = clampQuiet(args.quietMs, timeoutMs);
   const command = String(args.command || '').trim();
   if (!command) throw fail('bad-request', 'command 不能为空');
 
@@ -162,19 +243,21 @@ async function terminalRun(args = {}) {
 
   let pane = resolvePane(args.pane);
   if (!pane) {
-    const reuse = findIdleAiPane();
+    const hint = resolveProjectHint(args);
+    const reuse = findIdleAiPane(hint ? hint.groupKey : '');
     if (reuse) {
       pane = reuse;
+      lastGroupKey = String(reuse.groupKey || hint?.groupKey || '');
     } else {
-      const created = await createTerminal();
+      const created = await createTerminal(hint ? hint.groupKey : '');
       const located = await waitForPane(created);
       if (!located) throw fail('ui-unavailable', '终端创建后无法定位');
       pane = located;
-      if (created && created.sessionId) {
-        ownedSessions.add(created.sessionId);
-        if (!pane.sessionId) pane = { ...pane, sessionId: created.sessionId };
-      }
+      const key = String((created && created.groupKey) || located.groupKey || hint?.groupKey || '');
+      if (key) lastGroupKey = key;
     }
+  } else if (pane.groupKey) {
+    lastGroupKey = String(pane.groupKey);
   }
 
   const sessionId = pane.sessionId;
@@ -188,7 +271,7 @@ async function terminalRun(args = {}) {
     throw error;
   }
 
-  const baseOffset = (getLastOutput(sessionId) || '').length;
+  const baseOffset = currentOffset(sessionId);
   const id = crypto.randomUUID();
   activeBySession.set(sessionId, id);
 
@@ -198,9 +281,12 @@ async function terminalRun(args = {}) {
       sessionId,
       paneNo: pane.paneNo,
       baseOffset,
-      settled: false,
+      status: 'running',
+      exitCode: null,
+      resolved: false,
+      released: false,
       finishedAt: 0,
-      finalRaw: null,
+      finalOutput: null,
       cleanup: null,
       resolve,
       result: null,
@@ -209,14 +295,20 @@ async function terminalRun(args = {}) {
 
     let quietTimer = null;
     let timeoutTimer = null;
-    const offData = subscribeData((dataSessionId) => {
-      if (dataSessionId !== sessionId) return;
+    const armQuiet = () => {
       if (quietTimer) clearTimeout(quietTimer);
       quietTimer = setTimeout(() => finish(entry, 'idle'), quietMs);
+    };
+    const offData = subscribeData((dataSessionId) => {
+      if (dataSessionId !== sessionId) return;
+      armQuiet();
     });
     const offExit = subscribeExit((exitSessionId, code, exitOutput) => {
       if (exitSessionId !== sessionId) return;
-      finish(entry, 'done', typeof code === 'number' ? code : 0, exitOutput);
+      finish(entry, 'done', {
+        exitCode: typeof code === 'number' ? code : 0,
+        exitOutput,
+      });
     });
 
     entry.cleanup = () => {
@@ -229,13 +321,13 @@ async function terminalRun(args = {}) {
     };
 
     timeoutTimer = setTimeout(() => finish(entry, 'running'), timeoutMs);
-    quietTimer = setTimeout(() => finish(entry, 'idle'), quietMs);
+    armQuiet();
 
     try {
       writeSession(sessionId, `${command}\r`);
     } catch (error) {
-      entry.settled = true;
-      activeBySession.delete(sessionId);
+      entry.released = true;
+      if (activeBySession.get(sessionId) === id) activeBySession.delete(sessionId);
       entry.cleanup();
       jobs.delete(id);
       reject(fail('ui-unavailable', error.message || String(error)));
@@ -247,15 +339,15 @@ function jobOutput(args = {}) {
   const entry = jobs.get(String(args.jobId || ''));
   if (!entry) throw fail('pane-not-found', '找不到这个 jobId，请重新执行命令');
   const cursor = Math.max(0, Math.floor(Number(args.cursor) || 0));
-  const raw =
-    typeof entry.finalRaw === 'string' ? entry.finalRaw : getLastOutput(entry.sessionId) || '';
-  const start = Math.min(cursor, raw.length);
+  // 会话退出后 pty-host 的缓冲已经没了，改用退出时带出来的快照
+  const slice = takeSlice(entry, cursor);
   return {
-    status: entry.settled && entry.result ? entry.result.status : 'running',
-    output: cleanOutput(raw.slice(start)),
-    cursor: raw.length,
+    status: entry.status || 'running',
+    output: cleanOutput(slice.text),
+    cursor: slice.cursor,
     jobId: entry.id,
     pane: `#${entry.paneNo}`,
+    truncated: slice.truncated,
   };
 }
 
@@ -263,13 +355,17 @@ const TOOLS = [
   {
     name: 'terminal_run',
     description:
-      '在终端里执行一条命令并等待结果。等到进程退出、或输出连续 quietMs 无变化、或超时后返回。返回 status（done/idle/running）、exitCode、output、pane、jobId、cursor。不传 pane 时自动复用 AI 终端页签。',
+      '在终端里执行一条命令并等待结果。等到进程退出、或输出连续 quietMs 无变化、或超时后返回。返回 status（done/idle/running）、exitCode、output、pane、jobId、cursor。不传 pane 时自动复用同项目的 AI 终端页签。',
     inputSchema: {
       type: 'object',
       properties: {
         command: { type: 'string', description: '要执行的命令' },
-        pane: { type: 'string', description: '目标终端，如 #3；省略则复用 AI 终端' },
-        quietMs: { type: 'number', description: '输出安静多久算结束，默认 1200' },
+        pane: { type: 'string', description: '目标终端，如 #3；省略则复用当前项目的 AI 终端' },
+        project: {
+          type: 'string',
+          description: '项目名或 groupKey，省略则用最近一次建终端的项目',
+        },
+        quietMs: { type: 'number', description: '输出安静多久算结束，默认 1200，上限 60000' },
         timeoutMs: { type: 'number', description: '总超时，默认 60000，上限 600000' },
       },
       required: ['command'],
@@ -277,7 +373,8 @@ const TOOLS = [
   },
   {
     name: 'job_output',
-    description: '读取某个任务自 cursor 以来的新增输出。长任务轮询用，避免重复拿全量。',
+    description:
+      '读取某个任务自 cursor 以来的新增输出。长任务轮询用，避免重复拿全量。cursor 是绝对字符偏移，原样回传即可。',
     inputSchema: {
       type: 'object',
       properties: {

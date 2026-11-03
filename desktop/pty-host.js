@@ -229,18 +229,25 @@ function spawnSession(payload, send) {
 
   let exitNotified = false;
   let lastOutput = '';
+  // 缓冲区按尾部截断，旧内容会前移；totalLength 是单调递增的绝对偏移，
+  // 用来把 AI 侧的 cursor 换算到当前缓冲区里的真实位置。
+  let totalLength = 0;
   const onData = (data) => {
+    totalLength += data.length;
     lastOutput = `${lastOutput}${data}`;
     if (lastOutput.length > 32000) lastOutput = lastOutput.slice(-32000);
     const session = sessions.get(id);
-    if (session) session.lastOutput = lastOutput;
+    if (session) {
+      session.lastOutput = lastOutput;
+      session.totalLength = totalLength;
+    }
     send('pty:data', id, data);
     emitGlobalData(id, data);
   };
   const onExit = (code, signal) => {
     if (exitNotified) return;
     exitNotified = true;
-    const finalOutput = lastOutput;
+    const finalOutput = { text: lastOutput, endOffset: totalLength };
     sessions.delete(id);
     send('pty:exit', id, code, signal);
     emitGlobalExit(id, code, finalOutput);
@@ -271,7 +278,8 @@ function spawnSession(payload, send) {
     groupKey,
     cwd,
     shellId: shell.id,
-    lastOutput: '',
+    lastOutput,
+    totalLength,
   });
 
   return { id };
@@ -424,9 +432,31 @@ function getLastOutput(id) {
   return session && session.lastOutput ? session.lastOutput : '';
 }
 
+// 按绝对偏移取输出。缓冲区只保留最近 32K，起点由 totalLength 反推；
+// 请求的 fromOffset 早于缓冲区起点时，返回从起点开始的内容并标记 truncated。
+function getOutputSlice(id, fromOffset) {
+  const session = sessions.get(id);
+  if (!session) return { text: '', startOffset: 0, endOffset: 0, truncated: false };
+  const text = session.lastOutput || '';
+  const endOffset =
+    typeof session.totalLength === 'number' ? session.totalLength : text.length;
+  const startOffset = Math.max(0, endOffset - text.length);
+  const requested = Number.isFinite(Number(fromOffset))
+    ? Math.floor(Number(fromOffset))
+    : startOffset;
+  const from = Math.max(requested, startOffset);
+  return {
+    text: from <= endOffset ? text.slice(from - startOffset) : '',
+    startOffset: from,
+    endOffset,
+    truncated: requested < startOffset,
+  };
+}
+
 module.exports = {
   setExtraEnv,
   getLastOutput,
+  getOutputSlice,
   spawnSession,
   writeSession,
   wheelSession,

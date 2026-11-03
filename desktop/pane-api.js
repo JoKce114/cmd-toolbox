@@ -18,10 +18,6 @@ let getTerminalOutput = () => '';
 // 网页里 target="_blank" / window.open 的去向由主进程决定，这里只负责把
 // 发起请求的页签和地址转出去
 let openUrlInNewTab = () => {};
-// panes:sync 的载荷里没有 aiOwned，主进程只能自己记：open_terminal 的返回带
-// sessionId，terminal_run 新建的由 jobs.js 自己记。重启后靠固定标题兜底。
-const aiSessions = new Set();
-const AI_TERMINAL_TITLE = 'AI 终端';
 
 function json(res, status, payload) {
   const body = Buffer.from(JSON.stringify(payload), 'utf8');
@@ -269,17 +265,7 @@ const MCP_TOOLS = [...BUILTIN_TOOLS, ...paneTools.TOOLS, ...jobTools.TOOLS];
 
 async function callMcpTool(name, args) {
   if (paneTools.TOOLS.some((tool) => tool.name === name)) {
-    const result = await paneTools.call(name, args || {}, { findPane, panes });
-    // 记住 AI 建出来的终端，terminal_run 不传 pane 时才有得复用
-    if (
-      name === 'open_terminal' &&
-      result &&
-      typeof result.sessionId === 'string' &&
-      result.sessionId
-    ) {
-      aiSessions.add(result.sessionId);
-    }
-    return result;
+    return paneTools.call(name, args || {}, { findPane, panes });
   }
   if (jobTools.TOOLS.some((tool) => tool.name === name)) {
     return jobTools.call(name, args || {});
@@ -622,26 +608,14 @@ function detachBrowser(tabId) {
   if (typeof tabId === 'string') guests.delete(tabId);
 }
 
-// 给 ai-tools/jobs.js 用的查询接口：findPane 在编号跨项目重复时会抛 409，
-// 工具层只需要 null，避免报错带着 status 一路冒到 HTTP 层。
+// 给 ai-tools/jobs.js 用的查询接口。findPane 在编号跨项目重复时会抛 409，
+// 原样透出，工具层会把它转成带错误码的回包，不能悄悄吞成「找不到」。
 function findPaneForTool(ref) {
-  try {
-    return findPane(ref);
-  } catch {
-    return null;
-  }
+  return findPane(ref);
 }
 
 function listPanesForTool() {
-  return panes.map((pane) => ({
-    ...pane,
-    // AI 创建的页签在重启前记在 aiSessions 里；重启后 sessionId 变了，
-    // 只能靠固定标题「AI 终端」识别。
-    aiOwned:
-      pane.aiOwned === true ||
-      aiSessions.has(pane.sessionId) ||
-      pane.descriptor === AI_TERMINAL_TITLE,
-  }));
+  return panes;
 }
 
 module.exports = {

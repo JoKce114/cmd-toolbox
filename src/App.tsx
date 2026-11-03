@@ -1687,6 +1687,8 @@ export default function App() {
         groupName: group?.name || '',
         sessionId: tab.sessionId,
         exited: tab.exited,
+        // AI 控制面靠这个标记复用「AI 创建的终端」，不能只凭标题猜
+        aiOwned: Boolean(tab.aiOwned),
       };
     });
     window.api.panes.sync(panes);
