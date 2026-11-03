@@ -642,6 +642,18 @@ if (!hasLock) {
     const mcp = await paneApi.start({
       dataDir: app.getPath('userData'),
       getTerminalOutput: (sessionId) => ptyHost.getLastOutput(sessionId),
+      // terminal_run 需要直接读写 pty，并监听所有会话的输出/退出
+      jobs: (jobTools) => {
+        jobTools.configure({
+          writeSession: (sessionId, data) => ptyHost.writeSession(sessionId, data),
+          getLastOutput: (sessionId) => ptyHost.getLastOutput(sessionId),
+          isOpen: (sessionId) => ptyHost.isOpen(sessionId),
+          findPane: (ref) => paneApi.findPaneForTool(ref),
+          panes: () => paneApi.listPanesForTool(),
+          subscribeData: (handler) => ptyHost.subscribeAllData(handler),
+          subscribeExit: (handler) => ptyHost.subscribeAllExit(handler),
+        });
+      },
       // 网页里的 target="_blank"：http(s) 在同一个项目里开新的浏览器页签，
       // mailto 交给系统，其余丢弃
       openUrlInNewTab: (tabId, url) => {

@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const { webContents } = require('electron');
 const paneTools = require('./ai-tools/panes');
+const jobTools = require('./ai-tools/jobs');
 
 const DEFAULT_PORT = 17382;
 
@@ -17,6 +18,10 @@ let getTerminalOutput = () => '';
 // 网页里 target="_blank" / window.open 的去向由主进程决定，这里只负责把
 // 发起请求的页签和地址转出去
 let openUrlInNewTab = () => {};
+// panes:sync 的载荷里没有 aiOwned，主进程只能自己记：open_terminal 的返回带
+// sessionId，terminal_run 新建的由 jobs.js 自己记。重启后靠固定标题兜底。
+const aiSessions = new Set();
+const AI_TERMINAL_TITLE = 'AI 终端';
 
 function json(res, status, payload) {
   const body = Buffer.from(JSON.stringify(payload), 'utf8');
@@ -260,11 +265,24 @@ const BUILTIN_TOOLS = [
 
 // 传输层只负责汇总工具表：内置的读取类工具留在本文件，建/关页签的工具
 // 来自 ai-tools/panes.js。
-const MCP_TOOLS = [...BUILTIN_TOOLS, ...paneTools.TOOLS];
+const MCP_TOOLS = [...BUILTIN_TOOLS, ...paneTools.TOOLS, ...jobTools.TOOLS];
 
 async function callMcpTool(name, args) {
   if (paneTools.TOOLS.some((tool) => tool.name === name)) {
-    return paneTools.call(name, args || {}, { findPane, panes });
+    const result = await paneTools.call(name, args || {}, { findPane, panes });
+    // 记住 AI 建出来的终端，terminal_run 不传 pane 时才有得复用
+    if (
+      name === 'open_terminal' &&
+      result &&
+      typeof result.sessionId === 'string' &&
+      result.sessionId
+    ) {
+      aiSessions.add(result.sessionId);
+    }
+    return result;
+  }
+  if (jobTools.TOOLS.some((tool) => tool.name === name)) {
+    return jobTools.call(name, args || {});
   }
   const pane = args && args.pane;
   if (name === 'list_panes') return dispatch('GET', '/panes', {});
@@ -489,6 +507,7 @@ function start(options) {
   if (typeof options.getTerminalOutput === 'function') {
     getTerminalOutput = options.getTerminalOutput;
   }
+  if (typeof options.jobs === 'function') options.jobs(jobTools);
   if (typeof options.openUrlInNewTab === 'function') {
     openUrlInNewTab = options.openUrlInNewTab;
   }
@@ -603,6 +622,28 @@ function detachBrowser(tabId) {
   if (typeof tabId === 'string') guests.delete(tabId);
 }
 
+// 给 ai-tools/jobs.js 用的查询接口：findPane 在编号跨项目重复时会抛 409，
+// 工具层只需要 null，避免报错带着 status 一路冒到 HTTP 层。
+function findPaneForTool(ref) {
+  try {
+    return findPane(ref);
+  } catch {
+    return null;
+  }
+}
+
+function listPanesForTool() {
+  return panes.map((pane) => ({
+    ...pane,
+    // AI 创建的页签在重启前记在 aiSessions 里；重启后 sessionId 变了，
+    // 只能靠固定标题「AI 终端」识别。
+    aiOwned:
+      pane.aiOwned === true ||
+      aiSessions.has(pane.sessionId) ||
+      pane.descriptor === AI_TERMINAL_TITLE,
+  }));
+}
+
 module.exports = {
   start,
   getInfo,
@@ -610,4 +651,6 @@ module.exports = {
   attachBrowser,
   detachBrowser,
   bindBrowserKeys,
+  findPaneForTool,
+  listPanesForTool,
 };
