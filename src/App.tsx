@@ -1720,8 +1720,9 @@ export default function App() {
         exited: false,
       };
       applyTabs({ ...tabsRef.current, [group.key]: insertTabIntoList(groupTabs, tab, tabGroupId) });
-      setActiveGroupKey(group.key);
+      // 焦点相关状态全部受 options.focus 控制：AI 页签不应把用户切到别的项目或页签
       if (options.focus !== false) {
+        setActiveGroupKey(group.key);
         const onRight =
           (focusSideByGroupRef.current[group.key] || 'left') === 'right' &&
           (rightIdsByGroupRef.current[group.key] || []).length > 0;
@@ -1977,8 +1978,8 @@ export default function App() {
     ): Promise<Tab | null> => {
       if (!info) return null;
       if (shellId === 'browser') {
-        createBrowser(group);
-        return null;
+        // 透传 AI 标记与焦点选项，并把页签返回给调用方，避免「建出来了却报失败」
+        return createBrowser(group, 'about:blank', options) ?? null;
       }
       const shell = findLaunchTarget(info, shellId);
       if (!shell) {
@@ -2028,8 +2029,9 @@ export default function App() {
           ...tabsRef.current,
           [group.key]: insertTabIntoList(groupTabs, tab, tabGroupId),
         });
-        setActiveGroupKey(group.key);
+        // 焦点相关状态全部受 options.focus 控制：AI 页签不应把用户切到别的项目或页签
         if (options.focus !== false) {
+          setActiveGroupKey(group.key);
           const onRight =
             (focusSideByGroupRef.current[group.key] || 'left') === 'right' &&
             (rightIdsByGroupRef.current[group.key] || []).length > 0;
@@ -2137,21 +2139,40 @@ export default function App() {
   useEffect(() => {
     const bridge = window.api?.bridge;
     if (!bridge) return;
+
+    // groupKey 或项目名都能命中；都没命中时退回当前激活项目
+    const findGroup = (wanted: string): Group | null => {
+      const key = wanted.trim();
+      if (key) {
+        const matched =
+          groupsByKeyRef.current.get(key) ||
+          [...groupsByKeyRef.current.values()].find(
+            (item) => item.name && item.name.toLowerCase() === key.toLowerCase(),
+          );
+        if (matched) return matched;
+      }
+      return groupsByKeyRef.current.get(activeGroupKeyRef.current) || null;
+    };
+
     return bridge.onRequest(async ({ requestId, op, payload }) => {
-      const reply = (ok: boolean, body?: unknown) =>
-        bridge.reply(requestId, ok, (body ?? {}) as Record<string, unknown>);
+      // 回包失败（例如窗口正在销毁）不能再往上抛，否则会变成未处理的 Promise 拒绝
+      const reply = (ok: boolean, body?: unknown) => {
+        try {
+          void Promise.resolve(
+            bridge.reply(requestId, ok, (body ?? {}) as Record<string, unknown>),
+          ).catch(() => {});
+        } catch {
+          // 渲染进程已不可用，没有别的通道能上报这次回包失败
+        }
+      };
       try {
+        if (!payload || typeof payload !== 'object') {
+          reply(false, { code: 'bad-request', message: '请求缺少 payload' });
+          return;
+        }
         if (op === 'create-terminal') {
           // project 可能是项目名，也可能为空（用当前激活项目）
-          const wanted = String(payload.groupKey || '').trim();
-          const group =
-            (wanted &&
-              (groupsByKeyRef.current.get(wanted) ||
-                [...groupsByKeyRef.current.values()].find(
-                  (item) => item.name && item.name.toLowerCase() === wanted.toLowerCase(),
-                ))) ||
-            groupsByKeyRef.current.get(activeGroupKeyRef.current) ||
-            null;
+          const group = findGroup(String(payload.groupKey || ''));
           if (!group) {
             reply(false, { code: 'no-project', message: '找不到该项目' });
             return;
@@ -2175,15 +2196,7 @@ export default function App() {
           return;
         }
         if (op === 'create-browser') {
-          const wanted = String(payload.groupKey || '').trim();
-          const group =
-            (wanted &&
-              (groupsByKeyRef.current.get(wanted) ||
-                [...groupsByKeyRef.current.values()].find(
-                  (item) => item.name && item.name.toLowerCase() === wanted.toLowerCase(),
-                ))) ||
-            groupsByKeyRef.current.get(activeGroupKeyRef.current) ||
-            null;
+          const group = findGroup(String(payload.groupKey || ''));
           if (!group) {
             reply(false, { code: 'no-project', message: '找不到该项目' });
             return;
@@ -2208,11 +2221,19 @@ export default function App() {
         if (op === 'close-pane') {
           const groupKey = String(payload.groupKey || '');
           const tabId = String(payload.tabId || '');
+          // closeTabs 对不存在的页签返回 true，所以必须先只读校验存在性，
+          // 否则「页签不存在」和「用户取消未保存确认」会被混成同一个结果
+          const exists = (tabsRef.current[groupKey] || []).some((tab) => tab.id === tabId);
+          if (!exists) {
+            reply(false, { code: 'pane-not-found', message: '页签已不存在' });
+            return;
+          }
           const closed = closeTabsRef.current(groupKey, [tabId]);
-          reply(
-            closed,
-            closed ? { closed: true } : { code: 'pane-not-found', message: '页签已不存在' },
-          );
+          if (!closed) {
+            reply(false, { code: 'cancelled', message: '用户取消关闭' });
+            return;
+          }
+          reply(true, { closed: true });
           return;
         }
         reply(false, { code: 'bad-request', message: `未知操作：${op}` });
