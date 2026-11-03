@@ -132,6 +132,23 @@ job 常驻内存，绑定 `sessionId`；session 关闭或应用退出即丢弃�
 | `terminal_send` | `{ pane, text, submit }`。`submit` 默认 true 补 `\r`；false 用于交互式 CLI 逐键输入 |
 | `terminal_wait` | `{ pane, pattern, timeoutMs }`。等到输出匹配正则即返回匹配片段与 `output`；超时返回 `status: 'timeout'` |
 
+### AI 页签的界面表现
+
+AI 创建的页签与普通页签**行为完全一致**（可点击、可手敲、可关闭、参与标签组与分屏、
+随会话恢复），只在视觉上做最小区分：
+
+| 项 | 取值 |
+|---|---|
+| 终端页签标题 | 固定 `AI 终端`，**不随命令变化**（避免连续执行命令时标题反复跳动） |
+| 浏览器页签标题 | 用网页真实标题，不改写 |
+| 图标 | 页签左侧一个 `Sparkles`（`lucide-react`）小图标 |
+| 底色 | 淡紫或淡青的低饱和底条，与现有灰色调区分但不抢眼 |
+| hover 提示 | 当前/last 命令全文 |
+| 聚焦行为 | **不抢焦点**。AI 在后台执行时用户正在看的页签不变 |
+
+落地为 `Tab` 类型新增 `aiOwned?: boolean`，`TabStrip` 据此渲染图标与底色；
+`desktop/session.js` 需放行该字段以便重启后恢复。
+
 ### 页签回收
 
 AI 不传 `pane` 时复用「AI 创建的、空闲、无正在跑的命令」的终端页签，没有才新建。
