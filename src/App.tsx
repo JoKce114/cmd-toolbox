@@ -1693,7 +1693,11 @@ export default function App() {
   }, [groupsByKey, tabsByGroup]);
 
   const createBrowser = useCallback(
-    (group: Group, url = 'about:blank') => {
+    (
+      group: Group,
+      url = 'about:blank',
+      options: { aiOwned?: boolean; focus?: boolean } = {},
+    ): Tab | void => {
       if (!group.exists) {
         pushToast('项目目录不存在，请先编辑项目路径', 'error');
         return;
@@ -1712,22 +1716,26 @@ export default function App() {
         custom: false,
         cwd: group.path,
         url,
+        aiOwned: Boolean(options.aiOwned),
         exited: false,
       };
       applyTabs({ ...tabsRef.current, [group.key]: insertTabIntoList(groupTabs, tab, tabGroupId) });
       setActiveGroupKey(group.key);
-      const onRight =
-        (focusSideByGroupRef.current[group.key] || 'left') === 'right' &&
-        (rightIdsByGroupRef.current[group.key] || []).length > 0;
-      if (onRight) {
-        setRightIdsByGroup((previous) => ({
-          ...previous,
-          [group.key]: [...(previous[group.key] || []), tab.id],
-        }));
-        setRightActiveByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
-      } else {
-        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+      if (options.focus !== false) {
+        const onRight =
+          (focusSideByGroupRef.current[group.key] || 'left') === 'right' &&
+          (rightIdsByGroupRef.current[group.key] || []).length > 0;
+        if (onRight) {
+          setRightIdsByGroup((previous) => ({
+            ...previous,
+            [group.key]: [...(previous[group.key] || []), tab.id],
+          }));
+          setRightActiveByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+        } else {
+          setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+        }
       }
+      return tab;
     },
     [applyTabs, inheritedTabGroupId, pushToast],
   );
@@ -1962,7 +1970,11 @@ export default function App() {
   );
 
   const createTerminal = useCallback(
-    async (group: Group, shellId?: string): Promise<Tab | null> => {
+    async (
+      group: Group,
+      shellId?: string,
+      options: { aiOwned?: boolean; focus?: boolean } = {},
+    ): Promise<Tab | null> => {
       if (!info) return null;
       if (shellId === 'browser') {
         createBrowser(group);
@@ -2008,6 +2020,7 @@ export default function App() {
           descriptor: defaultTabTitle(shell.label),
           custom: false,
           cwd: group.path,
+          aiOwned: Boolean(options.aiOwned),
           exited: false,
         };
 
@@ -2016,17 +2029,19 @@ export default function App() {
           [group.key]: insertTabIntoList(groupTabs, tab, tabGroupId),
         });
         setActiveGroupKey(group.key);
-        const onRight =
-          (focusSideByGroupRef.current[group.key] || 'left') === 'right' &&
-          (rightIdsByGroupRef.current[group.key] || []).length > 0;
-        if (onRight) {
-          setRightIdsByGroup((previous) => ({
-            ...previous,
-            [group.key]: [...(previous[group.key] || []), tab.id],
-          }));
-          setRightActiveByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
-        } else {
-          setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+        if (options.focus !== false) {
+          const onRight =
+            (focusSideByGroupRef.current[group.key] || 'left') === 'right' &&
+            (rightIdsByGroupRef.current[group.key] || []).length > 0;
+          if (onRight) {
+            setRightIdsByGroup((previous) => ({
+              ...previous,
+              [group.key]: [...(previous[group.key] || []), tab.id],
+            }));
+            setRightActiveByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+          } else {
+            setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
+          }
         }
         return tab;
       } catch (error) {
@@ -2110,6 +2125,102 @@ export default function App() {
     },
     [applyTabs, setGroupUntitledContents],
   );
+
+  // AI 通过 MCP 请求建页签：真正建页签的代码在渲染进程，主进程只能通过桥接委托。
+  // createTerminal / closeTabs 声明在本段之上，ref 直接取当前值即可，不会踩到 TDZ。
+  const createTerminalRef = useRef(createTerminal);
+  createTerminalRef.current = createTerminal;
+  const closeTabsRef = useRef(closeTabs);
+  closeTabsRef.current = closeTabs;
+  // activeGroupKeyRef 已在文件上方定义，直接复用，不要重复声明
+
+  useEffect(() => {
+    const bridge = window.api?.bridge;
+    if (!bridge) return;
+    return bridge.onRequest(async ({ requestId, op, payload }) => {
+      const reply = (ok: boolean, body?: unknown) =>
+        bridge.reply(requestId, ok, (body ?? {}) as Record<string, unknown>);
+      try {
+        if (op === 'create-terminal') {
+          // project 可能是项目名，也可能为空（用当前激活项目）
+          const wanted = String(payload.groupKey || '').trim();
+          const group =
+            (wanted &&
+              (groupsByKeyRef.current.get(wanted) ||
+                [...groupsByKeyRef.current.values()].find(
+                  (item) => item.name && item.name.toLowerCase() === wanted.toLowerCase(),
+                ))) ||
+            groupsByKeyRef.current.get(activeGroupKeyRef.current) ||
+            null;
+          if (!group) {
+            reply(false, { code: 'no-project', message: '找不到该项目' });
+            return;
+          }
+          const tab = await createTerminalRef.current(
+            group,
+            typeof payload.shellId === 'string' ? payload.shellId : undefined,
+            { aiOwned: true, focus: false },
+          );
+          if (!tab) {
+            reply(false, { code: 'ui-unavailable', message: '终端创建失败' });
+            return;
+          }
+          reply(true, {
+            tabId: tab.id,
+            paneNo: tab.paneNo,
+            pane: `#${tab.paneNo}`,
+            sessionId: tab.sessionId,
+            groupKey: group.key,
+          });
+          return;
+        }
+        if (op === 'create-browser') {
+          const wanted = String(payload.groupKey || '').trim();
+          const group =
+            (wanted &&
+              (groupsByKeyRef.current.get(wanted) ||
+                [...groupsByKeyRef.current.values()].find(
+                  (item) => item.name && item.name.toLowerCase() === wanted.toLowerCase(),
+                ))) ||
+            groupsByKeyRef.current.get(activeGroupKeyRef.current) ||
+            null;
+          if (!group) {
+            reply(false, { code: 'no-project', message: '找不到该项目' });
+            return;
+          }
+          const tab = createBrowserRef.current(
+            group,
+            typeof payload.url === 'string' && payload.url ? payload.url : 'about:blank',
+            { aiOwned: true, focus: false },
+          ) as Tab | undefined;
+          if (!tab) {
+            reply(false, { code: 'ui-unavailable', message: '浏览器创建失败' });
+            return;
+          }
+          reply(true, {
+            tabId: tab.id,
+            paneNo: tab.paneNo,
+            pane: `#${tab.paneNo}`,
+            groupKey: group.key,
+          });
+          return;
+        }
+        if (op === 'close-pane') {
+          const groupKey = String(payload.groupKey || '');
+          const tabId = String(payload.tabId || '');
+          const closed = closeTabsRef.current(groupKey, [tabId]);
+          reply(
+            closed,
+            closed ? { closed: true } : { code: 'pane-not-found', message: '页签已不存在' },
+          );
+          return;
+        }
+        reply(false, { code: 'bad-request', message: `未知操作：${op}` });
+      } catch (error) {
+        reply(false, { code: 'ui-unavailable', message: toErrorMessage(error) });
+      }
+    });
+  }, []);
 
   const createTabGroup = useCallback(
     (groupKey: string, tabId: string) => {
