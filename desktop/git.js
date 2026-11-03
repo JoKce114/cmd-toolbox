@@ -78,6 +78,21 @@ async function upstreamOf(projectPath) {
   return result.ok ? result.stdout.trim() : '';
 }
 
+async function listRemotes(projectPath) {
+  const result = await runGit(projectPath, ['remote']);
+  if (!result.ok) return [];
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+// 空仓库（尚无提交）没有 HEAD，只能从符号引用取分支名
+async function symbolicBranch(projectPath) {
+  const result = await runGit(projectPath, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  return result.ok ? result.stdout.trim() : '';
+}
+
 function runGit(cwd, args, options = {}) {
   return new Promise((resolve) => {
     execFile(
@@ -226,7 +241,9 @@ async function status(projectPath) {
     }
     return { ok: false, reason: 'error', message: cleanError(result.error, result.stderr) };
   }
-  return parseStatus(result.stdout);
+  const parsed = parseStatus(result.stdout);
+  parsed.remotes = await listRemotes(projectPath);
+  return parsed;
 }
 
 async function commit(projectPath, message) {
@@ -411,21 +428,7 @@ async function merge(projectPath, branch) {
   throw new Error(cleanError(result.error, result.stderr));
 }
 
-async function push(projectPath, options = {}) {
-  const upstream = await upstreamOf(projectPath);
-  if (!upstream) {
-    const branch = (await currentBranch(projectPath)) || '当前分支';
-    return {
-      ok: false,
-      reason: 'no-upstream',
-      message: `当前分支没有上游，请先在终端执行 git push -u origin ${branch}`,
-    };
-  }
-
-  const args = options.force ? ['push', '--force-with-lease'] : ['push'];
-  const result = await runGit(projectPath, args, { timeout: PUSH_TIMEOUT });
-  if (result.ok) return { ok: true, upstream };
-
+function pushFailure(result) {
   const text = `${result.stdout}\n${result.stderr}`;
   // 非快进是分叉场景，交给上层弹出「拉取合并 / 拉取变基 / 强制推送」的选择
   if (/non-fast-forward|fetch first|\[rejected\]|rejected/i.test(text)) {
@@ -435,6 +438,45 @@ async function push(projectPath, options = {}) {
       message: '线上分支有本地没有的提交，推送被拒绝',
     };
   }
+  return null;
+}
+
+async function push(projectPath, options = {}) {
+  const upstream = await upstreamOf(projectPath);
+  if (upstream) {
+    const args = options.force ? ['push', '--force-with-lease'] : ['push'];
+    const result = await runGit(projectPath, args, { timeout: PUSH_TIMEOUT });
+    if (result.ok) return { ok: true, upstream, published: false };
+    const failure = pushFailure(result);
+    if (failure) return failure;
+    throw new Error(cleanError(result.error, result.stderr));
+  }
+
+  // 没有上游 = 分支还没发布过，push -u 一次完成建上游和推送
+  const branch = (await currentBranch(projectPath)) || (await symbolicBranch(projectPath));
+  if (!branch || branch === 'HEAD') {
+    return { ok: false, reason: 'detached', message: '当前不在任何分支上，无法发布分支' };
+  }
+
+  const remotes = await listRemotes(projectPath);
+  if (!remotes.length) {
+    return { ok: false, reason: 'no-remote', message: '没有配置远端仓库，无法发布分支' };
+  }
+  const remote = remotes.includes('origin') ? 'origin' : remotes.length === 1 ? remotes[0] : '';
+  if (!remote) {
+    return {
+      ok: false,
+      reason: 'no-remote',
+      message: `仓库有多个远端（${remotes.join('、')}）且没有 origin，请在终端指定要发布到哪个远端`,
+    };
+  }
+
+  const args = ['push', '-u', remote, branch];
+  if (options.force) args.push('--force-with-lease');
+  const result = await runGit(projectPath, args, { timeout: PUSH_TIMEOUT });
+  if (result.ok) return { ok: true, upstream: `${remote}/${branch}`, published: true };
+  const failure = pushFailure(result);
+  if (failure) return failure;
   throw new Error(cleanError(result.error, result.stderr));
 }
 
