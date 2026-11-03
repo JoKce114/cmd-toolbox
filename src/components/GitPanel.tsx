@@ -207,7 +207,15 @@ export function GitPanel({
   const unpublished = Boolean(
     status && status.ok && !status.upstream && status.branch !== '游离 HEAD',
   );
-  const canPublish = Boolean(unpublished && status && status.ok && status.remotes.length > 0);
+  // 分支栏的发布与提交块里的「发布」互斥，规则和推送一样按阶段避让
+  const canPublish = Boolean(
+    unpublished &&
+      status &&
+      status.ok &&
+      status.remotes.length > 0 &&
+      phase !== 'committed' &&
+      phase !== 'pushing',
+  );
 
   const pathsFor = (change: GitChange) =>
     change.origPath ? [change.origPath, change.path] : [change.path];
