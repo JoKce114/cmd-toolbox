@@ -3437,6 +3437,8 @@ export default function App() {
           highlightActiveLine={prefs.editorHighlightActiveLine}
           bracketMatching={prefs.editorBracketMatching}
           showWhitespace={prefs.editorShowWhitespace}
+          blameEnabled={prefs.editorBlameEnabled}
+          blameHoverDelay={prefs.editorBlameHoverDelay}
           enabledModules={prefs.enabledModules}
           onFontSizeDelta={(delta) => {
             setPrefs((previous) => {

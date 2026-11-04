@@ -80,6 +80,10 @@ export type EditorPaneProps = {
   highlightActiveLine: boolean;
   bracketMatching: boolean;
   showWhitespace: boolean;
+  // 点行号 / 行内正文时是否查询该行的提交信息
+  blameEnabled: boolean;
+  // 悬停在内联小字上多久才弹出卡片（毫秒）
+  blameHoverDelay: number;
   enabledModules: string[];
   onFontSizeDelta: (delta: number) => void;
   // 页签对应的文件路径变化（空白窗口新建 / 另存为后换真实路径）
@@ -118,6 +122,8 @@ export function EditorPane({
   highlightActiveLine,
   bracketMatching,
   showWhitespace,
+  blameEnabled,
+  blameHoverDelay,
   enabledModules,
   onFontSizeDelta,
   onFilePathChange,
@@ -1269,8 +1275,12 @@ export function EditorPane({
                   onConflictCountChange={setConflictCount}
                   changeMarkers={changeMarkers}
                   blameEnabled={
-                    Boolean(activePath) && !file.readOnly && !isUntitledPath(activePath)
+                    blameEnabled &&
+                    Boolean(activePath) &&
+                    !file.readOnly &&
+                    !isUntitledPath(activePath)
                   }
+                  blameHoverDelay={blameHoverDelay}
                   blameBlocked={Boolean(file.dirty)}
                 />
                 <EditorOverviewRuler changes={changeMarkers} />

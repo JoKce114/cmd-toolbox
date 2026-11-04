@@ -153,6 +153,8 @@ console.log('2b. 点击行号看 blame');
   await page.locator('.cm-blame-inline').first().hover();
   await page.locator('.blame-card').waitFor({ timeout: 8000 });
   assert(await page.locator('.blame-card').count() > 0, '悬停弹出 blame 卡片');
+  // 片段是悬停后才去取的，卡片先显示占位；等它换成真正的 diff 行
+  await page.locator('.blame-card .blame-diff-row').first().waitFor({ timeout: 8000 });
   assert(
     await page.locator('.blame-card .blame-diff-row').count() > 0,
     '卡片里有 diff 片段',

@@ -24,11 +24,13 @@ function relativeTime(epochSeconds: number): string {
 export type BlameCardState = {
   info: BlameInfo;
   hunk: DiffHunk | null;
+  // 片段还在取，显示占位而不是「该提交没有可展示的片段」
+  loading?: boolean;
 };
 
 export function BlameCard({ state }: { state: BlameCardState }) {
   const [copied, setCopied] = useState(false);
-  const { info, hunk } = state;
+  const { info, hunk, loading } = state;
   const shown = hunk ? hunk.lines.slice(0, 40) : [];
   const hidden = hunk ? hunk.lines.length - shown.length : 0;
 
@@ -71,6 +73,8 @@ export function BlameCard({ state }: { state: BlameCardState }) {
           ))}
           {hidden > 0 ? <div className="blame-diff-more">… 还有 {hidden} 行</div> : null}
         </div>
+      ) : loading ? (
+        <p className="blame-empty">正在读取这次提交的改动…</p>
       ) : (
         <p className="blame-empty">该提交没有可展示的片段</p>
       )}

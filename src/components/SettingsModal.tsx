@@ -22,6 +22,7 @@ import {
 } from '../editorKeymap';
 import type { EditorActionId, KeyBindingMap } from '../editorKeymap';
 import {
+  BLAME_HOVER_DELAY_OPTIONS,
   EDITOR_FONT_SIZE_MAX,
   EDITOR_FONT_SIZE_MIN,
   EDITOR_LINE_HEIGHT_MAX,
@@ -166,6 +167,10 @@ export function SettingsModal({
   const [editorShowWhitespace, setEditorShowWhitespace] = useState(
     prefs.editorShowWhitespace,
   );
+  const [editorBlameEnabled, setEditorBlameEnabled] = useState(prefs.editorBlameEnabled);
+  const [editorBlameHoverDelay, setEditorBlameHoverDelay] = useState(
+    prefs.editorBlameHoverDelay,
+  );
   const [editorWordWrap, setEditorWordWrap] = useState(prefs.editorWordWrap);
   const [editorTabSize, setEditorTabSize] = useState(prefs.editorTabSize);
   const [editorIndentWithSpaces, setEditorIndentWithSpaces] = useState(
@@ -270,6 +275,8 @@ export function SettingsModal({
       editorHighlightActiveLine,
       editorBracketMatching,
       editorShowWhitespace,
+      editorBlameEnabled,
+      editorBlameHoverDelay,
       editorWordWrap,
       editorTabSize,
       editorIndentWithSpaces,
@@ -571,6 +578,41 @@ export function SettingsModal({
                   <span className="settings-item-desc">把空格和 Tab 显示成标记，排查缩进用</span>
                 </div>
                 <Toggle checked={editorShowWhitespace} onChange={setEditorShowWhitespace} />
+              </div>
+            </section>
+
+            <section className="settings-group">
+              <h4 className="settings-group-title">Git 变更信息</h4>
+
+              <div className="settings-item">
+                <div className="settings-item-text">
+                  <span className="settings-item-label">行内显示提交信息</span>
+                  <span className="settings-item-desc">
+                    点击某一行时在行尾显示它的作者、提交哈希与提交说明。关闭后完全不查询 Git
+                  </span>
+                </div>
+                <Toggle checked={editorBlameEnabled} onChange={setEditorBlameEnabled} />
+              </div>
+
+              <div className="settings-item">
+                <div className="settings-item-text">
+                  <span className="settings-item-label">悬停多久弹出详情</span>
+                  <span className="settings-item-desc">
+                    鼠标停在该行行尾的提交信息上多久才展开作者、时间与改动片段
+                  </span>
+                </div>
+                <select
+                  className="settings-select"
+                  value={String(editorBlameHoverDelay)}
+                  disabled={!editorBlameEnabled}
+                  onChange={(event) => setEditorBlameHoverDelay(Number(event.target.value))}
+                >
+                  {BLAME_HOVER_DELAY_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option === 0 ? '立即' : `${option} 毫秒`}
+                    </option>
+                  ))}
+                </select>
               </div>
             </section>
 

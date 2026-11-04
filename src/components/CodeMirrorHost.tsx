@@ -84,6 +84,8 @@ export type CodeMirrorHostProps = {
   changeMarkers?: LineChanges | null;
   // 是否响应行号点击看 blame（只读文件与空白窗口由上层关掉）
   blameEnabled?: boolean;
+  // 悬停在内联小字上多久才弹出卡片（毫秒）
+  blameHoverDelay?: number;
   // 有未保存修改时编辑器行号与磁盘行号对不上，点行号不查 blame，
   // 只提示「保存后查看」。由上层按 file.dirty 传入。
   blameBlocked?: boolean;
@@ -345,6 +347,9 @@ type BlameFieldValue = {
   status: 'loading' | 'ready' | 'failed' | 'blocked';
   info: BlameInfo | null;
   hunk: DiffHunk | null;
+  // 提交片段尚未取回。行内小字只需要 info，先显示出来；
+  // 卡片要的 hunk 等悬停时再取，避免把感知延迟从一条 git 命令变成两条。
+  hunkPending: boolean;
 } | null;
 
 const setBlame = StateEffect.define<BlameFieldValue>();
@@ -541,7 +546,9 @@ function referenceExtension(options: {
 
 function blameExtension(options: {
   isEnabled: () => boolean;
+  hoverDelay: () => number;
   onLineClick: (line: number) => void;
+  requestHunk: (line: number) => void;
 }): Extension {
   // EditorView.domEventHandlers 只挂在 .cm-content 上，收不到 gutter 的点击
   // （gutter 是它的同级节点），所以交互监听必须挂到整个编辑器 DOM。
@@ -549,6 +556,14 @@ function blameExtension(options: {
     class {
       private readonly view: EditorView;
       private hideTimer = -1;
+      private showTimer = -1;
+
+      private readonly cancelShow = () => {
+        if (this.showTimer >= 0) {
+          window.clearTimeout(this.showTimer);
+          this.showTimer = -1;
+        }
+      };
 
       private readonly isCardTarget = (target: EventTarget | null) =>
         target instanceof Element &&
@@ -595,14 +610,21 @@ function blameExtension(options: {
           window.clearTimeout(this.hideTimer);
           this.hideTimer = -1;
         }
-        if (!this.view.state.field(blameHoverField, false)) {
+        if (this.view.state.field(blameHoverField, false)) return;
+        this.cancelShow();
+        // 延迟由设置决定：0 立即弹出。鼠标移走后 cancelShow 会取消这次弹出，
+        // 所以快速划过时不会一路弹出卡片。
+        this.showTimer = window.setTimeout(() => {
+          this.showTimer = -1;
+          if (this.view.state.field(blameHoverField, false)) return;
           this.view.dispatch({ effects: setBlameHover.of(true) });
-        }
+        }, Math.max(0, options.hoverDelay()));
       };
 
       private readonly onMouseOut = (event: MouseEvent) => {
         if (!this.isCardTarget(event.target)) return;
         if (this.isCardTarget(event.relatedTarget)) return;
+        this.cancelShow();
         // 内联小字与卡片之间隔着一点空隙，立即收起会让卡片点不到
         if (this.hideTimer >= 0) window.clearTimeout(this.hideTimer);
         this.hideTimer = window.setTimeout(() => {
@@ -622,6 +644,7 @@ function blameExtension(options: {
 
       destroy() {
         if (this.hideTimer >= 0) window.clearTimeout(this.hideTimer);
+        this.cancelShow();
         this.view.dom.removeEventListener('mousedown', this.onMouseDown);
         this.view.dom.removeEventListener('mouseover', this.onMouseOver);
         this.view.dom.removeEventListener('mouseout', this.onMouseOut);
@@ -638,9 +661,16 @@ function blameExtension(options: {
       pos: state.doc.line(Math.min(value.line, state.doc.lines)).to,
       above: false,
       create: () => {
+        // diff 片段是悬停时才取的：点行号只等一条 git blame，卡片展开时才等第二条。
+        // create 跑在 CodeMirror 的测量阶段，此时直接 dispatch 会撞上
+        // 「update in progress」，所以推到当前任务之后。
+        if (value.hunkPending) {
+          const line = value.line;
+          window.setTimeout(() => options.requestHunk(line), 0);
+        }
         const host = document.createElement('div');
         const root = createRoot(host);
-        const cardState: BlameCardState = { info, hunk: value.hunk };
+        const cardState: BlameCardState = { info, hunk: value.hunk, loading: value.hunkPending };
         root.render(<BlameCard state={cardState} />);
         return { dom: host, destroy: () => root.unmount() };
       },
@@ -781,6 +811,7 @@ export function CodeMirrorHost({
   onConflictCountChange,
   changeMarkers,
   blameEnabled,
+  blameHoverDelay = 1500,
   blameBlocked,
 }: CodeMirrorHostProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -802,12 +833,14 @@ export function CodeMirrorHost({
   const referenceEnabledRef = useRef(referenceEnabled);
   const blameEnabledRef = useRef(Boolean(blameEnabled));
   const blameBlockedRef = useRef(Boolean(blameBlocked));
+  const blameHoverDelayRef = useRef(blameHoverDelay);
   const projectPathRef = useRef(projectPath);
   const activeFileRef = useRef(filePath);
   const jumpRef = useRef(onJumpToSymbol);
   const onGotoLineAppliedRef = useRef(onGotoLineApplied);
   const changeMarkersRef = useRef(changeMarkers);
   const blameLookupRef = useRef<(line: number) => void>(() => {});
+  const blameHunkRef = useRef<(line: number) => void>(() => {});
   onChangeRef.current = onChange;
   onCountRef.current = onConflictCountChange;
   onFontDeltaRef.current = onFontSizeDelta;
@@ -819,6 +852,7 @@ export function CodeMirrorHost({
   changeMarkersRef.current = changeMarkers;
   blameEnabledRef.current = Boolean(blameEnabled);
   blameBlockedRef.current = Boolean(blameBlocked);
+  blameHoverDelayRef.current = blameHoverDelay;
 
   blameLookupRef.current = (line: number) => {
     const view = viewRef.current;
@@ -833,7 +867,7 @@ export function CodeMirrorHost({
       }
       view.dispatch({
         effects: [
-          setBlame.of({ line, status: 'blocked', info: null, hunk: null }),
+          setBlame.of({ line, status: 'blocked', info: null, hunk: null, hunkPending: false }),
           setBlameHover.of(false),
         ],
       });
@@ -848,31 +882,47 @@ export function CodeMirrorHost({
     }
     view.dispatch({
       effects: [
-        setBlame.of({ line, status: 'loading', info: null, hunk: null }),
+        setBlame.of({ line, status: 'loading', info: null, hunk: null, hunkPending: false }),
         setBlameHover.of(false),
       ],
     });
 
     const file = activeFileRef.current;
-    void lookupBlame(projectPathRef.current, file, line).then(async (info) => {
+    void lookupBlame(projectPathRef.current, file, line).then((info) => {
       // 切文件会重建视图，旧请求的结果不能再往新文档上贴
       if (viewRef.current !== view) return;
       const latest = view.state.field(blameField, false);
       if (!latest || latest.line !== line) return;
       if (!info) {
-        view.dispatch({ effects: setBlame.of({ line, status: 'failed', info: null, hunk: null }) });
+        view.dispatch({
+          effects: setBlame.of({ line, status: 'failed', info: null, hunk: null, hunkPending: false }),
+        });
         return;
       }
-      const patch = await lookupCommitFileDiff(projectPathRef.current, info.hash, file);
+      // 先只贴上 blame 结果把行内小字显示出来，diff 片段等悬停时再取。
+      view.dispatch({
+        effects: setBlame.of({ line, status: 'ready', info, hunk: null, hunkPending: true }),
+      });
+    });
+  };
+
+  // 悬停展开卡片时才去取该提交对本文件的 diff 片段
+  blameHunkRef.current = (line: number) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const current = view.state.field(blameField, false);
+    if (!current || current.line !== line || !current.info || !current.hunkPending) return;
+    const file = activeFileRef.current;
+    const info = current.info;
+    void lookupCommitFileDiff(projectPathRef.current, info.hash, file).then((patch) => {
       if (viewRef.current !== view) return;
-      const stillLatest = view.state.field(blameField, false);
-      if (!stillLatest || stillLatest.line !== line) return;
+      const latest = view.state.field(blameField, false);
+      if (!latest || latest.line !== line || latest.info?.hash !== info.hash) return;
       view.dispatch({
         effects: setBlame.of({
-          line,
-          status: 'ready',
-          info,
+          ...latest,
           hunk: pickHunkForLine(patch, info.origLine),
+          hunkPending: false,
         }),
       });
     });
@@ -983,7 +1033,9 @@ export function CodeMirrorHost({
           blameRef.current.of(
             blameExtension({
               isEnabled: () => blameEnabledRef.current,
+              hoverDelay: () => blameHoverDelayRef.current,
               onLineClick: (line) => blameLookupRef.current(line),
+              requestHunk: (line) => blameHunkRef.current(line),
             }),
           ),
           EditorView.updateListener.of((update) => {
