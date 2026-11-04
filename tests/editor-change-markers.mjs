@@ -192,10 +192,17 @@ console.log('2c. 中键拖拽选择');
   await page.mouse.down({ button: 'middle' });
   await page.mouse.move(end.x + 4, end.y + end.height / 2, { steps: 8 });
   await page.mouse.up({ button: 'middle' });
-  const selected = await page.evaluate(() => window.getSelection()?.toString() || '');
+  // CodeMirror 把选区同步到 DOM 是异步的，松手后立刻读可能还是空的。
+  const selected = await page
+    .waitForFunction(() => {
+      const text = window.getSelection()?.toString() || '';
+      return text.length > 0 ? text : false;
+    }, null, { timeout: 5000 })
+    .then((handle) => handle.jsonValue())
+    .catch(() => '');
   // 实测拖第 3→5 行得到的是 "c\nX\n"，.cm-selectionBackground 数量为 0：
   // CodeMirror 的选区由原生 Selection 承载，所以直接断言选中的行内容。
-  assert(selected.includes('c\nX'), '中键拖拽选中了第 3、4 行的内容');
+  assert(selected.includes('c\nX'), '中键拖拽选中了第 3、4 行的内容，实际：' + JSON.stringify(selected));
 }
 
 console.log('2d. Alt+F5 跳转下一个改动');
