@@ -88,8 +88,10 @@ const lightTheme = EditorView.theme(
     },
     '.cm-change-triangle': {
       position: 'absolute',
-      top: '1px',
-      left: '1px',
+      // 垂直居中随行高变化，不能写死像素；横向占 0-5px，竖条从 5px 开始
+      top: '50%',
+      transform: 'translateY(-50%)',
+      left: '0',
       width: '0',
       height: '0',
       borderTop: '4px solid transparent',
@@ -183,8 +185,10 @@ const darkTheme = EditorView.theme(
     },
     '.cm-change-triangle': {
       position: 'absolute',
-      top: '1px',
-      left: '1px',
+      // 垂直居中随行高变化，不能写死像素；横向占 0-5px，竖条从 5px 开始
+      top: '50%',
+      transform: 'translateY(-50%)',
+      left: '0',
       width: '0',
       height: '0',
       borderTop: '4px solid transparent',

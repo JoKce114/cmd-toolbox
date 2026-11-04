@@ -136,6 +136,13 @@ function spansFromLines(state: EditorStateType, changes: LineChanges): MarkerSpa
   return { bars, deletes };
 }
 
+// mapPos 的结果可能落在行中间（行首回车、跨行删除、行首打字都会），
+// 而标记以 line.from 为键。统一吸附回行首，否则这一行的标记会凭空消失。
+function snapToLineStart(state: EditorStateType, pos: number): number {
+  const doc = state.doc;
+  return doc.lineAt(Math.min(Math.max(pos, 0), doc.length)).from;
+}
+
 const changeMarkerField = StateField.define<MarkerSpans>({
   create: () => EMPTY_SPANS,
   update(value, tr) {
@@ -145,12 +152,17 @@ const changeMarkerField = StateField.define<MarkerSpans>({
         next = effect.value ? spansFromLines(tr.state, effect.value) : EMPTY_SPANS;
       }
     }
-    // 上一次标记还没被新行号覆盖时，按位置跟随，避免打字时下方标记整体错行
+    // 上一次标记还没被新行号覆盖时，按位置跟随，避免打字时下方标记整体错行。
+    // 一律用 assoc = 1：行首回车后落到新空行行首，行首打字后仍吸附回原行首。
     if (tr.docChanged && next === value && value !== EMPTY_SPANS) {
       const bars = new Map<number, LineChangeKind>();
-      for (const [pos, kind] of value.bars) bars.set(tr.changes.mapPos(pos, -1), kind);
+      for (const [pos, kind] of value.bars) {
+        bars.set(snapToLineStart(tr.state, tr.changes.mapPos(pos, 1)), kind);
+      }
       const deletes = new Map<number, string[]>();
-      for (const [pos, texts] of value.deletes) deletes.set(tr.changes.mapPos(pos, 1), texts);
+      for (const [pos, texts] of value.deletes) {
+        deletes.set(snapToLineStart(tr.state, tr.changes.mapPos(pos, 1)), texts);
+      }
       next = { bars, deletes };
     }
     return next;
@@ -205,6 +217,14 @@ const changeGutter = gutter({
     if (!kind && !deleted) return null;
     return new ChangeGutterMarker(kind, deleted);
   },
+  // 必须显式声明。SingleGutterView.update() 里重算的是 config.markers（本 gutter
+  // 用的是 lineMarker，这个 RangeSet 恒为空），RangeSet.eq 因此恒为「没变化」；
+  // lineMarker 只在 syncGutters 里调用，而 syncGutters 由 docChanged / 高度 /
+  // 视口变化或本回调触发。纯 setChangeMarkers effect 三者都不变，不写这行
+  // gutter 不会重绘。
+  lineMarkerChange: (update) =>
+    update.startState.field(changeMarkerField, false) !==
+    update.state.field(changeMarkerField, false),
 });
 
 function referenceExtension(options: {
