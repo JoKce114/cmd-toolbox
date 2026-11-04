@@ -87,14 +87,17 @@ console.log('4. 一行改一行');
   assert(changes.deletes[0].line === 3, '锚点在第 3 行');
 }
 
-console.log('5. 改两行加一行');
+console.log('5. 改一行加两行');
 {
+  // Myers 的最短解是 delete c + insert C,D,F（4 次编辑），只把 c 当被替换的那行，
+  // 多出来的 D、F 算新增。不要按「c,d 都被替换」去期望，那是非最短差分。
   const next = ['a', 'b', 'C', 'D', 'F', 'd', 'e'].join('\n');
   const changes = computeLineChanges(base, next);
   const modified = changes.chunks.filter((chunk) => chunk.kind === 'modified');
   const added = changes.chunks.filter((chunk) => chunk.kind === 'added');
-  assert(modified.length === 1 && modified[0].startLine === 3, '3、4 行算修改');
-  assert(added.length === 1 && added[0].startLine === 5, '第 5 行算新增');
+  assert(modified.length === 1 && modified[0].startLine === 3, '第 3 行算修改');
+  assert(added.length === 1 && added[0].startLine === 4, '第 4、5 行算新增');
+  assert(added[0].endLine === 5, '新增到第 5 行');
   assert(changes.deletes[0].line === 3, '锚点在块首行');
 }
 
@@ -875,8 +878,9 @@ writeFileSync(join(repo, 'clean.txt'), 'hello\n');
 execFileSync('git', ['add', '.'], { cwd: repo });
 execFileSync('git', ['commit', '-m', '初始提交'], { cwd: repo });
 
-// 工作区版本：第 2 行改掉（modified），第 3 行删掉（delete 锚点），新增 X（added）
-writeFileSync(join(repo, 'sample.txt'), 'a\nB\nX\nd\n');
+// 工作区版本：第 2 行改掉（modified，同时有删除锚点），第 4 行插入一行（added）。
+// 不要写成 a/B/X/d——那样 Myers 会算成「2、3 行都修改」，没有 added 色条可断言。
+writeFileSync(join(repo, 'sample.txt'), 'a\nB\nc\nX\nd\n');
 // 未跟踪文件对 HEAD 对比时整篇算新增
 writeFileSync(join(repo, 'new.txt'), 'brand new\n');
 
