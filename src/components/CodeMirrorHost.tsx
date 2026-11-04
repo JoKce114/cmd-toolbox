@@ -565,16 +565,28 @@ function blameExtension(options: {
           this.view.dispatch({ effects: setBlameHover.of(false) });
         }
         if (!options.isEnabled() || !target) return;
-        // 只在行号 gutter 与变更 gutter 上响应
-        const element = target.closest('.cm-gutterElement');
-        if (!element || !element.closest('.cm-lineNumbers, .cm-change-gutter')) return;
+        // 行号 / 变更 gutter 与正文都算：vscode 那边点整行就能看 blame，
+        // 只认 gutter 会让用户点了正文却毫无反应。
+        if (!target.closest('.cm-editor')) return;
+        // 内联小字与卡片上的点击归它们自己处理，不要重复触发。
+        if (this.isCardTarget(target)) return;
 
-        const rect = element.getBoundingClientRect();
-        const block = this.view.lineBlockAtHeight(
-          rect.top + rect.height / 2 - this.view.documentTop,
-        );
-        event.preventDefault();
-        options.onLineClick(this.view.state.doc.lineAt(block.from).number);
+        const element = target.closest('.cm-gutterElement');
+        let line: number;
+        if (element && element.closest('.cm-lineNumbers, .cm-change-gutter')) {
+          const rect = element.getBoundingClientRect();
+          const block = this.view.lineBlockAtHeight(
+            rect.top + rect.height / 2 - this.view.documentTop,
+          );
+          line = this.view.state.doc.lineAt(block.from).number;
+          // gutter 上要拦掉默认行为；正文上不能拦，否则光标放不下去
+          event.preventDefault();
+        } else {
+          const pos = this.view.posAtCoords({ x: event.clientX, y: event.clientY });
+          if (pos === null) return;
+          line = this.view.state.doc.lineAt(pos).number;
+        }
+        options.onLineClick(line);
       };
 
       private readonly onMouseOver = (event: MouseEvent) => {
@@ -828,8 +840,9 @@ export function CodeMirrorHost({
       return;
     }
     const current = view.state.field(blameField, false);
-    // 点同一行再次点击就收起
-    if (current && current.line === line && current.status !== 'loading') {
+    // 点同一行再次点击就收起；loading 中也允许，否则用户会以为点了没反应。
+    // 收起后旧请求的结果会被下面的 latest.line 检查挡掉，不会贴回来。
+    if (current && current.line === line) {
       view.dispatch({ effects: [setBlame.of(null), setBlameHover.of(false)] });
       return;
     }

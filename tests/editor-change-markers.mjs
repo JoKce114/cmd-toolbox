@@ -159,6 +159,30 @@ console.log('2b. 点击行号看 blame');
   );
 }
 
+console.log('2b1. 点正文任意位置也能看 blame');
+{
+  await openFile('sample.txt');
+  const lineEls = page.locator('.editor-pane:not(.is-hidden) .cm-content .cm-line');
+  const box = await lineEls.nth(2).boundingBox();
+  await page.mouse.click(box.x + 20, box.y + box.height / 2);
+  await page.locator('.cm-blame-inline').first().waitFor({ timeout: 8000 });
+  assert(await page.locator('.cm-blame-inline').count() > 0, '点正文出现 blame 小字');
+  // 点正文不能抢掉光标定位
+  const cursorLine = await page.evaluate(() => {
+    const sel = window.getSelection();
+    const node = sel?.focusNode;
+    const el = node?.nodeType === 3 ? node.parentElement : node;
+    const lineEl = el instanceof Element ? el.closest('.cm-line') : null;
+    const all = [...document.querySelectorAll('.cm-content .cm-line')];
+    return lineEl ? all.indexOf(lineEl) + 1 : null;
+  });
+  assert(cursorLine === 3, `光标落在被点的第 3 行，实际：${cursorLine}`);
+  // 立刻再点同一行：loading 中也必须能收起，否则用户会以为点了没反应
+  await page.mouse.click(box.x + 20, box.y + box.height / 2);
+  await page.waitForTimeout(600);
+  assert((await page.locator('.cm-blame-inline').count()) === 0, '再点同一行收起 blame');
+}
+
 console.log('2b2. 有未保存修改时点行号不查 blame');
 {
   await openFile('sample.txt');
