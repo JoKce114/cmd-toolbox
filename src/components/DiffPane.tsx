@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { cn, toErrorMessage } from '../lib';
 import { splitCommitPatch } from '../commitDiff';
@@ -19,6 +19,8 @@ export type DiffPaneProps = {
   onClose: () => void;
   onOpenFile: (relPath: string) => void;
   onToast: (message: string, kind?: 'info' | 'success' | 'error') => void;
+  // 用户第一次在这个页签里按下鼠标或滚动时回调一次；上层据此不再复用它
+  onInteract?: () => void;
 };
 
 export function DiffPane({
@@ -29,10 +31,19 @@ export function DiffPane({
   onClose,
   onOpenFile,
   onToast,
+  onInteract,
 }: DiffPaneProps) {
   const [patch, setPatch] = useState('');
   const [loading, setLoading] = useState(true);
   const [selectedPath, setSelectedPath] = useState('');
+
+  // 只上报第一次交互：页签被复用时不重建组件，标记随之保留
+  const interactedRef = useRef(false);
+  const markInteracted = () => {
+    if (interactedRef.current) return;
+    interactedRef.current = true;
+    onInteract?.();
+  };
 
   // target 对象每次渲染都是新的，依赖必须落在原始值上，否则会无限重取
   const isText = target.kind === 'text';
@@ -101,7 +112,11 @@ export function DiffPane({
         : false;
 
   return (
-    <section className={`terminal-pane diff-pane${active ? '' : ' is-hidden'}`}>
+    <section
+      className={`terminal-pane diff-pane${active ? '' : ' is-hidden'}`}
+      onPointerDown={markInteracted}
+      onWheel={markInteracted}
+    >
       <header className="pane-header">
         <span className="pane-path" title={title}>
           <span>{title}</span>

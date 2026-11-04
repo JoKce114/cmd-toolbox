@@ -1909,6 +1909,34 @@ export default function App() {
         activateTab(group.key, existing);
         return;
       }
+
+      // 只复用「变更类」差异页签：提交类页签有自己的去重口径，被顶掉会让历史页签莫名换内容
+      const reusable = groupTabs.filter(
+        (item) =>
+          item.shellId === 'diff' &&
+          Boolean(item.diffChange) &&
+          !touchedTabsRef.current.has(item.id),
+      );
+      const activeId = activeTabByGroupRef.current[group.key];
+      const target =
+        reusable.find((item) => item.id === activeId) ?? reusable[reusable.length - 1];
+      if (target) {
+        applyTabs({
+          ...tabsRef.current,
+          [group.key]: groupTabs.map((item) =>
+            item.id === target.id
+              ? {
+                  ...item,
+                  diffChange: change,
+                  descriptor: change.path.split('/').pop() || '差异',
+                }
+              : item,
+          ),
+        });
+        activateTab(group.key, target);
+        return;
+      }
+
       const tab: Tab = {
         id: crypto.randomUUID(),
         groupKey: group.key,
@@ -3351,6 +3379,7 @@ export default function App() {
           onClose={() => closeTabs(tab.groupKey, [tab.id])}
           onOpenFile={(relPath) => openEditorFile(group, relPath)}
           onToast={pushToast}
+          onInteract={() => touchedTabsRef.current.add(tab.id)}
         />
       );
     }
