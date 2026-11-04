@@ -869,14 +869,16 @@ execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo })
 execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
 execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: repo });
 
-// 提交版本：1 a / 2 b / 3 c / 4 d
+// 提交版本：sample.txt 有改动，clean.txt 提交后保持原样
 writeFileSync(join(repo, 'sample.txt'), 'a\nb\nc\nd\n');
+writeFileSync(join(repo, 'clean.txt'), 'hello\n');
 execFileSync('git', ['add', '.'], { cwd: repo });
 execFileSync('git', ['commit', '-m', '初始提交'], { cwd: repo });
 
 // 工作区版本：第 2 行改掉（modified），第 3 行删掉（delete 锚点），新增 X（added）
 writeFileSync(join(repo, 'sample.txt'), 'a\nB\nX\nd\n');
-writeFileSync(join(repo, 'clean.txt'), 'hello\n');
+// 未跟踪文件对 HEAD 对比时整篇算新增
+writeFileSync(join(repo, 'new.txt'), 'brand new\n');
 
 let passed = 0;
 function assert(condition, message) {
@@ -942,6 +944,11 @@ await openFile('clean.txt');
 await page.waitForTimeout(600);
 assert((await page.locator('.cm-change-marker').count()) === 0, '干净文件没有色条');
 assert((await page.locator('.editor-overview-ruler').count()) === 0, '干净文件不画标尺');
+
+console.log('3b. 未跟踪文件整篇算新增');
+await openFile('new.txt');
+await page.waitForTimeout(600);
+assert((await page.locator('.cm-change-marker.is-added').count()) >= 1, '未跟踪文件显示 added 色条');
 
 await app.close();
 console.log(`\n全部通过：${passed} 项`);
@@ -1806,6 +1813,8 @@ git commit -m "feat(editor): Alt+F5 跳到下一个变更块"
 - **中键选择的 mousemove / mouseup 必须挂在 `window` 上**。只挂编辑器 DOM 时，
   拖到编辑器外松手收不到 mouseup，选区会一直跟着鼠标走。
 - **Alt+F5 只跳有色条的行**，纯删除的锚点不是跳转目标；到末尾回绕到第一个。
+- **未跟踪文件整篇显示为新增**（`fileDiff` 对未跟踪返回 `baseContent: ''` + `untracked: true`），
+  与 VS Code 一致。不要按 `untracked` 字段跳过标记——那样新文件反而看不到自己「全是新的」。
 ```
 
 - [ ] **Step 2: `CHANGELOG.md` 顶部加一节**
