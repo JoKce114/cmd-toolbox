@@ -278,8 +278,7 @@ const middleClickSelection = ViewPlugin.fromClass(
       event.preventDefault();
       this.stop();
       this.anchor = pos;
-      // 返回 true 会跳过 CodeMirror 自带的 mousedown（它负责聚焦），
-      // 不主动聚焦时选区只存在于 state 里，DOM 上看不到。
+      // 中键不会触发 CodeMirror 的聚焦逻辑；不聚焦时选区只存在于 state 里，DOM 上看不到。
       this.view.focus();
       this.view.dispatch({ selection: EditorSelection.cursor(pos) });
       window.addEventListener('mousemove', this.onMove);

@@ -145,9 +145,11 @@ console.log('2b. 点击行号看 blame');
 console.log('2c. 中键拖拽选择');
 {
   await openFile('sample.txt');
-  // 2b 留下的 blame 内联 widget 挂在首行行尾，中键按在 widget 上会被 CodeMirror
-  // 的 ignoreEvent 丢掉，选区根本不会开始。从后面几行起拖，避开它。
+  // 2b 的 blame 内联 widget 挂在首行行尾，中键按在 widget 上会被 ignoreEvent 丢掉，从后面几行起拖。
   const lines = page.locator('.editor-pane:not(.is-hidden) .cm-content .cm-line');
+  // 先左键点一下正文清掉可能残留的旧选区，避免把旧内容误算成这次拖拽的结果。
+  const clear = await lines.nth(1).boundingBox();
+  await page.mouse.click(clear.x + 4, clear.y + clear.height / 2);
   const start = await lines.nth(2).boundingBox();
   const end = await lines.nth(4).boundingBox();
   await page.mouse.move(start.x + 4, start.y + start.height / 2);
@@ -155,7 +157,9 @@ console.log('2c. 中键拖拽选择');
   await page.mouse.move(end.x + 4, end.y + end.height / 2, { steps: 8 });
   await page.mouse.up({ button: 'middle' });
   const selected = await page.evaluate(() => window.getSelection()?.toString() || '');
-  assert(selected.length > 0, '中键拖拽产生了选区');
+  // 实测拖第 3→5 行得到的是 "c\nX\n"，.cm-selectionBackground 数量为 0：
+  // CodeMirror 的选区由原生 Selection 承载，所以直接断言选中的行内容。
+  assert(selected.includes('c\nX'), '中键拖拽选中了第 3、4 行的内容');
 }
 
 console.log('3. 干净文件没有标记');
