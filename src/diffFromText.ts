@@ -2,7 +2,7 @@
 // 仓库里没有 diff 库，而 diffParser.parsePatch 已经能解析 unified diff，
 // 所以这里只负责生成标准格式，渲染完全复用 DiffPane。
 
-type Op = { kind: 'equal' | 'insert' | 'delete'; text: string };
+export type DiffOp = { kind: 'equal' | 'insert' | 'delete'; text: string };
 
 // 把行映射成整数 id 再比较，避免 Myers 内层循环反复做字符串比较。
 type LineSource = { ids: Int32Array; texts: string[] };
@@ -154,7 +154,7 @@ function diffRange(
   b: LineSource,
   bStart: number,
   bEnd: number,
-  ops: Op[],
+  ops: DiffOp[],
 ): void {
   const aIds = a.ids;
   const bIds = b.ids;
@@ -223,7 +223,7 @@ function diffRange(
   }
 }
 
-function diffLines(oldLines: string[], newLines: string[]): Op[] {
+export function diffLines(oldLines: string[], newLines: string[]): DiffOp[] {
   // 同一张表给两侧编号，id 相同即内容相同。
   const ids = new Map<string, number>();
   const toSource = (lines: string[]): LineSource => {
@@ -242,13 +242,13 @@ function diffLines(oldLines: string[], newLines: string[]): Op[] {
 
   const oldSource = toSource(oldLines);
   const newSource = toSource(newLines);
-  const ops: Op[] = [];
+  const ops: DiffOp[] = [];
   diffRange(oldSource, 0, oldSource.ids.length, newSource, 0, newSource.ids.length, ops);
   return ops;
 }
 
 // 把连续的改动聚成一个 hunk，前后各带 3 行上下文（与 git 默认一致）
-function buildHunks(ops: Op[]): string[] {
+function buildHunks(ops: DiffOp[]): string[] {
   const CONTEXT = 3;
   const hunks: string[] = [];
 
@@ -298,17 +298,21 @@ function buildHunks(ops: Op[]): string[] {
   return hunks;
 }
 
+export function splitLinesForDiff(text: string): string[] {
+  const lines = String(text ?? '').split(/\r?\n/);
+  // 末尾换行会切出一个空串，比对时不该算作一行差异
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
 export function buildTextPatch(
   oldName: string,
   oldText: string,
   newName: string,
   newText: string,
 ): string {
-  const oldLines = String(oldText ?? '').split(/\r?\n/);
-  const newLines = String(newText ?? '').split(/\r?\n/);
-  // 末尾换行会切出一个空串，比对时不该算作一行差异
-  if (oldLines.length && oldLines[oldLines.length - 1] === '') oldLines.pop();
-  if (newLines.length && newLines[newLines.length - 1] === '') newLines.pop();
+  const oldLines = splitLinesForDiff(oldText);
+  const newLines = splitLinesForDiff(newText);
 
   if (oldLines.join('\n') === newLines.join('\n')) return '';
 

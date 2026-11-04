@@ -75,6 +75,33 @@ const lightTheme = EditorView.theme(
       border: 'none',
       color: '#616161',
     },
+    '.cm-change-gutter': { width: '14px' },
+    '.cm-change-gutter .cm-gutterElement': { display: 'flex', alignItems: 'center' },
+    '.cm-change-marker': { position: 'relative', width: '100%', height: '100%' },
+    '.cm-change-marker.is-added': {
+      width: '3px',
+      marginLeft: '5px',
+      // 蓝色波浪竖线：SVG 沿纵向绘制，repeat-y 平铺时上下接缝才能连成连续波形
+      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='6'%3E%3Cpath d='M1.5 0 Q3 1.5 1.5 3 T1.5 6' fill='none' stroke='%231e88e5' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E")`,
+      backgroundRepeat: 'repeat-y',
+      backgroundSize: '3px 6px',
+    },
+    '.cm-change-marker.is-modified': {
+      borderLeft: '3px solid #e8a33d',
+      marginLeft: '5px',
+    },
+    '.cm-change-triangle': {
+      position: 'absolute',
+      // 垂直居中随行高变化，不能写死像素；横向占 0-5px，竖条从 5px 开始
+      top: '50%',
+      transform: 'translateY(-50%)',
+      left: '0',
+      width: '0',
+      height: '0',
+      borderTop: '4px solid transparent',
+      borderBottom: '4px solid transparent',
+      borderLeft: '5px solid #e5484d',
+    },
   },
   { dark: false },
 );
@@ -148,6 +175,33 @@ const darkTheme = EditorView.theme(
       backgroundColor: '#3a3d41',
       border: 'none',
       color: '#c6c6c6',
+    },
+    '.cm-change-gutter': { width: '14px' },
+    '.cm-change-gutter .cm-gutterElement': { display: 'flex', alignItems: 'center' },
+    '.cm-change-marker': { position: 'relative', width: '100%', height: '100%' },
+    '.cm-change-marker.is-added': {
+      width: '3px',
+      marginLeft: '5px',
+      // 深色主题用 #4fa3ff，与新增色条 / 概览标尺保持一致
+      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='6'%3E%3Cpath d='M1.5 0 Q3 1.5 1.5 3 T1.5 6' fill='none' stroke='%234fa3ff' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E")`,
+      backgroundRepeat: 'repeat-y',
+      backgroundSize: '3px 6px',
+    },
+    '.cm-change-marker.is-modified': {
+      borderLeft: '3px solid #e2b436',
+      marginLeft: '5px',
+    },
+    '.cm-change-triangle': {
+      position: 'absolute',
+      // 垂直居中随行高变化，不能写死像素；横向占 0-5px，竖条从 5px 开始
+      top: '50%',
+      transform: 'translateY(-50%)',
+      left: '0',
+      width: '0',
+      height: '0',
+      borderTop: '4px solid transparent',
+      borderBottom: '4px solid transparent',
+      borderLeft: '5px solid #f14c4c',
     },
   },
   { dark: true },

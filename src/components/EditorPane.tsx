@@ -19,6 +19,9 @@ import { OpenEditors } from './OpenEditors';
 import { ConfirmDialog } from './ConfirmDialog';
 import { SearchPanel } from './SearchPanel';
 import { CodeMirrorHost } from './CodeMirrorHost';
+import { EditorOverviewRuler } from './EditorOverviewRuler';
+import { computeLineChanges } from '../lineChanges';
+import type { LineChanges } from '../lineChanges';
 import { DiffPane } from './DiffPane';
 import type { DiffTarget } from './DiffPane';
 import { PopupMenu } from './PopupMenu';
@@ -62,6 +65,9 @@ export type EditorPaneProps = {
   onToast: (message: string, kind?: ToastKind) => void;
   onTitleChange: (title: string) => void;
   onDirtyChange: (tabId: string, dirty: boolean) => void;
+  // 有未保存修改的路径集合。SCM 拦截要按「具体文件」判断，
+  // 只用页签级的 dirty 布尔值会把无关文件也拦下来。
+  onDirtyPathsChange: (tabId: string, dirtyPaths: string[]) => void;
   themeMode: TerminalThemeMode;
   wordWrap: boolean;
   tabSize: number;
@@ -74,6 +80,10 @@ export type EditorPaneProps = {
   highlightActiveLine: boolean;
   bracketMatching: boolean;
   showWhitespace: boolean;
+  // 点行号 / 行内正文时是否查询该行的提交信息
+  blameEnabled: boolean;
+  // 悬停在内联小字上多久才弹出卡片（毫秒）
+  blameHoverDelay: number;
   enabledModules: string[];
   onFontSizeDelta: (delta: number) => void;
   // 页签对应的文件路径变化（空白窗口新建 / 另存为后换真实路径）
@@ -84,6 +94,11 @@ export type EditorPaneProps = {
   untitledRestore?: Record<string, string>;
   // 会话里因超限被丢弃的空白窗口：恢复成空窗口并提示，但编号要保留
   untitledDropped?: string[];
+  // Git 变更条目的指纹，变化时重新拉 HEAD 基准
+  gitStateKey?: string;
+  // 本项目是否为 Git 仓库。undefined 表示状态未知（仍在加载、或不是当前激活项目），
+  // 此时不出标记：非仓库里 fileDiff 会把文件当未跟踪、返回空基准，整篇会被误判成新增。
+  gitRepo?: boolean;
 };
 
 export function EditorPane({
@@ -94,6 +109,7 @@ export function EditorPane({
   onToast,
   onTitleChange,
   onDirtyChange,
+  onDirtyPathsChange,
   themeMode,
   wordWrap,
   tabSize,
@@ -106,12 +122,16 @@ export function EditorPane({
   highlightActiveLine,
   bracketMatching,
   showWhitespace,
+  blameEnabled,
+  blameHoverDelay,
   enabledModules,
   onFontSizeDelta,
   onFilePathChange,
   onUntitledContentsChange,
   untitledRestore,
   untitledDropped,
+  gitStateKey,
+  gitRepo,
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const {
@@ -164,6 +184,12 @@ export function EditorPane({
   // 右键时才查一次 git 状态，只用于把「与 Git HEAD 比较」在未跟踪文件上置灰
   const [editorGitStatus, setEditorGitStatus] = useState<GitStatus | null>(null);
   const menuStatusSeqRef = useRef(0);
+  // HEAD 基准按文件缓存，避免每次按键都读一次 git；窗口重新获得焦点或
+  // Git 状态变化（提交 / 暂存 / 切分支）时整体丢弃。
+  // 失败（非 Git 项目等）也缓存：text 为 null，避免每次停顿都重发 IPC、起 git 进程。
+  const [changeMarkers, setChangeMarkers] = useState<LineChanges | null>(null);
+  const baseTextRef = useRef(new Map<string, { text: string | null; at: number }>());
+  const [baseRefreshToken, setBaseRefreshToken] = useState(0);
   const [editorMenu, setEditorMenu] = useState<{
     x: number;
     y: number;
@@ -293,6 +319,70 @@ export function EditorPane({
     [group.path],
   );
 
+  const loadHeadBase = useCallback(
+    async (relPath: string): Promise<string | null> => {
+      // 非 Git 项目不能取 HEAD 基准：fileDiff 在非仓库里不会 reject，
+      // 而是把每个文件都当成未跟踪并返回空串，直接算下去会整篇显示成新增。
+      // undefined 表示状态未知，同样先不出标记，等 App 拿到 git status 再算。
+      if (gitRepo !== true) return null;
+      const cached = baseTextRef.current.get(relPath);
+      if (cached && Date.now() - cached.at < 60_000) return cached.text;
+      try {
+        const result = await window.api.git.fileDiff(group.path, relPath, 'modified', 'HEAD');
+        const text = result.baseContent ?? '';
+        baseTextRef.current.set(relPath, { text, at: Date.now() });
+        return text;
+      } catch {
+        // 非 Git 项目 / git 不可用：静默不显示标记。
+        // 失败也要缓存，否则每次停顿都会重发一次 IPC 并起两个 git 进程。
+        baseTextRef.current.set(relPath, { text: null, at: Date.now() });
+        return null;
+      }
+    },
+    [group.path, gitRepo],
+  );
+
+  // 窗口重新获得焦点时丢掉缓存：提交完切回来，标记应当自动消失
+  useEffect(() => {
+    const onFocus = () => {
+      baseTextRef.current.clear();
+      setBaseRefreshToken((value) => value + 1);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
+
+  // Git 状态条目变化（提交 / 暂存 / 放弃 / 切分支）同样让缓存失效
+  useEffect(() => {
+    baseTextRef.current.clear();
+    setBaseRefreshToken((value) => value + 1);
+  }, [gitStateKey]);
+
+  useEffect(() => {
+    if (!activePath || isUntitledPath(activePath) || file.readOnly) {
+      setChangeMarkers(null);
+      return;
+    }
+    // 非仓库 / 仓库状态未知时立即清空，不必等 300ms 防抖再走一次死路。
+    if (gitRepo !== true) {
+      setChangeMarkers(null);
+      return;
+    }
+    const relPath = activePath;
+    const content = file.content;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void loadHeadBase(relPath).then((base) => {
+        if (cancelled) return;
+        setChangeMarkers(base === null ? null : computeLineChanges(base, content));
+      });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activePath, file, loadHeadBase, gitRepo, baseRefreshToken]);
+
   // 实时重算只依赖原始字符串：object/state 作为依赖会在每次渲染时换身份，
   // 既容易触发多余计算，也容易写出无限循环。
   const diffPrimaryPath = diffSource?.kind === 'pair' ? diffSource.left : diffSource?.relPath ?? '';
@@ -400,6 +490,8 @@ export function EditorPane({
   onTitleChangeRef.current = onTitleChange;
   const onDirtyChangeRef = useRef(onDirtyChange);
   onDirtyChangeRef.current = onDirtyChange;
+  const onDirtyPathsChangeRef = useRef(onDirtyPathsChange);
+  onDirtyPathsChangeRef.current = onDirtyPathsChange;
   const onFilePathChangeRef = useRef(onFilePathChange);
   onFilePathChangeRef.current = onFilePathChange;
   const onUntitledContentsChangeRef = useRef(onUntitledContentsChange);
@@ -509,6 +601,25 @@ export function EditorPane({
     onFilePathChangeRef.current?.(next);
   }, [activePath, files, tab.filePath]);
 
+  // 本轮渲染开始时的「已应用路径」。上面的 effect 会在同一轮被动 effect 里
+  // 把它改成 App 请求的新路径，判断编辑器是否已跟上时得用改动前的值。
+  const appliedAtRender = appliedPathRef.current;
+
+  // 编辑器内切换文件时回写上层：会话恢复、页签去重与未保存拦截都依赖 tab.filePath 与编辑器实际内容一致；文件全关时回写空串。
+  useEffect(() => {
+    const next = activePath && files[activePath] && !isUntitledPath(activePath) ? activePath : '';
+    // 空白窗口的另一半（`untitled://N`）归上面那个 effect 管，这里不碰
+    if (next === '' && activePath && isUntitledPath(activePath)) return;
+    if (next === (tab.filePath || '')) return;
+    // App 主动换了路径（复用空闲页签）时，这一轮 activePath 还是旧文件：只有
+    // 上一轮渲染时编辑器已接受的路径就是 tab.filePath，才说明是用户切了文件；
+    // 否则等编辑器跟上新路径后再回写，免得把旧路径写回去形成 B→A→B 往返。
+    if (tab.filePath && appliedAtRender !== tab.filePath) return;
+    // 先记下新路径再回调，否则上层 filePath 变化会让上面的 effect 重新 open()。
+    appliedPathRef.current = next;
+    onFilePathChangeRef.current?.(next);
+  }, [activePath, files, tab.filePath]);
+
   // 空白窗口内容快照：只比较各空白条目的内容引用并维护版本号，不把全部内容
   // 拼成一个字符串（2MB 上限下那会是每键 O(总内容)）。普通文件每次按键都会换
   // files 对象，这里最多做 O(空白窗口数) 的引用比较。快照用来触发
@@ -554,6 +665,10 @@ export function EditorPane({
   }, [untitledSnapshot]);
 
   const hasSessionOnly = openPaths.some((relPath) => losesSessionContent(files[relPath]));
+  const dirtyPaths = useMemo(
+    () => openPaths.filter((relPath) => files[relPath]?.dirty),
+    [openPaths, files],
+  );
 
   useEffect(() => {
     const base = activePath ? displayNameFor(activePath) : '编辑器';
@@ -565,6 +680,10 @@ export function EditorPane({
     // 同样会永久丢内容，所以要把 App 的 dirty 守卫一起点亮。
     onDirtyChangeRef.current(tab.id, hasDirty || hasSessionOnly);
   }, [tab.id, hasDirty, hasSessionOnly]);
+
+  useEffect(() => {
+    onDirtyPathsChangeRef.current(tab.id, dirtyPaths);
+  }, [tab.id, dirtyPaths]);
 
   useEffect(() => {
     setConflictCount(0);
@@ -585,7 +704,10 @@ export function EditorPane({
   const unrecognizedConflict = conflictCount === 0 && /^<{7}/m.test(file.content);
 
   useEffect(() => {
-    return () => onDirtyChangeRef.current(tab.id, false);
+    return () => {
+      onDirtyChangeRef.current(tab.id, false);
+      onDirtyPathsChangeRef.current(tab.id, []);
+    };
   }, [tab.id]);
 
   const handleSave = useCallback(async () => {
@@ -1151,7 +1273,17 @@ export function EditorPane({
                   onFontSizeDelta={onFontSizeDelta}
                   onChange={(value) => update(activePath, value)}
                   onConflictCountChange={setConflictCount}
+                  changeMarkers={changeMarkers}
+                  blameEnabled={
+                    blameEnabled &&
+                    Boolean(activePath) &&
+                    !file.readOnly &&
+                    !isUntitledPath(activePath)
+                  }
+                  blameHoverDelay={blameHoverDelay}
+                  blameBlocked={Boolean(file.dirty)}
                 />
+                <EditorOverviewRuler changes={changeMarkers} />
               </div>
               {diffTarget ? (
                 <>

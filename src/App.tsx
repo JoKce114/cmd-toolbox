@@ -249,6 +249,9 @@ export default function App() {
   const tabGroupsByGroupRef = useRef<Record<string, TabGroup[]>>(tabGroupsByGroup);
   tabGroupsByGroupRef.current = tabGroupsByGroup;
   const dirtyTabsRef = useRef<Map<string, boolean>>(new Map());
+  // 页签里哪些文件有未保存修改。SCM 拦截按「具体文件」判断，
+  // 页签级 dirty 只是「有任意脏文件」，会把无关文件也拦下来。
+  const dirtyPathsByTabRef = useRef<Map<string, string[]>>(new Map());
   // 改过就永久占住，保存后也不释放：新文件只能顶替没动过的编辑器页签
   const touchedTabsRef = useRef<Set<string>>(new Set());
   const activeTabByGroupRef = useRef(activeTabByGroup);
@@ -1032,6 +1035,17 @@ export default function App() {
     },
   });
 
+  // 编辑器标记的失效指纹：提交 / 暂存 / 放弃 / 切分支都会改变条目与状态。
+  // 分支名必须参与指纹：干净工作区切分支时 changes 始终为空，只拼条目会让
+  // 指纹不变，基准缓存（60 秒 TTL）不失效，标记仍按旧分支的 HEAD 计算。
+  const editorGitStateKey = useMemo(() => {
+    if (!gitStatus?.ok) return '';
+    const entries = gitStatus.changes.map(
+      (change) => `${change.path}:${change.indexStatus ?? ''}:${change.worktreeStatus ?? ''}`,
+    );
+    return [gitStatus.branch, ...entries].join('|');
+  }, [gitStatus]);
+
   const [gitBranches, setGitBranches] = useState<{ current: string; list: string[] }>({
     current: '',
     list: [],
@@ -1807,6 +1821,11 @@ export default function App() {
     }
   }, []);
 
+  const handleDirtyPathsChange = useCallback((tabId: string, dirtyPaths: string[]) => {
+    if (dirtyPaths.length > 0) dirtyPathsByTabRef.current.set(tabId, dirtyPaths);
+    else dirtyPathsByTabRef.current.delete(tabId);
+  }, []);
+
   const createEditor = useCallback(
     (group: Group, filePath = '') => {
       if (!group.exists) {
@@ -1859,6 +1878,17 @@ export default function App() {
     [applyTabs, inheritedTabGroupId, pushToast],
   );
 
+  // 统一「激活项目 + 页签 + 右栏焦点」。三处入口原本各写了一遍，
+  // 漏掉右栏分支会让分屏时点了没反应。
+  const activateTab = useCallback((groupKey: string, tab: Tab) => {
+    setActiveGroupKey(groupKey);
+    setActiveTabByGroup((previous) => ({ ...previous, [groupKey]: tab.id }));
+    if ((rightIdsByGroupRef.current[groupKey] || []).includes(tab.id)) {
+      setRightActiveByGroup((previous) => ({ ...previous, [groupKey]: tab.id }));
+      setFocusSideByGroup((previous) => ({ ...previous, [groupKey]: 'right' }));
+    }
+  }, []);
+
   const openDiffTab = useCallback(
     (group: Group, change: GitChange) => {
       if (!group.exists) {
@@ -1866,14 +1896,65 @@ export default function App() {
         return;
       }
       const groupTabs = tabsRef.current[group.key] || [];
+
+      // 差异页签读的是磁盘，只有「这个文件自己」有未保存修改时才拦。
+      // 不能用页签级 dirty：后台其它文件脏的时候会把无关文件也拦下来；
+      // 也不能要求 filePath 相同——编辑器停在 b.txt 时，后台脏的 a.txt
+      // 依然在编辑器里开着，按 filePath 匹配会漏掉它、开出一个过期差异。
+      const dirtyEditor = groupTabs.find(
+        (item) =>
+          item.shellId === 'editor' &&
+          (dirtyPathsByTabRef.current.get(item.id) || []).includes(change.path),
+      );
+      if (dirtyEditor) {
+        // 编辑器可能正停在别的文件上，先把它切到用户点的这个脏文件。
+        if (dirtyEditor.filePath !== change.path) {
+          applyTabs({
+            ...tabsRef.current,
+            [group.key]: groupTabs.map((item) =>
+              item.id === dirtyEditor.id ? { ...item, filePath: change.path } : item,
+            ),
+          });
+        }
+        activateTab(group.key, dirtyEditor);
+        pushToast('文件有未保存修改，已切到编辑器页签', 'info');
+        return;
+      }
       const existing = groupTabs.find(
         (item) => item.shellId === 'diff' && item.diffChange?.path === change.path,
       );
       if (existing) {
-        setActiveGroupKey(group.key);
-        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: existing.id }));
+        activateTab(group.key, existing);
         return;
       }
+
+      // 只复用「变更类」差异页签：提交类页签有自己的去重口径，被顶掉会让历史页签莫名换内容
+      const reusable = groupTabs.filter(
+        (item) =>
+          item.shellId === 'diff' &&
+          Boolean(item.diffChange) &&
+          !touchedTabsRef.current.has(item.id),
+      );
+      const activeId = activeTabByGroupRef.current[group.key];
+      const target =
+        reusable.find((item) => item.id === activeId) ?? reusable[reusable.length - 1];
+      if (target) {
+        applyTabs({
+          ...tabsRef.current,
+          [group.key]: groupTabs.map((item) =>
+            item.id === target.id
+              ? {
+                  ...item,
+                  diffChange: change,
+                  descriptor: change.path.split('/').pop() || '差异',
+                }
+              : item,
+          ),
+        });
+        activateTab(group.key, target);
+        return;
+      }
+
       const tab: Tab = {
         id: crypto.randomUUID(),
         groupKey: group.key,
@@ -1891,7 +1972,7 @@ export default function App() {
       setActiveGroupKey(group.key);
       setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
     },
-    [applyTabs, pushToast],
+    [activateTab, applyTabs, pushToast],
   );
 
   const openCommitDiffTab = useCallback(
@@ -1905,8 +1986,7 @@ export default function App() {
         (item) => item.shellId === 'diff' && item.diffCommit?.hash === commit.hash,
       );
       if (existing) {
-        setActiveGroupKey(group.key);
-        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: existing.id }));
+        activateTab(group.key, existing);
         return;
       }
       const tab: Tab = {
@@ -1926,7 +2006,7 @@ export default function App() {
       setActiveGroupKey(group.key);
       setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
     },
-    [applyTabs, pushToast],
+    [activateTab, applyTabs, pushToast],
   );
 
   const openEditorFile = useCallback(
@@ -1940,8 +2020,7 @@ export default function App() {
         (item) => item.shellId === 'editor' && item.filePath === relPath,
       );
       if (existing) {
-        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: existing.id }));
-        setActiveGroupKey(group.key);
+        activateTab(group.key, existing);
         return;
       }
 
@@ -1972,7 +2051,7 @@ export default function App() {
 
       createEditor(group, relPath);
     },
-    [applyTabs, createEditor, pushToast],
+    [activateTab, applyTabs, createEditor, pushToast],
   );
 
   const createTerminal = useCallback(
@@ -2083,6 +2162,7 @@ export default function App() {
 
       for (const tab of closing) {
         dirtyTabsRef.current.delete(tab.id);
+        dirtyPathsByTabRef.current.delete(tab.id);
         touchedTabsRef.current.delete(tab.id);
         if (!tab.sessionId) continue;
         discardSession(tab.sessionId);
@@ -2545,6 +2625,9 @@ export default function App() {
           item.id === tab.id ? { ...item, descriptor, custom } : item,
         ),
       });
+      // 手动改名是明确的交互：占住页签，别让下一个打开的差异文件
+      // 把它当作「没碰过」的页签复用、静默覆盖掉用户起的名字。
+      touchedTabsRef.current.add(tab.id);
       setRenameTarget(null);
       setFocusTick((tick) => tick + 1);
     },
@@ -3318,6 +3401,7 @@ export default function App() {
           onClose={() => closeTabs(tab.groupKey, [tab.id])}
           onOpenFile={(relPath) => openEditorFile(group, relPath)}
           onToast={pushToast}
+          onInteract={() => touchedTabsRef.current.add(tab.id)}
         />
       );
     }
@@ -3337,7 +3421,10 @@ export default function App() {
           }
           untitledRestore={pickGroupUntitled(untitledContentsRef.current, group.key)}
           untitledDropped={pickGroupUntitledDropped(untitledDroppedRef.current, group.key)}
+          gitStateKey={editorGitStateKey}
+          gitRepo={gitGroup?.key === group.key && gitStatus ? gitStatus.ok : undefined}
           onDirtyChange={handleDirtyChange}
+          onDirtyPathsChange={handleDirtyPathsChange}
           themeMode={terminalThemeMode}
           wordWrap={prefs.editorWordWrap}
           tabSize={prefs.editorTabSize}
@@ -3350,6 +3437,8 @@ export default function App() {
           highlightActiveLine={prefs.editorHighlightActiveLine}
           bracketMatching={prefs.editorBracketMatching}
           showWhitespace={prefs.editorShowWhitespace}
+          blameEnabled={prefs.editorBlameEnabled}
+          blameHoverDelay={prefs.editorBlameHoverDelay}
           enabledModules={prefs.enabledModules}
           onFontSizeDelta={(delta) => {
             setPrefs((previous) => {

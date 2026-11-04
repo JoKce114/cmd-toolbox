@@ -221,7 +221,8 @@ await page.waitForTimeout(300);
 await click(page.getByRole('button', { name: '保存', exact: true }));
 await page.waitForTimeout(900);
 ok(
-  (await page.evaluate(() => Boolean(document.querySelector('.cm-gutters')))) === false,
+  // 行号关掉后 .cm-gutters 容器仍在：变更标记是独立 gutter，不该跟着消失
+  (await page.evaluate(() => Boolean(document.querySelector('.cm-lineNumbers')))) === false,
   '关闭后行号槽消失',
 );
 

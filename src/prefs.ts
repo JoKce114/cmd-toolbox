@@ -19,6 +19,10 @@ export type AppPrefs = {
   editorHighlightActiveLine: boolean;
   editorBracketMatching: boolean;
   editorShowWhitespace: boolean;
+  // 点行号 / 点行内正文后是否查询该行的 Git 提交信息
+  editorBlameEnabled: boolean;
+  // 悬停在内联 blame 小字上多久才弹出卡片（毫秒）
+  editorBlameHoverDelay: number;
   editorTabSize: number;
   editorIndentWithSpaces: boolean;
   editorKeybindings: KeyBindingMap;
@@ -34,6 +38,10 @@ export const EDITOR_FONT_SIZE_MIN = 11;
 export const EDITOR_FONT_SIZE_MAX = 32;
 export const EDITOR_LINE_HEIGHT_MIN = 1;
 export const EDITOR_LINE_HEIGHT_MAX = 3;
+// 悬停卡片延迟的可选值。0 表示立即弹出；滑动条只会取这几个档位，
+// 避免存进任意数值后设置面板显示出一个奇怪的时间。
+export const BLAME_HOVER_DELAY_OPTIONS = [0, 200, 500, 1000, 1500] as const;
+export const BLAME_HOVER_DELAY_DEFAULT = 1500;
 
 // 链尾的中文字体不能删：Consolas 等字体没有中文字形，
 // 中文注释靠微软雅黑兜底，删掉会让中文掉进别的字体、行高看起来会跳。
@@ -57,6 +65,8 @@ export function defaultPrefs(): AppPrefs {
     editorHighlightActiveLine: true,
     editorBracketMatching: true,
     editorShowWhitespace: false,
+    editorBlameEnabled: true,
+    editorBlameHoverDelay: BLAME_HOVER_DELAY_DEFAULT,
     editorTabSize: 4,
     editorIndentWithSpaces: false,
     editorKeybindings: { ...DEFAULT_KEYBINDINGS },
@@ -71,8 +81,18 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   return Math.min(max, Math.max(min, Math.round(parsed)));
 }
 
-function normalizeKeybindings(value: unknown): KeyBindingMap {
-  const source = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+// 只接受档位内（或档位附近）的值，存进别的数就吸附到最近的合法档位
+function normalizeBlameHoverDelay(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return BLAME_HOVER_DELAY_DEFAULT;
+  let best = BLAME_HOVER_DELAY_OPTIONS[0] as number;
+  for (const option of BLAME_HOVER_DELAY_OPTIONS) {
+    if (Math.abs(option - parsed) < Math.abs(best - parsed)) best = option;
+  }
+  return best;
+}
+
+function normalizeKeybindings(value: unknown): KeyBindingMap {  const source = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
   const result = { ...DEFAULT_KEYBINDINGS };
   for (const action of Object.keys(DEFAULT_KEYBINDINGS) as EditorActionId[]) {
     const raw = source[action];
@@ -139,6 +159,8 @@ export function readPrefs(): AppPrefs {
       editorHighlightActiveLine: parsed.editorHighlightActiveLine !== false,
       editorBracketMatching: parsed.editorBracketMatching !== false,
       editorShowWhitespace: parsed.editorShowWhitespace === true,
+      editorBlameEnabled: parsed.editorBlameEnabled !== false,
+      editorBlameHoverDelay: normalizeBlameHoverDelay(parsed.editorBlameHoverDelay),
       editorTabSize: clampInt(parsed.editorTabSize, 1, 8, 4),
       // 默认使用制表符；只有明确存过 true 才用空格
       editorIndentWithSpaces: parsed.editorIndentWithSpaces === true,

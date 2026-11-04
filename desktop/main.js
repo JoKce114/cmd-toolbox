@@ -435,6 +435,14 @@ function registerIpc() {
     git.commitDiff(assertProjectPath(projectPath), hash),
   );
 
+  ipcMain.handle('git:blame', (_event, projectPath, filePath, line) =>
+    git.blame(assertProjectPath(projectPath), filePath, line),
+  );
+
+  ipcMain.handle('git:show-file-diff', (_event, projectPath, hash, filePath) =>
+    git.showFileDiff(assertProjectPath(projectPath), hash, filePath),
+  );
+
   ipcMain.handle('fs:list', (_event, projectPath, relDir) =>
     fileApi.list(assertProjectPath(projectPath), relDir),
   );

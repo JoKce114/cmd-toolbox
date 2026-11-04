@@ -104,6 +104,10 @@ contextBridge.exposeInMainWorld('api', {
     stashPop: (projectPath, ref) => invoke('git:stash-pop', projectPath, ref),
     stashDrop: (projectPath, ref) => invoke('git:stash-drop', projectPath, ref),
     commitDiff: (projectPath, hash) => invoke('git:commit-diff', projectPath, hash),
+    blame: (projectPath, filePath, line) =>
+      invoke('git:blame', projectPath, filePath, line),
+    showFileDiff: (projectPath, hash, filePath) =>
+      invoke('git:show-file-diff', projectPath, hash, filePath),
   },
 
   files: {
