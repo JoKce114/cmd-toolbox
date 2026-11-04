@@ -945,6 +945,20 @@ p {
   background: #e5484d;
 }
 
+/* 深色主题下概览标尺与编辑器 gutter 的取色保持一致 */
+.editor-pane.theme-dark .editor-overview-mark.is-added {
+  background: #4fa3ff;
+}
+
+.editor-pane.theme-dark .editor-overview-mark.is-modified {
+  background: #e2b436;
+}
+
+.editor-pane.theme-dark .editor-overview-mark.is-deleted {
+  height: 3px;
+  background: #f14c4c;
+}
+
 .cm-conflict-ours {
   background: #dbe7fb;
 }

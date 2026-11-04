@@ -84,6 +84,9 @@ export type CodeMirrorHostProps = {
   changeMarkers?: LineChanges | null;
   // 是否响应行号点击看 blame（只读文件与空白窗口由上层关掉）
   blameEnabled?: boolean;
+  // 有未保存修改时编辑器行号与磁盘行号对不上，点行号不查 blame，
+  // 只提示「保存后查看」。由上层按 file.dirty 传入。
+  blameBlocked?: boolean;
 };
 
 type CardFieldValue = { pos: number; card: SymbolCardState; seq: number } | null;
@@ -295,6 +298,25 @@ const middleClickSelection = ViewPlugin.fromClass(
   },
 );
 
+// bars 以行首位置为键，多行变更块的每一行都有一条。直接拿所有 key 排序会把
+// 一个 5 行的块拆成 5 个跳转目标。按行号把相邻行合并成块，只返回每块的首行。
+function changeBlockStarts(
+  doc: EditorStateType['doc'],
+  bars: Map<number, LineChangeKind>,
+): number[] {
+  const lines = [...bars.keys()]
+    .map((pos) => doc.lineAt(pos).number)
+    .sort((a, b) => a - b);
+  const starts: number[] = [];
+  let previous = -2;
+  for (const line of lines) {
+    if (line === previous) continue;
+    if (line !== previous + 1) starts.push(line);
+    previous = line;
+  }
+  return starts;
+}
+
 // 只在编辑器有焦点时生效，不与终端 / 浏览器的 F5 抢键
 function jumpToNextChange(view: EditorView): boolean {
   const spans = view.state.field(changeMarkerField, false);
@@ -302,9 +324,8 @@ function jumpToNextChange(view: EditorView): boolean {
 
   const doc = view.state.doc;
   const currentLine = doc.lineAt(view.state.selection.main.head).number;
-  const starts = [...spans.bars.keys()].sort((a, b) => a - b);
-  const lines = starts.map((pos) => doc.lineAt(pos).number);
-  const target = lines.find((line) => line > currentLine) ?? lines[0];
+  const starts = changeBlockStarts(doc, spans.bars);
+  const target = starts.find((line) => line > currentLine) ?? starts[0];
   const pos = doc.line(target).from;
 
   view.dispatch({
@@ -320,7 +341,8 @@ const changeKeymap = keymap.of([
 
 type BlameFieldValue = {
   line: number;
-  status: 'loading' | 'ready' | 'failed';
+  // blocked：有未保存修改，编辑器行号映射不到磁盘行号，只能提示保存后再看
+  status: 'loading' | 'ready' | 'failed' | 'blocked';
   info: BlameInfo | null;
   hunk: DiffHunk | null;
 } | null;
@@ -371,6 +393,8 @@ class BlameWidget extends WidgetType {
     host.className = 'cm-blame-inline';
     if (this.value.status === 'loading') {
       host.textContent = '正在读取提交…';
+    } else if (this.value.status === 'blocked') {
+      host.textContent = '有未保存修改，保存后查看提交信息';
     } else if (this.value.status === 'failed' || !this.value.info) {
       host.textContent = '没有提交记录';
     } else {
@@ -745,6 +769,7 @@ export function CodeMirrorHost({
   onConflictCountChange,
   changeMarkers,
   blameEnabled,
+  blameBlocked,
 }: CodeMirrorHostProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -764,6 +789,7 @@ export function CodeMirrorHost({
   const onFontDeltaRef = useRef(onFontSizeDelta);
   const referenceEnabledRef = useRef(referenceEnabled);
   const blameEnabledRef = useRef(Boolean(blameEnabled));
+  const blameBlockedRef = useRef(Boolean(blameBlocked));
   const projectPathRef = useRef(projectPath);
   const activeFileRef = useRef(filePath);
   const jumpRef = useRef(onJumpToSymbol);
@@ -780,10 +806,27 @@ export function CodeMirrorHost({
   onGotoLineAppliedRef.current = onGotoLineApplied;
   changeMarkersRef.current = changeMarkers;
   blameEnabledRef.current = Boolean(blameEnabled);
+  blameBlockedRef.current = Boolean(blameBlocked);
 
   blameLookupRef.current = (line: number) => {
     const view = viewRef.current;
     if (!view) return;
+    // 未保存修改时编辑器行号与磁盘行号已经错位，查到的会是别的行。
+    // 不做行号映射（要跟踪每一处编辑，代价过高），直接提示保存后再看。
+    if (blameBlockedRef.current) {
+      const shown = view.state.field(blameField, false);
+      if (shown && shown.line === line && shown.status === 'blocked') {
+        view.dispatch({ effects: [setBlame.of(null), setBlameHover.of(false)] });
+        return;
+      }
+      view.dispatch({
+        effects: [
+          setBlame.of({ line, status: 'blocked', info: null, hunk: null }),
+          setBlameHover.of(false),
+        ],
+      });
+      return;
+    }
     const current = view.state.field(blameField, false);
     // 点同一行再次点击就收起
     if (current && current.line === line && current.status !== 'loading') {

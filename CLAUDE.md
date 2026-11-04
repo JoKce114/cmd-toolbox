@@ -514,7 +514,12 @@ node tests/device-emulation-probe.mjs
   只存在于 state 里，DOM 上看不到。
 - **中键的 mousemove / mouseup 必须挂在 `window` 上**：只挂编辑器 DOM 时，拖到
   编辑器外松手收不到 mouseup，选区会一直跟着鼠标走。
-- **Alt+F5 只跳有色条的行**：纯删除的锚点不是跳转目标；到末尾回绕到第一个。
+- **Alt+F5 跳到下一个变更块的首行**：一个多行变更块只算一个目标——`bars` 按
+  `doc.lineAt(pos).number` 把相邻行（差值 1）合并成块。纯删除的锚点不是跳转目标；
+  到末尾回绕到第一个。
+- **有未保存修改时点行号不查 blame**：编辑器行号与磁盘行号已经错位，查到的会是
+  别的行。`EditorPane` 按 `file.dirty` 传 `blameBlocked`，直接显示「有未保存修改，
+  保存后查看提交信息」。不要试图实现「编辑器行号 → 磁盘行号」的映射，代价过高。
 - **未跟踪文件整篇显示为新增**（`fileDiff` 对未跟踪返回 `baseContent: ''` +
   `untracked: true`），与 VS Code 一致。不要按 `untracked` 字段跳过标记——那样
   新文件反而看不到自己「全是新的」。

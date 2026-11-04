@@ -79,8 +79,13 @@ const lightTheme = EditorView.theme(
     '.cm-change-gutter .cm-gutterElement': { display: 'flex', alignItems: 'center' },
     '.cm-change-marker': { position: 'relative', width: '100%', height: '100%' },
     '.cm-change-marker.is-added': {
-      borderLeft: '3px solid #1e88e5',
+      width: '3px',
       marginLeft: '5px',
+      // 用户要的是「行号旁一条蓝色波浪竖线」：用内联 SVG 平铺，
+      // 实心 border 画不出波形。修改行保持实心琥珀条，一眼可分。
+      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='6'%3E%3Cpath d='M0 3 Q0.75 0 1.5 3 T3 3' fill='none' stroke='%231e88e5' stroke-width='1.2'/%3E%3C/svg%3E")`,
+      backgroundRepeat: 'repeat-y',
+      backgroundSize: '3px 6px',
     },
     '.cm-change-marker.is-modified': {
       borderLeft: '3px solid #e8a33d',
@@ -176,8 +181,12 @@ const darkTheme = EditorView.theme(
     '.cm-change-gutter .cm-gutterElement': { display: 'flex', alignItems: 'center' },
     '.cm-change-marker': { position: 'relative', width: '100%', height: '100%' },
     '.cm-change-marker.is-added': {
-      borderLeft: '3px solid #4fa3ff',
+      width: '3px',
       marginLeft: '5px',
+      // 深色主题用 #4fa3ff，与新增色条 / 概览标尺保持一致
+      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='6'%3E%3Cpath d='M0 3 Q0.75 0 1.5 3 T3 3' fill='none' stroke='%234fa3ff' stroke-width='1.2'/%3E%3C/svg%3E")`,
+      backgroundRepeat: 'repeat-y',
+      backgroundSize: '3px 6px',
     },
     '.cm-change-marker.is-modified': {
       borderLeft: '3px solid #e2b436',

@@ -25,9 +25,10 @@ writeFileSync(join(repo, 'clean.txt'), 'alpha\nbeta\ngamma\n');
 execFileSync('git', ['add', '.'], { cwd: repo });
 execFileSync('git', ['commit', '-m', '初始提交'], { cwd: repo });
 
-// 工作区版本：第 2 行改掉（modified，同时有删除锚点），第 4 行插入一行（added）。
+// 工作区版本：第 2 行改掉（modified，同时有删除锚点），第 4-6 行插入三行（连续 added 块）。
 // 不要写成 a/B/X/d——那样 Myers 会算成「2、3 行都修改」，没有 added 色条可断言。
-writeFileSync(join(repo, 'sample.txt'), 'a\nB\nc\nX\nd\n');
+// 连续三行新增是 Alt+F5「一次跳过整块」的测试前提。
+writeFileSync(join(repo, 'sample.txt'), 'a\nB\nc\nX\nY\nZ\nd\n');
 // 未跟踪文件对 HEAD 对比时整篇算新增
 writeFileSync(join(repo, 'new.txt'), 'brand new\n');
 
@@ -115,6 +116,22 @@ async function openFile(name) {
   await page.waitForTimeout(1200);
 }
 
+// 参考 tests/settings.mjs：编辑器显示设置要先在面板里改、点保存才生效。
+async function setShowLineNumbers(enabled) {
+  await click(page.locator('.titlebar-settings'));
+  await page.locator('.settings-body').waitFor({ timeout: 15000 });
+  await click(page.getByRole('tab', { name: '编辑器' }));
+  await page.waitForTimeout(300);
+  const toggle = page
+    .locator('.settings-item')
+    .filter({ hasText: '显示行号' })
+    .locator('.settings-switch');
+  const checked = (await toggle.getAttribute('aria-checked')) === 'true';
+  if (checked !== enabled) await click(toggle);
+  await click(page.getByRole('button', { name: '保存', exact: true }));
+  await page.waitForTimeout(1200);
+}
+
 console.log('1. 修改与新增行显示色条');
 await openFile('sample.txt');
 assert(
@@ -140,6 +157,25 @@ console.log('2b. 点击行号看 blame');
     await page.locator('.blame-card .blame-diff-row').count() > 0,
     '卡片里有 diff 片段',
   );
+}
+
+console.log('2b2. 有未保存修改时点行号不查 blame');
+{
+  await openFile('sample.txt');
+  // 在首行末尾打一个字制造未保存修改
+  const firstLine = page.locator('.editor-pane:not(.is-hidden) .cm-content .cm-line').first();
+  const box = await firstLine.boundingBox();
+  await page.mouse.click(box.x + box.width - 4, box.y + box.height / 2);
+  await page.keyboard.type('!');
+  await page.waitForTimeout(600);
+  await page.locator('.cm-lineNumbers .cm-gutterElement').nth(1).click();
+  await page.locator('.cm-blame-inline').first().waitFor({ timeout: 8000 });
+  const blocked = await page.locator('.cm-blame-inline').first().innerText();
+  assert(blocked.includes('有未保存修改'), '未保存修改时提示保存后再看 blame，实际：' + blocked);
+  // 撤销回干净状态，避免影响后面的用例
+  await page.locator('.editor-pane:not(.is-hidden) .cm-content').click();
+  await page.keyboard.press('Control+Z');
+  await page.waitForTimeout(400);
 }
 
 console.log('2c. 中键拖拽选择');
@@ -181,11 +217,12 @@ console.log('2d. Alt+F5 跳转下一个改动');
   await page.keyboard.press('Control+Home');
   assert((await cursorLine()) === 1, '初始光标在第 1 行');
   await page.keyboard.press('Alt+F5');
-  assert((await cursorLine()) === 2, 'Alt+F5 跳到第 2 行（modified）');
+  assert((await cursorLine()) === 2, 'Alt+F5 跳到第 2 行（modified 块起点）');
   await page.keyboard.press('Alt+F5');
-  assert((await cursorLine()) === 4, '再按一次跳到第 4 行（added）');
+  assert((await cursorLine()) === 4, '再按一次跳到第 4 行（added 块起点）');
   await page.keyboard.press('Alt+F5');
-  assert((await cursorLine()) === 2, '到最后一个改动后回绕到第一个');
+  // 第 4-6 行是连续新增块。逐行跳会停在 5，这里必须整块跳过并回绕到第 2 行。
+  assert((await cursorLine()) === 2, '一次跳过整个三行新增块，回绕到第 2 行');
 }
 
 console.log('3. 干净文件没有标记');
@@ -204,6 +241,26 @@ console.log('3b. 未跟踪文件整篇算新增');
 await openFile('new.txt');
 await page.waitForTimeout(600);
 assert((await page.locator('.cm-change-marker.is-added').count()) >= 1, '未跟踪文件显示 added 色条');
+
+console.log('3c. 关掉「显示行号」后变更色条仍在');
+{
+  await openFile('sample.txt');
+  await setShowLineNumbers(false);
+  const visible = page.locator('.editor-pane:not(.is-hidden)');
+  assert(
+    (await visible.locator('.cm-lineNumbers').count()) === 0,
+    '显示行号已关闭（行号 gutter 不存在）',
+  );
+  assert(
+    (await visible.locator('.cm-change-marker.is-added').count()) >= 1,
+    '关闭行号后 added 色条仍在',
+  );
+  await setShowLineNumbers(true);
+  assert(
+    (await page.locator('.editor-pane:not(.is-hidden) .cm-lineNumbers').count()) > 0,
+    '行号设置已恢复',
+  );
+}
 
 console.log('4. 非 Git 的普通目录不出标记');
 await addProject(plain, 'plain-proj');

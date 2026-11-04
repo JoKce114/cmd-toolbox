@@ -1235,6 +1235,7 @@ export function EditorPane({
                   blameEnabled={
                     Boolean(activePath) && !file.readOnly && !isUntitledPath(activePath)
                   }
+                  blameBlocked={Boolean(file.dirty)}
                 />
                 <EditorOverviewRuler changes={changeMarkers} />
               </div>
