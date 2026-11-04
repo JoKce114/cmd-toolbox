@@ -162,6 +162,32 @@ console.log('2c. 中键拖拽选择');
   assert(selected.includes('c\nX'), '中键拖拽选中了第 3、4 行的内容');
 }
 
+console.log('2d. Alt+F5 跳转下一个改动');
+{
+  // .cm-cursor 是绝对定位在 .cm-cursorLayer 里的，不属于任何 .cm-line，
+  // 所以取行号要走原生选区：focusNode 落在光标所在行的文本节点上。
+  const cursorLine = () =>
+    page.evaluate(() => {
+      const visible = document.querySelector('.editor-pane:not(.is-hidden)');
+      const lines = [...(visible?.querySelectorAll('.cm-content .cm-line') ?? [])];
+      const node = window.getSelection()?.focusNode ?? null;
+      const element = node instanceof Element ? node : (node?.parentElement ?? null);
+      const line = element?.closest('.cm-line') ?? null;
+      return line ? lines.indexOf(line) + 1 : 0;
+    });
+
+  await openFile('sample.txt');
+  await page.locator('.editor-pane:not(.is-hidden) .cm-content').click();
+  await page.keyboard.press('Control+Home');
+  assert((await cursorLine()) === 1, '初始光标在第 1 行');
+  await page.keyboard.press('Alt+F5');
+  assert((await cursorLine()) === 2, 'Alt+F5 跳到第 2 行（modified）');
+  await page.keyboard.press('Alt+F5');
+  assert((await cursorLine()) === 4, '再按一次跳到第 4 行（added）');
+  await page.keyboard.press('Alt+F5');
+  assert((await cursorLine()) === 2, '到最后一个改动后回绕到第一个');
+}
+
 console.log('3. 干净文件没有标记');
 // 先确认切换前标记确实存在，再切到干净文件确认归零：只断言「归零」无法区分
 // 「清空逻辑生效」与「标记本来就没渲染出来」。

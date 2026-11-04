@@ -295,6 +295,29 @@ const middleClickSelection = ViewPlugin.fromClass(
   },
 );
 
+// 只在编辑器有焦点时生效，不与终端 / 浏览器的 F5 抢键
+function jumpToNextChange(view: EditorView): boolean {
+  const spans = view.state.field(changeMarkerField, false);
+  if (!spans || spans.bars.size === 0) return true; // 吃掉按键，不弹提示
+
+  const doc = view.state.doc;
+  const currentLine = doc.lineAt(view.state.selection.main.head).number;
+  const starts = [...spans.bars.keys()].sort((a, b) => a - b);
+  const lines = starts.map((pos) => doc.lineAt(pos).number);
+  const target = lines.find((line) => line > currentLine) ?? lines[0];
+  const pos = doc.line(target).from;
+
+  view.dispatch({
+    selection: EditorSelection.cursor(pos),
+    effects: EditorView.scrollIntoView(pos, { y: 'center' }),
+  });
+  return true;
+}
+
+const changeKeymap = keymap.of([
+  { key: 'Alt-F5', run: jumpToNextChange, preventDefault: true },
+]);
+
 type BlameFieldValue = {
   line: number;
   status: 'loading' | 'ready' | 'failed';
@@ -886,6 +909,7 @@ export function CodeMirrorHost({
           // 先命中的生效。否则 Ctrl+G 会被 searchKeymap 的「查找下一个」抢走。
           keysRef.current.of(bindingsExtension(keybindings)),
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+          changeKeymap,
           indentRef.current.of([
             EditorState.tabSize.of(tabSize),
             indentUnit.of(indentWithSpaces ? ' '.repeat(tabSize) : '\t'),
