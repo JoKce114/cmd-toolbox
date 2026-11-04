@@ -914,6 +914,37 @@ p {
   height: 100%;
 }
 
+/* 概览标尺：贴右缘、避开 10px 系统滚动条，不抢鼠标事件 */
+.editor-overview-ruler {
+  position: absolute;
+  top: 0;
+  right: 10px;
+  bottom: 0;
+  width: 8px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.editor-overview-mark {
+  position: absolute;
+  left: 1px;
+  width: 6px;
+  border-radius: 1px;
+}
+
+.editor-overview-mark.is-added {
+  background: #1e88e5;
+}
+
+.editor-overview-mark.is-modified {
+  background: #e8a33d;
+}
+
+.editor-overview-mark.is-deleted {
+  height: 3px;
+  background: #e5484d;
+}
+
 .cm-conflict-ours {
   background: #dbe7fb;
 }
