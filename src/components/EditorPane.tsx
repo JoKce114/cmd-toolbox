@@ -89,6 +89,9 @@ export type EditorPaneProps = {
   untitledDropped?: string[];
   // Git 变更条目的指纹，变化时重新拉 HEAD 基准
   gitStateKey?: string;
+  // 本项目是否为 Git 仓库。undefined 表示状态未知（仍在加载、或不是当前激活项目），
+  // 此时不出标记：非仓库里 fileDiff 会把文件当未跟踪、返回空基准，整篇会被误判成新增。
+  gitRepo?: boolean;
 };
 
 export function EditorPane({
@@ -118,6 +121,7 @@ export function EditorPane({
   untitledRestore,
   untitledDropped,
   gitStateKey,
+  gitRepo,
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const {
@@ -307,6 +311,10 @@ export function EditorPane({
 
   const loadHeadBase = useCallback(
     async (relPath: string): Promise<string | null> => {
+      // 非 Git 项目不能取 HEAD 基准：fileDiff 在非仓库里不会 reject，
+      // 而是把每个文件都当成未跟踪并返回空串，直接算下去会整篇显示成新增。
+      // undefined 表示状态未知，同样先不出标记，等 App 拿到 git status 再算。
+      if (gitRepo !== true) return null;
       const cached = baseTextRef.current.get(relPath);
       if (cached && Date.now() - cached.at < 60_000) return cached.text;
       try {
@@ -321,7 +329,7 @@ export function EditorPane({
         return null;
       }
     },
-    [group.path],
+    [group.path, gitRepo],
   );
 
   // 窗口重新获得焦点时丢掉缓存：提交完切回来，标记应当自动消失
@@ -345,6 +353,11 @@ export function EditorPane({
       setChangeMarkers(null);
       return;
     }
+    // 非仓库 / 仓库状态未知时立即清空，不必等 300ms 防抖再走一次死路。
+    if (gitRepo !== true) {
+      setChangeMarkers(null);
+      return;
+    }
     const relPath = activePath;
     const content = file.content;
     let cancelled = false;
@@ -358,7 +371,7 @@ export function EditorPane({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [activePath, file, loadHeadBase, baseRefreshToken]);
+  }, [activePath, file, loadHeadBase, gitRepo, baseRefreshToken]);
 
   // 实时重算只依赖原始字符串：object/state 作为依赖会在每次渲染时换身份，
   // 既容易触发多余计算，也容易写出无限循环。

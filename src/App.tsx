@@ -3349,6 +3349,7 @@ export default function App() {
           untitledRestore={pickGroupUntitled(untitledContentsRef.current, group.key)}
           untitledDropped={pickGroupUntitledDropped(untitledDroppedRef.current, group.key)}
           gitStateKey={editorGitStateKey}
+          gitRepo={gitGroup?.key === group.key && gitStatus ? gitStatus.ok : undefined}
           onDirtyChange={handleDirtyChange}
           themeMode={terminalThemeMode}
           wordWrap={prefs.editorWordWrap}

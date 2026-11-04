@@ -8,6 +8,9 @@ import { join, resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const dataDir = mkdtempSync(join(tmpdir(), 'cmdtb-marker-data-'));
 const repo = mkdtempSync(join(tmpdir(), 'cmdtb-marker-repo-'));
+// 普通目录（不是 Git 仓库）：用来验证不会把整篇文件误判成新增
+const plain = mkdtempSync(join(tmpdir(), 'cmdtb-marker-plain-'));
+writeFileSync(join(plain, 'plain.txt'), 'one\ntwo\nthree\n');
 
 execFileSync('git', ['init', '-b', 'main'], { cwd: repo, stdio: 'ignore' });
 execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
@@ -106,7 +109,9 @@ await page.locator('.editor-pane').waitFor();
 
 async function openFile(name) {
   await click(page.locator(`.file-tree .file-row[title="${name}"]`));
-  await page.locator('.cm-editor').first().waitFor();
+  // 其他项目的编辑器页签仍挂在 DOM 里（is-hidden），等当前可见的那个，
+  // 否则 first() 可能命中隐藏页签、文件还没加载完就往下走。
+  await page.locator('.editor-pane:not(.is-hidden) .cm-editor').first().waitFor();
   await page.waitForTimeout(1200);
 }
 
@@ -138,6 +143,28 @@ console.log('3b. 未跟踪文件整篇算新增');
 await openFile('new.txt');
 await page.waitForTimeout(600);
 assert((await page.locator('.cm-change-marker.is-added').count()) >= 1, '未跟踪文件显示 added 色条');
+
+console.log('4. 非 Git 的普通目录不出标记');
+await addProject(plain, 'plain-proj');
+await page.locator('.group-item').filter({ hasText: 'plain-proj' }).locator('.group-main').click();
+await page.waitForTimeout(600);
+await page.locator('.group-item').filter({ hasText: 'plain-proj' }).click({ button: 'right' });
+await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+await page.getByRole('menuitem', { name: '打开编辑器', exact: true }).click();
+await page.locator('.editor-pane:not(.is-hidden)').waitFor();
+await openFile('plain.txt');
+await page.waitForTimeout(600);
+// 仓库项目的编辑器页签仍在 DOM 里（隐藏），标记会残留。断言必须限定在
+// 当前可见的编辑器里，否则测的是另一个项目残留的色条。
+const visibleEditor = page.locator('.editor-pane:not(.is-hidden)');
+assert(
+  (await visibleEditor.locator('.cm-change-marker').count()) === 0,
+  '非 Git 目录不出色条',
+);
+assert(
+  (await visibleEditor.locator('.editor-overview-ruler').count()) === 0,
+  '非 Git 目录不画标尺',
+);
 
 await app.close();
 console.log(`\n全部通过：${passed} 项`);
