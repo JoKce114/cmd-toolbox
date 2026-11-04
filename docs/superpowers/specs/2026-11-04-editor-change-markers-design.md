@@ -12,6 +12,13 @@
 - **删除处**：行号右侧一个小红色三角 ▶，悬停显示被删掉的原文
 - **概览标尺**：编辑器右缘一条极窄的色带，按行号比例标出全文件的增删分布
 
+另有三项配套交互：
+
+- **点击行号**：在该行末尾以内联半透明小字显示最新一次 Git 改动（作者 · 相对时间 · 提交信息），
+  鼠标移上去弹出卡片，含提交元信息与该提交对该文件的 diff 片段（对立 GitLens 的 blame）。
+- **鼠标中键拖拽**：与左键一样做普通文本选择，可上下左右任意方向拖。
+- **Alt+F5**：从光标位置向下跳到下一个变更块，到文件末尾后回到第一个，循环。
+
 对标 VS Code 的 Git gutter 体验。**不给行加背景色**——正文保持干净，只靠左侧标记与标尺表达。
 
 不做的：行内字符级 diff、点击展开被删内容块、accept/reject 变更块、对比暂存区。
@@ -38,11 +45,13 @@ EditorPane
         ↓  LineChanges
 CodeMirrorHost                                                   [加一个 gutter]
   gutter marker：色条 + 红三角
+  Alt+F5 跳转 / 中键选择                                          [同一组件内的插件]
+  点击行号 → window.api.git.blame(...) + git.showFileDiff(...)    [新增 IPC]
 EditorOverviewRuler                                              [新组件，纯 React]
   按行号比例画色带
 ```
 
-差异计算全在渲染进程，不新增 IPC。
+差异计算全在渲染进程，不新增 IPC；blame 与提交 diff 片段需要新增两个 IPC。
 
 ## 1. 差异计算（`src/lineChanges.ts`）
 
@@ -133,9 +142,17 @@ const result = await window.api.git.fileDiff(group.path, relPath, 'modified', 'H
 changeMarkers?: LineChanges | null;
 ```
 
-用 `StateEffect` + `StateField` 注入，**不重建 `EditorView`**——撤销栈、光标、
+用 `changeMarkerField`（`StateField<LineChanges>`）+ `StateEffect` 注入，
+**不重建 `EditorView`**——撤销栈、光标、
 滚动位置都必须保住（同 `readOnly` 走 Compartment 的理由）。effect 只在
 `changeMarkers` 引用变化时 dispatch。
+
+**字段里存位置，不存行号**：`CodeMirrorHost` 收到 `LineChanges`（行号）后，
+用当前文档换算成位置再存进字段；`update` 遇到 `tr.docChanged` 时用
+`tr.changes.mapPos` 把这些位置映射到新文档，行号在渲染时用
+`doc.lineAt(pos).number` 现算。否则用户在标记上方敲一行，下面所有标记都会错位
+一整行，直到 300ms 防抖重算完成——表现为「打字时标记乱跳」。
+`lineChanges.ts` 保持纯函数、不依赖 CodeMirror，换算在 `CodeMirrorHost` 里做。
 
 ### Gutter
 
@@ -188,7 +205,114 @@ gutter 宽度 14px。**开关只影响行号**：关掉「显示行号」时变�
 
 标尺不随滚动移动——它在 `.cm-scroller` 外面，因此不需要监听滚动。
 
-## 5. 测试
+## 5. 行号点击与内联 blame
+
+### 触发
+
+点击 `.cm-lineNumbers` 里的行号格子。行号被关掉时点击变更 gutter 同样有效。
+在 `CodeMirrorHost` 的宿主 `div` 上挂一个捕获阶段的 `click` 监听，
+用 `event.target.closest('.cm-gutterElement')` 取格子，靠 `getBoundingClientRect().top`
+调 `view.lineBlockAtHeight()` 反查行号。**不要给行号 gutter 加自定义 click**——
+`lineNumbers()` 是内建 gutter，没有 `domEventHandlers` 入口。
+
+### 内联小字
+
+新增一个 `blameField`（`StateField<{ line: number; state: 'loading' | 'ready' | 'failed' } | null>`）
+与一个 `Decoration.widget`，挂在目标行的 `line.to` 位置（`side: 1`），
+在行尾显示半透明小字：
+
+```
+作者 · 2 个月前 · 提交信息摘要
+```
+
+- 重复点同一行：收起；点另一行：把 widget 移过去并重新查询。
+- 再次点击、按 Esc、或编辑器内其它位置发生 `mousedown` 时收起。
+- 查询中显示 `正在读取…`，失败/无归属（未跟踪文件）显示 `没有提交记录`。
+- 小字本身可点击可悬停：`cursor: default`，不抢光标定位。
+- 只读文件（二进制 / 超大 / 解码失败）与空白窗口不响应行号点击——它们没有可靠的文本或 Git 归属。
+
+### 悬停卡片
+
+复用现有的 `showTooltip` + `createCardDom` 模式（符号跳转卡片就是这么做的），
+卡片锚在内联小字上，内容是：
+
+1. 作者、相对时间（`8 月 18 日 下午 4:50` 这种本地化格式）
+2. 提交信息（首行摘要，最多 2 行）
+3. 短哈希 + 「复制」按钮
+4. 该提交对该文件的 diff 片段
+
+diff 片段按 blame 返回的**原始行号**定位 hunk：解析 `git show` 的 patch，
+取 `@@ -a,b +c,d @@` 中 `[a, a+b)` 覆盖该行号的那一个 hunk，最多渲染 40 行，
+超出部分折叠成「… 还有 N 行」。行渲染复用 `parsePatch` 的结果，不必再写解析器。
+
+卡片不做作者头像（要联网取 Gravatar，与本地工具定位不符）。
+
+### 新 IPC
+
+| 通道 | 入参 | 返回 |
+|---|---|---|
+| `git:blame` | `projectPath, relPath, line` | `{ hash, short, author, authorTime, origLine, summary } \| null` |
+| `git:show-file-diff` | `projectPath, hash, relPath` | `{ patch: string }` |
+
+后端（`desktop/git.js`）：
+
+- blame 用 `git blame --line-porcelain -L <line>,<line> -- <relPath>`，
+  解析首行的 `hash origLine finalLine` 与随后的 `author` / `author-time` / `summary`。
+  未跟踪文件、不在暂存区的文件返回 `null`。
+- `show-file-diff` 用 `git --no-pager show --no-color --no-ext-diff -U3 <hash> -- <relPath>`，
+  输出截断到 200KB 防止大提交卡住渲染。
+- 两者都要 `resolveWithin` 校验路径，`hash` 过 `assertCommitHash`。
+
+渲染侧按 `(relPath, line)` 缓存 60 秒，`gitStateKey` 变化时清空。
+
+## 6. 鼠标中键选择
+
+与左键完全一致的普通文本选择，可上下左右任意方向拖。
+
+实现为一个 `ViewPlugin`，监听 `mousedown`：
+
+1. `event.button !== 1` 直接放过。
+2. `preventDefault()`——否则 Chromium 会进入中键自动滚动模式。
+3. `posAtCoords` 取起点，`dispatch({ selection: EditorSelection.cursor(pos) })`。
+4. 在 `window` 上挂 `mousemove` / `mouseup`：移动时按 `buttons & 4` 判断中键仍按住，
+   把选区扩成 `EditorSelection.range(anchor, posAtCoords)`；松开时解绑。
+5. 拖出编辑器外部时 `posAtCoords` 返回 `null`，此时保留上一次的位置，不跳回。
+
+**必须挂在 `window` 而不是编辑器 DOM 上**：拖到编辑器外再松手，只挂编辑器会收不到
+`mouseup`，选区会一直跟着鼠标走。
+
+不处理中键粘贴（Windows 上 Chromium 本来就不做），也不改终端页签的中键行为
+（终端是另一个组件，不受这个插件影响）。
+
+## 7. Alt+F5 跳转到下一个改动
+
+加在 `CodeMirrorHost` 的 keymap 里（`preventDefault: true`），**不是全局快捷键**——
+只有编辑器有焦点时才生效，不会和终端/浏览器抢键。
+
+```ts
+function jumpToNextChange(view: EditorView): boolean {
+  const spans = view.state.field(changeMarkerField, false);
+  if (!spans || !spans.chunks.length) return true;   // 吃掉按键，不弹提示
+  const doc = view.state.doc;
+  const currentLine = doc.lineAt(view.state.selection.main.head).number;
+  // 字段存位置，行号现算；chunks 天然按文档顺序排列
+  const lines = spans.chunks.map((chunk) => doc.lineAt(chunk.pos).number);
+  const target = lines.find((line) => line > currentLine) ?? lines[0];
+  const pos = doc.line(target).from;
+  view.dispatch({
+    selection: EditorSelection.cursor(pos),
+    effects: EditorView.scrollIntoView(pos, { y: 'center' }),
+  });
+  return true;
+}
+```
+
+- 只跳**有色条的行**（新增 / 修改）。纯删除的位置不是跳转目标——用户明确没要。
+- 光标已经落在某个变更块中间时，跳的是**下一个**块（用 `>` 而不是 `>=`）。
+- 有改动但光标之后没有：回到第一个，实现循环。
+- 无改动：按键被吃掉但什么都不发生，避免落到浏览器默认行为上。
+
+## 8. 测试
 
 ### 离线：`tests/line-changes.mjs`
 
@@ -197,6 +321,15 @@ gutter 宽度 14px。**开关只影响行号**：关掉「显示行号」时变�
 - 空文件 ↔ 有内容、两边相同（全部为空结果）
 - 超过 20000 行返回空结果
 - `splitLinesForDiff` 不把末尾换行算成一行
+
+### 离线：`tests/git-blame.mjs`
+
+用临时 Git 仓库断言 `desktop/git.js` 的两个新函数：
+
+- blame 返回正确作者、提交信息与 `origLine`
+- 未跟踪文件返回 `null`
+- `show-file-diff` 只包含目标文件，`hash` 非法时报错
+- blame 的 `origLine` 与 patch hunk 的旧行号区间能够对上
 
 ### GUI：`tests/editor-change-markers.mjs`
 
@@ -207,6 +340,9 @@ gutter 宽度 14px。**开关只影响行号**：关掉「显示行号」时变�
 - 概览标尺 `.editor-overview-ruler` 有子元素
 - 切到未修改的文件后三类标记全部消失
 - 关掉「显示行号」后色条仍在
+- 点击行号后 `.cm-blame-inline` 出现，悬停弹出 blame 卡片且含 diff 片段
+- 按 Alt+F5 光标落到下一个变更块（连续按两次会前进，末尾回绕）
+- 中键拖拽产生非空选区
 
 沿用 `tests/editor-file-tree.mjs` 的临时仓库搭建方式。
 
@@ -216,13 +352,19 @@ gutter 宽度 14px。**开关只影响行号**：关掉「显示行号」时变�
 |---|---|
 | `src/lineChanges.ts` | 新增 |
 | `src/components/EditorOverviewRuler.tsx` | 新增 |
+| `src/components/BlameCard.tsx` | 新增（内联小字与悬停卡片） |
 | `src/diffFromText.ts` | 导出 `diffLines` / `DiffOp` / `splitLinesForDiff` |
-| `src/components/CodeMirrorHost.tsx` | 新增 gutter + StateField + props |
+| `src/components/CodeMirrorHost.tsx` | gutter + StateField + Alt+F5 键位 + 中键选择插件 + blame widget |
 | `src/components/EditorPane.tsx` | 拉取基准、防抖重算、挂标尺 |
+| `desktop/git.js` | 新增 `blame` 与 `showFileDiff` |
+| `desktop/main.js` | 注册两个 IPC |
+| `desktop/preload.js` | 暴露两个方法 |
+| `src/global.d.ts` | 两个方法的类型声明 |
 | `src/App.tsx` | 传 `gitStateKey` |
 | `src/editorTheme.ts` | 两套主题的标记配色 |
-| `src/styles.css` | gutter 与标尺的结构样式 |
+| `src/styles.css` | gutter、标尺、内联小字与 blame 卡片的结构样式 |
 | `tests/line-changes.mjs` | 新增 |
+| `tests/git-blame.mjs` | 新增 |
 | `tests/editor-change-markers.mjs` | 新增 |
 | `CLAUDE.md` | 补一节「编辑器变更标记」的约定与坑 |
 
@@ -230,6 +372,8 @@ gutter 宽度 14px。**开关只影响行号**：关掉「显示行号」时变�
 
 - 不加设置开关（已确认：一直显示）
 - 不加行背景色
-- 不做点击展开被删内容（只做悬停 title）
+- 不做点击展开被删内容（内联小字只显示提交信息，diff 片段放在悬停卡片里）
+- 不做反向跳转（Shift+Alt+F5）、删除位置不作为 Alt+F5 的跳转目标
+- 不做矩形（列）选择——中键就是普通的任意方向文本选择
 - 不引入 `@codemirror/merge`
 - 不改 `DiffPane`（左右分栏对比维持现状）
