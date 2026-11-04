@@ -306,7 +306,7 @@ try {
     assert((await countDiffPanes()) === 1, '关闭后重新恢复到单页签复用');
   }
 
-  console.log('6. 复用未触碰的编辑器页签换文件时，旧路径不会回写');
+  console.log('6. 复用未触碰的编辑器页签换文件后，路径收敛到新文件');
   {
     // 先切回编辑器页签再关掉它，重建一个没被编辑过的编辑器，满足复用条件
     await click(page.locator('.tab').filter({ hasText: 'a.txt' }).first());
@@ -344,10 +344,12 @@ try {
     const editorTabsBefore = await page.locator('.editor-tab').count();
 
     // App 复用同一个页签把 filePath 改成 b.txt；这一轮编辑器里还是 a.txt，
-    // 旧 effect 会把 a.txt 写回 App，形成 b.txt → a.txt → b.txt 的往返。
+    // 旧实现会把 a.txt 写回 App，形成 b.txt → a.txt → b.txt 的往返。
     await openFromGitPanel('b.txt');
     await waitFor(async () => (await activeEditorPath()).endsWith('b.txt'), '编辑器切到 b.txt');
-    // 留一轮渲染 + 状态回写的时间再复查，路径不该又跳回 a.txt
+    // 留一轮渲染 + 状态回写的时间再复查。注意这里只能验证「终态收敛」：
+    // 实测往返即使发生，300ms 后也已经收敛回 b.txt，从最终 DOM 观测不到
+    // 中间态，因此这条断言无法区分「没有回写」和「回写后又改回来」。
     await page.waitForTimeout(300);
     assert((await page.locator('.editor-pane').count()) === 1, '编辑器页签数量不增加');
     assert(
@@ -356,7 +358,7 @@ try {
     );
     assert(
       (await activeEditorPath()).endsWith('b.txt'),
-      'tab.filePath 稳定在 b.txt（没有回写 a.txt）',
+      '终态路径收敛在 b.txt（只验证终态，不区分是否发生过往返）',
     );
     assert(
       (await page
@@ -407,6 +409,109 @@ try {
         .innerText()).includes('BEE'),
       '真的打开了 b.txt（不是只激活空页签）',
     );
+  }
+
+  console.log('8. 未保存拦截按具体文件判断，而不是整个页签');
+  {
+    // 清掉前面留下的差异页签，便于直接断言「有没有新开」。
+    while ((await countDiffPanes()) > 0) {
+      const before = await countDiffPanes();
+      await page
+        .locator('.diff-pane .icon-btn[title="关闭"]')
+        .first()
+        .evaluate((element) => element.click());
+      await waitFor(async () => (await countDiffPanes()) < before, '关闭差异页签');
+    }
+
+    // 先打开 a.txt：当前 b.txt 没被碰过，会被 a.txt 顶替。
+    await click(page.locator('.file-tree .file-row[title="a.txt"]'));
+    await waitFor(
+      async () =>
+        (await page
+          .locator('.editor-pane:not(.is-hidden) .pane-path')
+          .first()
+          .innerText()).endsWith('a.txt'),
+      '编辑器打开 a.txt',
+    );
+    await page
+      .locator('.editor-pane:not(.is-hidden) .cm-content')
+      .first()
+      .waitFor({ timeout: 15000 });
+    // 让 a.txt 变脏，下一个打开的文件就不会把它顶替掉。
+    await click(page.locator('.editor-pane:not(.is-hidden) .cm-content').first());
+    await page.keyboard.type('X');
+    await page.locator('.editor-tab.active .editor-tab-dot').waitFor({ timeout: 8000 });
+
+    // 再打开 b.txt：a.txt 已脏，只剩新增页签一条路，两个文件同时开着。
+    await click(page.locator('.file-tree .file-row[title="b.txt"]'));
+    await waitFor(
+      async () =>
+        (await page
+          .locator('.editor-pane:not(.is-hidden) .pane-path')
+          .first()
+          .innerText()).endsWith('b.txt'),
+      '编辑器切到 b.txt',
+    );
+    await waitFor(
+      async () => (await page.locator('.editor-tab').count()) === 2,
+      'a.txt 与 b.txt 同时打开',
+    );
+
+    // 点真正脏的 a.txt：即便编辑器当前停在 b.txt，也必须拦下差异页签。
+    await waitForNoToast();
+    await clickChange('a.txt');
+    await waitFor(
+      async () => (await page.locator('.toast', { hasText: '未保存修改' }).count()) >= 1,
+      '点脏文件出现未保存修改提示',
+    );
+    assert((await countDiffPanes()) === 0, '点脏的 a.txt 没有开差异页签');
+    assert(
+      (await page.locator('.editor-pane:not(.is-hidden)').count()) === 1,
+      '点脏的 a.txt 切回编辑器页签',
+    );
+    assert(
+      (await page
+        .locator('.editor-pane:not(.is-hidden) .pane-path')
+        .first()
+        .innerText()).endsWith('a.txt'),
+      '编辑器显示被点的脏文件 a.txt',
+    );
+
+    // 点干净的 b.txt：不能被后台的脏文件误拦，必须正常开差异页签。
+    await waitForNoToast();
+    await clickChange('b.txt');
+    await waitFor(async () => (await countDiffPanes()) === 1, '点干净的 b.txt 正常开差异页签');
+    assert(await visibleDiffPathIncludes('b.txt'), '差异页签显示 b.txt');
+  }
+
+  console.log('9. 重命名差异页签后标题不被复用覆盖');
+  {
+    // 当前只有一个差异页签（b.txt）。右键改个名字。
+    await page
+      .locator('.tab')
+      .filter({ hasText: 'b.txt' })
+      .first()
+      .click({ button: 'right' });
+    await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+    await page.getByRole('menuitem', { name: '重命名用途', exact: true }).click();
+    const renameModal = page.locator('.modal-card').filter({ hasText: '重命名终端用途' });
+    await renameModal.waitFor({ timeout: 8000 });
+    await page.locator('#tab-purpose').fill('我的差异');
+    await click(page.getByRole('button', { name: '保存名称', exact: true }));
+    await renameModal.waitFor({ state: 'detached', timeout: 8000 });
+    await waitFor(
+      async () => (await page.locator('.tab').filter({ hasText: '我的差异' }).count()) >= 1,
+      '差异页签已改名',
+    );
+
+    // 再点另一个文件：改过名的页签算「碰过」，不能被复用、标题不能被覆盖。
+    await clickChange('c.txt');
+    await waitFor(async () => (await countDiffPanes()) === 2, '改名后另开差异页签，不覆盖标题');
+    assert(
+      (await page.locator('.tab').filter({ hasText: '我的差异' }).count()) >= 1,
+      '改名后的页签标题仍在',
+    );
+    assert(await visibleDiffPathIncludes('c.txt'), '新差异页签显示 c.txt');
   }
 } finally {
   await app?.close().catch(() => {});

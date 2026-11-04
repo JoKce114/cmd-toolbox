@@ -65,6 +65,9 @@ export type EditorPaneProps = {
   onToast: (message: string, kind?: ToastKind) => void;
   onTitleChange: (title: string) => void;
   onDirtyChange: (tabId: string, dirty: boolean) => void;
+  // 有未保存修改的路径集合。SCM 拦截要按「具体文件」判断，
+  // 只用页签级的 dirty 布尔值会把无关文件也拦下来。
+  onDirtyPathsChange: (tabId: string, dirtyPaths: string[]) => void;
   themeMode: TerminalThemeMode;
   wordWrap: boolean;
   tabSize: number;
@@ -102,6 +105,7 @@ export function EditorPane({
   onToast,
   onTitleChange,
   onDirtyChange,
+  onDirtyPathsChange,
   themeMode,
   wordWrap,
   tabSize,
@@ -480,6 +484,8 @@ export function EditorPane({
   onTitleChangeRef.current = onTitleChange;
   const onDirtyChangeRef = useRef(onDirtyChange);
   onDirtyChangeRef.current = onDirtyChange;
+  const onDirtyPathsChangeRef = useRef(onDirtyPathsChange);
+  onDirtyPathsChangeRef.current = onDirtyPathsChange;
   const onFilePathChangeRef = useRef(onFilePathChange);
   onFilePathChangeRef.current = onFilePathChange;
   const onUntitledContentsChangeRef = useRef(onUntitledContentsChange);
@@ -653,6 +659,10 @@ export function EditorPane({
   }, [untitledSnapshot]);
 
   const hasSessionOnly = openPaths.some((relPath) => losesSessionContent(files[relPath]));
+  const dirtyPaths = useMemo(
+    () => openPaths.filter((relPath) => files[relPath]?.dirty),
+    [openPaths, files],
+  );
 
   useEffect(() => {
     const base = activePath ? displayNameFor(activePath) : '编辑器';
@@ -664,6 +674,10 @@ export function EditorPane({
     // 同样会永久丢内容，所以要把 App 的 dirty 守卫一起点亮。
     onDirtyChangeRef.current(tab.id, hasDirty || hasSessionOnly);
   }, [tab.id, hasDirty, hasSessionOnly]);
+
+  useEffect(() => {
+    onDirtyPathsChangeRef.current(tab.id, dirtyPaths);
+  }, [tab.id, dirtyPaths]);
 
   useEffect(() => {
     setConflictCount(0);
@@ -684,7 +698,10 @@ export function EditorPane({
   const unrecognizedConflict = conflictCount === 0 && /^<{7}/m.test(file.content);
 
   useEffect(() => {
-    return () => onDirtyChangeRef.current(tab.id, false);
+    return () => {
+      onDirtyChangeRef.current(tab.id, false);
+      onDirtyPathsChangeRef.current(tab.id, []);
+    };
   }, [tab.id]);
 
   const handleSave = useCallback(async () => {

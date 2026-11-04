@@ -249,6 +249,9 @@ export default function App() {
   const tabGroupsByGroupRef = useRef<Record<string, TabGroup[]>>(tabGroupsByGroup);
   tabGroupsByGroupRef.current = tabGroupsByGroup;
   const dirtyTabsRef = useRef<Map<string, boolean>>(new Map());
+  // 页签里哪些文件有未保存修改。SCM 拦截按「具体文件」判断，
+  // 页签级 dirty 只是「有任意脏文件」，会把无关文件也拦下来。
+  const dirtyPathsByTabRef = useRef<Map<string, string[]>>(new Map());
   // 改过就永久占住，保存后也不释放：新文件只能顶替没动过的编辑器页签
   const touchedTabsRef = useRef<Set<string>>(new Set());
   const activeTabByGroupRef = useRef(activeTabByGroup);
@@ -1818,6 +1821,11 @@ export default function App() {
     }
   }, []);
 
+  const handleDirtyPathsChange = useCallback((tabId: string, dirtyPaths: string[]) => {
+    if (dirtyPaths.length > 0) dirtyPathsByTabRef.current.set(tabId, dirtyPaths);
+    else dirtyPathsByTabRef.current.delete(tabId);
+  }, []);
+
   const createEditor = useCallback(
     (group: Group, filePath = '') => {
       if (!group.exists) {
@@ -1889,15 +1897,25 @@ export default function App() {
       }
       const groupTabs = tabsRef.current[group.key] || [];
 
-      // 差异页签读的是磁盘，文件有未保存修改时看到的是旧内容。
-      // 这条必须排在「已有同路径差异页签」之前，否则会切到一个过期视图。
+      // 差异页签读的是磁盘，只有「这个文件自己」有未保存修改时才拦。
+      // 不能用页签级 dirty：后台其它文件脏的时候会把无关文件也拦下来；
+      // 也不能要求 filePath 相同——编辑器停在 b.txt 时，后台脏的 a.txt
+      // 依然在编辑器里开着，按 filePath 匹配会漏掉它、开出一个过期差异。
       const dirtyEditor = groupTabs.find(
         (item) =>
           item.shellId === 'editor' &&
-          item.filePath === change.path &&
-          dirtyTabsRef.current.get(item.id),
+          (dirtyPathsByTabRef.current.get(item.id) || []).includes(change.path),
       );
       if (dirtyEditor) {
+        // 编辑器可能正停在别的文件上，先把它切到用户点的这个脏文件。
+        if (dirtyEditor.filePath !== change.path) {
+          applyTabs({
+            ...tabsRef.current,
+            [group.key]: groupTabs.map((item) =>
+              item.id === dirtyEditor.id ? { ...item, filePath: change.path } : item,
+            ),
+          });
+        }
         activateTab(group.key, dirtyEditor);
         pushToast('文件有未保存修改，已切到编辑器页签', 'info');
         return;
@@ -2144,6 +2162,7 @@ export default function App() {
 
       for (const tab of closing) {
         dirtyTabsRef.current.delete(tab.id);
+        dirtyPathsByTabRef.current.delete(tab.id);
         touchedTabsRef.current.delete(tab.id);
         if (!tab.sessionId) continue;
         discardSession(tab.sessionId);
@@ -2606,6 +2625,9 @@ export default function App() {
           item.id === tab.id ? { ...item, descriptor, custom } : item,
         ),
       });
+      // 手动改名是明确的交互：占住页签，别让下一个打开的差异文件
+      // 把它当作「没碰过」的页签复用、静默覆盖掉用户起的名字。
+      touchedTabsRef.current.add(tab.id);
       setRenameTarget(null);
       setFocusTick((tick) => tick + 1);
     },
@@ -3402,6 +3424,7 @@ export default function App() {
           gitStateKey={editorGitStateKey}
           gitRepo={gitGroup?.key === group.key && gitStatus ? gitStatus.ok : undefined}
           onDirtyChange={handleDirtyChange}
+          onDirtyPathsChange={handleDirtyPathsChange}
           themeMode={terminalThemeMode}
           wordWrap={prefs.editorWordWrap}
           tabSize={prefs.editorTabSize}
