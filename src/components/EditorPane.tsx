@@ -1232,6 +1232,9 @@ export function EditorPane({
                   onChange={(value) => update(activePath, value)}
                   onConflictCountChange={setConflictCount}
                   changeMarkers={changeMarkers}
+                  blameEnabled={
+                    Boolean(activePath) && !file.readOnly && !isUntitledPath(activePath)
+                  }
                 />
                 <EditorOverviewRuler changes={changeMarkers} />
               </div>

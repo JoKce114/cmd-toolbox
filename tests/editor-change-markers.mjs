@@ -127,6 +127,21 @@ assert((await page.locator('.cm-change-triangle').count()) >= 1, '出现删除�
 console.log('2. 概览标尺');
 assert((await page.locator('.editor-overview-ruler .editor-overview-mark').count()) >= 2, '标尺有标记');
 
+console.log('2b. 点击行号看 blame');
+{
+  await openFile('sample.txt');
+  await page.locator('.cm-lineNumbers .cm-gutterElement').nth(1).click();
+  await page.locator('.cm-blame-inline').first().waitFor({ timeout: 8000 });
+  assert(await page.locator('.cm-blame-inline').count() > 0, '出现内联 blame 小字');
+  await page.locator('.cm-blame-inline').first().hover();
+  await page.locator('.blame-card').waitFor({ timeout: 8000 });
+  assert(await page.locator('.blame-card').count() > 0, '悬停弹出 blame 卡片');
+  assert(
+    await page.locator('.blame-card .blame-diff-row').count() > 0,
+    '卡片里有 diff 片段',
+  );
+}
+
 console.log('3. 干净文件没有标记');
 // 先确认切换前标记确实存在，再切到干净文件确认归零：只断言「归零」无法区分
 // 「清空逻辑生效」与「标记本来就没渲染出来」。

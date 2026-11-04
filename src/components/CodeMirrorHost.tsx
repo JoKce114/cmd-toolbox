@@ -44,6 +44,11 @@ import { lookupSymbol, wordAndReceiverAt } from '../symbolLookup';
 import type { SymbolMatch } from '../types';
 import { isUntitledPath } from '../untitledPath';
 import type { LineChangeKind, LineChanges } from '../lineChanges';
+import { lookupBlame, lookupCommitFileDiff, pickHunkForLine } from '../blameLookup';
+import type { BlameInfo } from '../blameLookup';
+import type { DiffHunk } from '../diffParser';
+import { BlameCard } from './BlameCard';
+import type { BlameCardState } from './BlameCard';
 
 export type CodeMirrorHostProps = {
   value: string;
@@ -76,6 +81,8 @@ export type CodeMirrorHostProps = {
   onConflictCountChange?: (count: number) => void;
   // 与 Git HEAD 的行级差异；null 表示不显示标记
   changeMarkers?: LineChanges | null;
+  // 是否响应行号点击看 blame（只读文件与空白窗口由上层关掉）
+  blameEnabled?: boolean;
 };
 
 type CardFieldValue = { pos: number; card: SymbolCardState; seq: number } | null;
@@ -227,6 +234,76 @@ const changeGutter = gutter({
     update.state.field(changeMarkerField, false),
 });
 
+type BlameFieldValue = {
+  line: number;
+  status: 'loading' | 'ready' | 'failed';
+  info: BlameInfo | null;
+  hunk: DiffHunk | null;
+} | null;
+
+const setBlame = StateEffect.define<BlameFieldValue>();
+
+const blameField = StateField.define<BlameFieldValue>({
+  create: () => null,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setBlame)) return effect.value;
+    }
+    // 改动后行号已经对不上，宁可收起
+    if (tr.docChanged) return null;
+    return value;
+  },
+});
+
+// showTooltip 是「字段有值就显示」；不加这层门控，点完行号卡片会立刻盖住正文。
+const setBlameHover = StateEffect.define<boolean>();
+
+const blameHoverField = StateField.define<boolean>({
+  create: () => false,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setBlameHover)) return effect.value;
+    }
+    if (tr.docChanged) return false;
+    return value;
+  },
+});
+
+class BlameWidget extends WidgetType {
+  constructor(readonly value: NonNullable<BlameFieldValue>) {
+    super();
+  }
+
+  eq(other: BlameWidget): boolean {
+    return (
+      other.value.line === this.value.line &&
+      other.value.status === this.value.status &&
+      other.value.info?.hash === this.value.info?.hash
+    );
+  }
+
+  toDOM(): HTMLElement {
+    const host = document.createElement('span');
+    host.className = 'cm-blame-inline';
+    if (this.value.status === 'loading') {
+      host.textContent = '正在读取提交…';
+    } else if (this.value.status === 'failed' || !this.value.info) {
+      host.textContent = '没有提交记录';
+    } else {
+      const { info } = this.value;
+      host.textContent = `${info.author} · ${info.short} · ${info.summary}`;
+    }
+    return host;
+  }
+}
+
+const blameDecorations = EditorView.decorations.compute([blameField], (state) => {
+  const value = state.field(blameField, false);
+  if (!value) return Decoration.none;
+  const line = state.doc.line(Math.min(value.line, state.doc.lines));
+  return Decoration.set([Decoration.widget({ widget: new BlameWidget(value), side: 1 }).range(line.to)]);
+});
+
 function referenceExtension(options: {
   isEnabled: () => boolean;
   lookup: (name: string, receiver: string, line: number) => Promise<SymbolCardState>;
@@ -352,6 +429,105 @@ function referenceExtension(options: {
   );
 
   return [cardField, tooltipFromField, handlers, outsideClick];
+}
+
+function blameExtension(options: {
+  isEnabled: () => boolean;
+  onLineClick: (line: number) => void;
+}): Extension {
+  // EditorView.domEventHandlers 只挂在 .cm-content 上，收不到 gutter 的点击
+  // （gutter 是它的同级节点），所以交互监听必须挂到整个编辑器 DOM。
+  const interaction = ViewPlugin.fromClass(
+    class {
+      private readonly view: EditorView;
+      private hideTimer = -1;
+
+      private readonly isCardTarget = (target: EventTarget | null) =>
+        target instanceof Element &&
+        (target.closest('.cm-blame-inline') !== null || target.closest('.blame-card') !== null);
+
+      private readonly onMouseDown = (event: MouseEvent) => {
+        if (event.button !== 0) return;
+        const target = event.target instanceof Element ? event.target : null;
+        if (
+          target &&
+          !this.isCardTarget(target) &&
+          this.view.state.field(blameHoverField, false)
+        ) {
+          this.view.dispatch({ effects: setBlameHover.of(false) });
+        }
+        if (!options.isEnabled() || !target) return;
+        // 只在行号 gutter 与变更 gutter 上响应
+        const element = target.closest('.cm-gutterElement');
+        if (!element || !element.closest('.cm-lineNumbers, .cm-change-gutter')) return;
+
+        const rect = element.getBoundingClientRect();
+        const block = this.view.lineBlockAtHeight(
+          rect.top + rect.height / 2 - this.view.documentTop,
+        );
+        event.preventDefault();
+        options.onLineClick(this.view.state.doc.lineAt(block.from).number);
+      };
+
+      private readonly onMouseOver = (event: MouseEvent) => {
+        if (!this.isCardTarget(event.target)) return;
+        if (this.hideTimer >= 0) {
+          window.clearTimeout(this.hideTimer);
+          this.hideTimer = -1;
+        }
+        if (!this.view.state.field(blameHoverField, false)) {
+          this.view.dispatch({ effects: setBlameHover.of(true) });
+        }
+      };
+
+      private readonly onMouseOut = (event: MouseEvent) => {
+        if (!this.isCardTarget(event.target)) return;
+        if (this.isCardTarget(event.relatedTarget)) return;
+        // 内联小字与卡片之间隔着一点空隙，立即收起会让卡片点不到
+        if (this.hideTimer >= 0) window.clearTimeout(this.hideTimer);
+        this.hideTimer = window.setTimeout(() => {
+          this.hideTimer = -1;
+          if (this.view.state.field(blameHoverField, false)) {
+            this.view.dispatch({ effects: setBlameHover.of(false) });
+          }
+        }, 150);
+      };
+
+      constructor(view: EditorView) {
+        this.view = view;
+        view.dom.addEventListener('mousedown', this.onMouseDown);
+        view.dom.addEventListener('mouseover', this.onMouseOver);
+        view.dom.addEventListener('mouseout', this.onMouseOut);
+      }
+
+      destroy() {
+        if (this.hideTimer >= 0) window.clearTimeout(this.hideTimer);
+        this.view.dom.removeEventListener('mousedown', this.onMouseDown);
+        this.view.dom.removeEventListener('mouseover', this.onMouseOver);
+        this.view.dom.removeEventListener('mouseout', this.onMouseOut);
+      }
+    },
+  );
+
+  const tooltip = showTooltip.compute([blameField, blameHoverField], (state) => {
+    const value = state.field(blameField, false);
+    if (!value || value.status !== 'ready' || !value.info) return null;
+    if (!state.field(blameHoverField, false)) return null;
+    const info = value.info;
+    return {
+      pos: state.doc.line(Math.min(value.line, state.doc.lines)).to,
+      above: false,
+      create: () => {
+        const host = document.createElement('div');
+        const root = createRoot(host);
+        const cardState: BlameCardState = { info, hunk: value.hunk };
+        root.render(<BlameCard state={cardState} />);
+        return { dom: host, destroy: () => root.unmount() };
+      },
+    } satisfies Tooltip;
+  });
+
+  return [blameField, blameHoverField, interaction, blameDecorations, tooltip];
 }
 
 class ConflictWidget extends WidgetType {
@@ -484,6 +660,7 @@ export function CodeMirrorHost({
   onChange,
   onConflictCountChange,
   changeMarkers,
+  blameEnabled,
 }: CodeMirrorHostProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -496,16 +673,19 @@ export function CodeMirrorHost({
   const displayRef = useRef(new Compartment());
   const diagnosticsRef = useRef(new Compartment());
   const referenceRef = useRef(new Compartment());
+  const blameRef = useRef(new Compartment());
   const readOnlyRef = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   const onCountRef = useRef(onConflictCountChange);
   const onFontDeltaRef = useRef(onFontSizeDelta);
   const referenceEnabledRef = useRef(referenceEnabled);
+  const blameEnabledRef = useRef(Boolean(blameEnabled));
   const projectPathRef = useRef(projectPath);
   const activeFileRef = useRef(filePath);
   const jumpRef = useRef(onJumpToSymbol);
   const onGotoLineAppliedRef = useRef(onGotoLineApplied);
   const changeMarkersRef = useRef(changeMarkers);
+  const blameLookupRef = useRef<(line: number) => void>(() => {});
   onChangeRef.current = onChange;
   onCountRef.current = onConflictCountChange;
   onFontDeltaRef.current = onFontSizeDelta;
@@ -515,6 +695,48 @@ export function CodeMirrorHost({
   jumpRef.current = onJumpToSymbol;
   onGotoLineAppliedRef.current = onGotoLineApplied;
   changeMarkersRef.current = changeMarkers;
+  blameEnabledRef.current = Boolean(blameEnabled);
+
+  blameLookupRef.current = (line: number) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const current = view.state.field(blameField, false);
+    // 点同一行再次点击就收起
+    if (current && current.line === line && current.status !== 'loading') {
+      view.dispatch({ effects: [setBlame.of(null), setBlameHover.of(false)] });
+      return;
+    }
+    view.dispatch({
+      effects: [
+        setBlame.of({ line, status: 'loading', info: null, hunk: null }),
+        setBlameHover.of(false),
+      ],
+    });
+
+    const file = activeFileRef.current;
+    void lookupBlame(projectPathRef.current, file, line).then(async (info) => {
+      // 切文件会重建视图，旧请求的结果不能再往新文档上贴
+      if (viewRef.current !== view) return;
+      const latest = view.state.field(blameField, false);
+      if (!latest || latest.line !== line) return;
+      if (!info) {
+        view.dispatch({ effects: setBlame.of({ line, status: 'failed', info: null, hunk: null }) });
+        return;
+      }
+      const patch = await lookupCommitFileDiff(projectPathRef.current, info.hash, file);
+      if (viewRef.current !== view) return;
+      const stillLatest = view.state.field(blameField, false);
+      if (!stillLatest || stillLatest.line !== line) return;
+      view.dispatch({
+        effects: setBlame.of({
+          line,
+          status: 'ready',
+          info,
+          hunk: pickHunkForLine(patch, info.origLine),
+        }),
+      });
+    });
+  };
 
   // 空白窗口另存为只换路径、不换文件：编辑器实例与撤销栈必须保留。
   // 重建 effect 的依赖里有 filePath，正常切文件要重建（各文件自带撤销历史），
@@ -616,6 +838,12 @@ export function CodeMirrorHost({
           languageRef.current.of([]),
           diagnosticsRef.current.of([]),
           referenceRef.current.of(referenceExtensionOption()),
+          blameRef.current.of(
+            blameExtension({
+              isEnabled: () => blameEnabledRef.current,
+              onLineClick: (line) => blameLookupRef.current(line),
+            }),
+          ),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               onChangeRef.current(update.state.doc.toString());
@@ -785,6 +1013,14 @@ export function CodeMirrorHost({
     // referenceExtensionOption 只读 ref，依赖里不需要带上它
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [referenceEnabled]);
+
+  // 变成不可用过 blame 时（例如另存为后又被标成只读），已显示的卡片不能留着
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || blameEnabled) return;
+    if (!view.state.field(blameField, false)) return;
+    view.dispatch({ effects: [setBlame.of(null), setBlameHover.of(false)] });
+  }, [blameEnabled]);
 
   // 只在 gotoLine 从 null 变成数字时定位一次；filePath 变化不应重复触发，
   // 否则上层忘记复位时切文件会误滚到同号行并抢焦点。

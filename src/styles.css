@@ -5049,3 +5049,145 @@ p {
   width: 20px;
   height: 20px;
 }
+
+/* ---------- Blame card ---------- */
+
+/* 内联小字：不抢光标，也不挡住行尾编辑 */
+.cm-blame-inline {
+  margin-left: 12px;
+  font-size: 11px;
+  color: var(--faint);
+  opacity: 0.85;
+  user-select: none;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.blame-card {
+  min-width: 280px;
+  max-width: 520px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.blame-card-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.blame-author {
+  font-weight: 600;
+}
+
+.blame-time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.blame-summary {
+  margin: 6px 0;
+  line-height: 1.5;
+}
+
+.blame-card-hash {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.blame-card-hash .icon-btn {
+  width: 18px;
+  height: 18px;
+}
+
+.blame-copied {
+  color: #1a7f37;
+}
+
+.blame-diff {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: var(--cm-font-family, monospace);
+  font-size: 11px;
+}
+
+.blame-diff-row {
+  display: flex;
+  gap: 6px;
+  white-space: pre;
+}
+
+.blame-diff-row.is-added {
+  background: #e6ffec;
+}
+
+.blame-diff-row.is-removed {
+  background: #ffebe9;
+}
+
+.blame-diff-sign {
+  width: 10px;
+  color: var(--faint);
+}
+
+.blame-diff-more,
+.blame-empty {
+  color: var(--faint);
+  font-size: 11px;
+  padding: 4px 0;
+}
+
+.editor-pane.theme-dark .cm-blame-inline {
+  color: #7f838c;
+}
+
+.editor-pane.theme-dark .blame-card {
+  border-color: #2a2d35;
+  background: #1e1f25;
+  color: #e4e6ea;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+.editor-pane.theme-dark .blame-time,
+.editor-pane.theme-dark .blame-card-hash,
+.editor-pane.theme-dark .blame-diff-sign,
+.editor-pane.theme-dark .blame-diff-more,
+.editor-pane.theme-dark .blame-empty {
+  color: #8b8f98;
+}
+
+.editor-pane.theme-dark .blame-copied {
+  color: #3fb950;
+}
+
+.editor-pane.theme-dark .blame-diff {
+  border-top-color: #2a2d35;
+}
+
+.editor-pane.theme-dark .blame-diff-row.is-added {
+  background: rgba(46, 160, 67, 0.18);
+}
+
+.editor-pane.theme-dark .blame-diff-row.is-removed {
+  background: rgba(248, 81, 73, 0.18);
+}
+
+.editor-pane.theme-dark .blame-copy {
+  color: #8b8f98;
+}
+
+.editor-pane.theme-dark .blame-copy:hover {
+  background: #2a2d35;
+  color: #e4e6ea;
+}
