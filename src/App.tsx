@@ -1032,12 +1032,15 @@ export default function App() {
     },
   });
 
-  // 编辑器标记的失效指纹：提交 / 暂存 / 放弃 / 切分支都会改变条目与状态
+  // 编辑器标记的失效指纹：提交 / 暂存 / 放弃 / 切分支都会改变条目与状态。
+  // 分支名必须参与指纹：干净工作区切分支时 changes 始终为空，只拼条目会让
+  // 指纹不变，基准缓存（60 秒 TTL）不失效，标记仍按旧分支的 HEAD 计算。
   const editorGitStateKey = useMemo(() => {
     if (!gitStatus?.ok) return '';
-    return gitStatus.changes
-      .map((change) => `${change.path}:${change.indexStatus ?? ''}:${change.worktreeStatus ?? ''}`)
-      .join('|');
+    const entries = gitStatus.changes.map(
+      (change) => `${change.path}:${change.indexStatus ?? ''}:${change.worktreeStatus ?? ''}`,
+    );
+    return [gitStatus.branch, ...entries].join('|');
   }, [gitStatus]);
 
   const [gitBranches, setGitBranches] = useState<{ current: string; list: string[] }>({

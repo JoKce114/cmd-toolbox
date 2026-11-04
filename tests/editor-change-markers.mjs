@@ -14,9 +14,11 @@ execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo })
 execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
 execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: repo });
 
-// 提交版本：sample.txt 有改动，clean.txt 提交后保持原样
+// 提交版本：sample.txt 有改动，clean.txt 提交后保持原样。
+// clean.txt 必须多于 1 行且内容与 sample.txt 不同：旧标记落在第 2、4 行，
+// 只有一行时即使清空逻辑失效，标记也挂不上，断言等于没测。
 writeFileSync(join(repo, 'sample.txt'), 'a\nb\nc\nd\n');
-writeFileSync(join(repo, 'clean.txt'), 'hello\n');
+writeFileSync(join(repo, 'clean.txt'), 'alpha\nbeta\ngamma\n');
 execFileSync('git', ['add', '.'], { cwd: repo });
 execFileSync('git', ['commit', '-m', '初始提交'], { cwd: repo });
 
@@ -121,6 +123,12 @@ console.log('2. 概览标尺');
 assert((await page.locator('.editor-overview-ruler .editor-overview-mark').count()) >= 2, '标尺有标记');
 
 console.log('3. 干净文件没有标记');
+// 先确认切换前标记确实存在，再切到干净文件确认归零：只断言「归零」无法区分
+// 「清空逻辑生效」与「标记本来就没渲染出来」。
+assert(
+  (await page.locator('.cm-change-marker').count()) >= 1,
+  '切换前文件仍有色条',
+);
 await openFile('clean.txt');
 await page.waitForTimeout(600);
 assert((await page.locator('.cm-change-marker').count()) === 0, '干净文件没有色条');

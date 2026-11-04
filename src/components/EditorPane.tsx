@@ -172,8 +172,9 @@ export function EditorPane({
   const menuStatusSeqRef = useRef(0);
   // HEAD 基准按文件缓存，避免每次按键都读一次 git；窗口重新获得焦点或
   // Git 状态变化（提交 / 暂存 / 切分支）时整体丢弃。
+  // 失败（非 Git 项目等）也缓存：text 为 null，避免每次停顿都重发 IPC、起 git 进程。
   const [changeMarkers, setChangeMarkers] = useState<LineChanges | null>(null);
-  const baseTextRef = useRef(new Map<string, { text: string; at: number }>());
+  const baseTextRef = useRef(new Map<string, { text: string | null; at: number }>());
   const [baseRefreshToken, setBaseRefreshToken] = useState(0);
   const [editorMenu, setEditorMenu] = useState<{
     x: number;
@@ -314,7 +315,9 @@ export function EditorPane({
         baseTextRef.current.set(relPath, { text, at: Date.now() });
         return text;
       } catch {
-        // 非 Git 项目 / git 不可用：静默不显示标记
+        // 非 Git 项目 / git 不可用：静默不显示标记。
+        // 失败也要缓存，否则每次停顿都会重发一次 IPC 并起两个 git 进程。
+        baseTextRef.current.set(relPath, { text: null, at: Date.now() });
         return null;
       }
     },
@@ -338,7 +341,7 @@ export function EditorPane({
   }, [gitStateKey]);
 
   useEffect(() => {
-    if (!activePath || isUntitledPath(activePath) || !file || file.readOnly) {
+    if (!activePath || isUntitledPath(activePath) || file.readOnly) {
       setChangeMarkers(null);
       return;
     }
