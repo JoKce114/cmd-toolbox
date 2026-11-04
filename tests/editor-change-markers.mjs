@@ -142,6 +142,22 @@ console.log('2b. 点击行号看 blame');
   );
 }
 
+console.log('2c. 中键拖拽选择');
+{
+  await openFile('sample.txt');
+  // 2b 留下的 blame 内联 widget 挂在首行行尾，中键按在 widget 上会被 CodeMirror
+  // 的 ignoreEvent 丢掉，选区根本不会开始。从后面几行起拖，避开它。
+  const lines = page.locator('.editor-pane:not(.is-hidden) .cm-content .cm-line');
+  const start = await lines.nth(2).boundingBox();
+  const end = await lines.nth(4).boundingBox();
+  await page.mouse.move(start.x + 4, start.y + start.height / 2);
+  await page.mouse.down({ button: 'middle' });
+  await page.mouse.move(end.x + 4, end.y + end.height / 2, { steps: 8 });
+  await page.mouse.up({ button: 'middle' });
+  const selected = await page.evaluate(() => window.getSelection()?.toString() || '');
+  assert(selected.length > 0, '中键拖拽产生了选区');
+}
+
 console.log('3. 干净文件没有标记');
 // 先确认切换前标记确实存在，再切到干净文件确认归零：只断言「归零」无法区分
 // 「清空逻辑生效」与「标记本来就没渲染出来」。

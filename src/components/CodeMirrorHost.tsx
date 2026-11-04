@@ -20,6 +20,7 @@ import {
   StateEffect,
   RangeSetBuilder,
   Transaction,
+  EditorSelection,
 } from '@codemirror/state';
 import type { EditorState as EditorStateType, Extension } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
@@ -233,6 +234,67 @@ const changeGutter = gutter({
     update.startState.field(changeMarkerField, false) !==
     update.state.field(changeMarkerField, false),
 });
+
+// 中键与左键一样做普通文本选择。必须把 mousemove / mouseup 挂在 window 上：
+// 拖到编辑器外再松手时，只挂编辑器 DOM 会收不到 mouseup，选区会一直跟着鼠标走。
+const middleClickSelection = ViewPlugin.fromClass(
+  class {
+    private readonly view: EditorView;
+    private anchor: number | null = null;
+
+    private readonly onMove = (event: MouseEvent) => {
+      if (this.anchor === null) return;
+      if ((event.buttons & 4) === 0) {
+        this.stop();
+        return;
+      }
+      const pos = this.view.posAtCoords({ x: event.clientX, y: event.clientY });
+      // 拖出编辑器外时 posAtCoords 返回 null，保留上一次的位置，不跳回
+      if (pos === null) return;
+      this.view.dispatch({ selection: EditorSelection.range(this.anchor, pos) });
+    };
+
+    private readonly onUp = () => this.stop();
+
+    constructor(view: EditorView) {
+      this.view = view;
+    }
+
+    destroy() {
+      this.stop();
+    }
+
+    private stop() {
+      this.anchor = null;
+      window.removeEventListener('mousemove', this.onMove);
+      window.removeEventListener('mouseup', this.onUp);
+    }
+
+    handleMouseDown(event: MouseEvent): boolean {
+      if (event.button !== 1) return false;
+      const pos = this.view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (pos === null) return false;
+      // 不 preventDefault 会让 Chromium 进入中键自动滚动模式
+      event.preventDefault();
+      this.stop();
+      this.anchor = pos;
+      // 返回 true 会跳过 CodeMirror 自带的 mousedown（它负责聚焦），
+      // 不主动聚焦时选区只存在于 state 里，DOM 上看不到。
+      this.view.focus();
+      this.view.dispatch({ selection: EditorSelection.cursor(pos) });
+      window.addEventListener('mousemove', this.onMove);
+      window.addEventListener('mouseup', this.onUp);
+      return true;
+    }
+  },
+  {
+    eventHandlers: {
+      mousedown(event) {
+        return this.handleMouseDown(event);
+      },
+    },
+  },
+);
 
 type BlameFieldValue = {
   line: number;
@@ -835,6 +897,7 @@ export function CodeMirrorHost({
           conflictField,
           changeMarkerField,
           changeGutter,
+          middleClickSelection,
           languageRef.current.of([]),
           diagnosticsRef.current.of([]),
           referenceRef.current.of(referenceExtensionOption()),
