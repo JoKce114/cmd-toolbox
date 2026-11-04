@@ -589,6 +589,17 @@ export function EditorPane({
     onFilePathChangeRef.current?.(next);
   }, [activePath, files, tab.filePath]);
 
+  // 编辑器内切换文件时要回写上层：运行时会话恢复靠它，
+  // App 侧「已打开的文件」去重与未保存拦截也依赖 tab.filePath 是最新的。
+  useEffect(() => {
+    if (!activePath || !files[activePath] || isUntitledPath(activePath)) return;
+    if (activePath === tab.filePath) return;
+    // 必须先更新 appliedPathRef 再回调，否则上层 filePath 变化会让
+    // 上面那个 effect 重新 open()，撤销栈和光标全丢。
+    appliedPathRef.current = activePath;
+    onFilePathChangeRef.current?.(activePath);
+  }, [activePath, files, tab.filePath]);
+
   // 空白窗口内容快照：只比较各空白条目的内容引用并维护版本号，不把全部内容
   // 拼成一个字符串（2MB 上限下那会是每键 O(总内容)）。普通文件每次按键都会换
   // files 对象，这里最多做 O(空白窗口数) 的引用比较。快照用来触发

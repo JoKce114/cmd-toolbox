@@ -137,6 +137,12 @@ try {
     await click(page.locator('.git-change-row').filter({ hasText: name }).first());
   }
 
+  // 提示 2.4 秒后自动消失。等上一条提示退场，才能确定接下来看到的
+  // 「未保存修改」提示是本次点击产生的，而不是上一段留下的。
+  async function waitForNoToast() {
+    await waitFor(async () => (await page.locator('.toast').count()) === 0, '上一条提示已消失', 6000);
+  }
+
   async function visibleDiffPathIncludes(name) {
     const texts = await page.locator('.diff-pane:not(.is-hidden) .pane-path').allInnerTexts();
     return texts.some((text) => text.includes(name));
@@ -151,8 +157,78 @@ try {
 
   console.log('1. 未保存文件点击改为切到编辑器');
   {
-    // 用源代码管理行内的「打开文件编辑」把 a.txt 放进编辑器。
-    // 这条入口会把页签路径同步给 App，未保存拦截依赖它判断是同一个文件。
+    // 1a. 文件树是最常见的入口。这里必须走它：页签路径同步给 App 后，
+    // 未保存拦截才认得出点的是同一个文件（修好后这里不再新开差异页签）。
+    await page
+      .locator('.group-item')
+      .filter({ hasText: 'scm-proj' })
+      .click({ button: 'right' });
+    await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+    await page.getByRole('menuitem', { name: '打开编辑器', exact: true }).click();
+    await page.locator('.editor-pane').waitFor({ timeout: 15000 });
+    await page.locator('.file-tree .file-row[title="a.txt"]').waitFor({ timeout: 10000 });
+    await click(page.locator('.file-tree .file-row[title="a.txt"]'));
+    await waitFor(
+      async () =>
+        (await page
+          .locator('.editor-pane:not(.is-hidden) .pane-path')
+          .first()
+          .innerText()).endsWith('a.txt'),
+      '文件树打开 a.txt',
+    );
+    await page
+      .locator('.editor-pane:not(.is-hidden) .cm-content')
+      .first()
+      .waitFor({ timeout: 15000 });
+    await click(page.locator('.editor-pane:not(.is-hidden) .cm-content').first());
+    await page.keyboard.type('X');
+    await page.locator('.editor-tab.active .editor-tab-dot').waitFor({ timeout: 8000 });
+
+    // 路径同步不能触发重新 open()：撤销栈还在时 Ctrl+Z 应撤掉刚输入的 X，
+    // 重做又能把它恢复。文档若被重载，这里会撤不动（内容已是磁盘旧值）。
+    await page.keyboard.press('Control+z');
+    await waitFor(
+      async () => (await page.locator('.editor-tab.active .editor-tab-dot').count()) === 0,
+      '撤销后未保存圆点消失（撤销栈仍在）',
+    );
+    await page.keyboard.press('Control+y');
+    await page.locator('.editor-tab.active .editor-tab-dot').waitFor({ timeout: 8000 });
+    assert(
+      (await page.locator('.editor-pane:not(.is-hidden)').count()) === 1,
+      '编辑器页签处于激活',
+    );
+
+    await waitForNoToast();
+    await clickChange('a.txt');
+    await waitFor(
+      async () => (await page.locator('.toast', { hasText: '未保存修改' }).count()) >= 1,
+      '出现未保存修改提示',
+    );
+    assert((await countDiffPanes()) === 0, '没有新开差异页签（文件树入口）');
+    assert(
+      (await page.locator('.editor-pane:not(.is-hidden)').count()) === 1,
+      '激活的仍是编辑器页签（文件树入口）',
+    );
+    assert(
+      (await page.locator('.toast', { hasText: '未保存修改' }).count()) >= 1,
+      '出现未保存提示（文件树入口）',
+    );
+
+    // 1b. 关掉编辑器，再从 Git 面板行内入口打开同一个文件。
+    // 两个入口都依赖 tab.filePath 同步，行为应完全一致。
+    // 关闭编辑器会连弹两次 window.confirm（编辑器内确认 + App 关页签确认），
+    // 两个都要接受，否则 Playwright 默认按取消处理，页签关不掉。
+    const acceptCloseDialog = (dialog) => dialog.accept();
+    page.on('dialog', acceptCloseDialog);
+    await click(
+      page.locator('.editor-pane:not(.is-hidden) .pane-header .icon-btn[title="关闭"]'),
+    );
+    await waitFor(
+      async () => (await page.locator('.editor-pane').count()) === 0,
+      '编辑器页签已关闭（放弃未保存修改）',
+    );
+    page.off('dialog', acceptCloseDialog);
+
     await click(
       page
         .locator('.git-change-item')
@@ -165,7 +241,7 @@ try {
           .locator('.editor-pane:not(.is-hidden) .pane-path')
           .first()
           .innerText()).endsWith('a.txt'),
-      '编辑器打开 a.txt',
+      'Git 面板打开 a.txt',
     );
     await page
       .locator('.editor-pane:not(.is-hidden) .cm-content')
@@ -174,24 +250,17 @@ try {
     await click(page.locator('.editor-pane:not(.is-hidden) .cm-content').first());
     await page.keyboard.type('X');
     await page.locator('.editor-tab.active .editor-tab-dot').waitFor({ timeout: 8000 });
-    assert(
-      (await page.locator('.editor-pane:not(.is-hidden)').count()) === 1,
-      '编辑器页签处于激活',
-    );
 
+    await waitForNoToast();
     await clickChange('a.txt');
     await waitFor(
       async () => (await page.locator('.toast', { hasText: '未保存修改' }).count()) >= 1,
-      '出现未保存修改提示',
+      'Git 面板入口出现未保存修改提示',
     );
-    assert((await countDiffPanes()) === 0, '没有新开差异页签');
+    assert((await countDiffPanes()) === 0, '没有新开差异页签（Git 面板入口）');
     assert(
       (await page.locator('.editor-pane:not(.is-hidden)').count()) === 1,
-      '激活的仍是编辑器页签',
-    );
-    assert(
-      (await page.locator('.toast', { hasText: '未保存修改' }).count()) >= 1,
-      '出现未保存提示',
+      '激活的仍是编辑器页签（Git 面板入口）',
     );
   }
 
