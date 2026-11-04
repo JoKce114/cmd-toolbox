@@ -81,9 +81,8 @@ const lightTheme = EditorView.theme(
     '.cm-change-marker.is-added': {
       width: '3px',
       marginLeft: '5px',
-      // 用户要的是「行号旁一条蓝色波浪竖线」：用内联 SVG 平铺，
-      // 实心 border 画不出波形。修改行保持实心琥珀条，一眼可分。
-      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='6'%3E%3Cpath d='M0 3 Q0.75 0 1.5 3 T3 3' fill='none' stroke='%231e88e5' stroke-width='1.2'/%3E%3C/svg%3E")`,
+      // 蓝色波浪竖线：SVG 沿纵向绘制，repeat-y 平铺时上下接缝才能连成连续波形
+      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='6'%3E%3Cpath d='M1.5 0 Q3 1.5 1.5 3 T1.5 6' fill='none' stroke='%231e88e5' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E")`,
       backgroundRepeat: 'repeat-y',
       backgroundSize: '3px 6px',
     },
@@ -184,7 +183,7 @@ const darkTheme = EditorView.theme(
       width: '3px',
       marginLeft: '5px',
       // 深色主题用 #4fa3ff，与新增色条 / 概览标尺保持一致
-      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='6'%3E%3Cpath d='M0 3 Q0.75 0 1.5 3 T3 3' fill='none' stroke='%234fa3ff' stroke-width='1.2'/%3E%3C/svg%3E")`,
+      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='6'%3E%3Cpath d='M1.5 0 Q3 1.5 1.5 3 T1.5 6' fill='none' stroke='%234fa3ff' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E")`,
       backgroundRepeat: 'repeat-y',
       backgroundSize: '3px 6px',
     },
