@@ -19,6 +19,9 @@ import { OpenEditors } from './OpenEditors';
 import { ConfirmDialog } from './ConfirmDialog';
 import { SearchPanel } from './SearchPanel';
 import { CodeMirrorHost } from './CodeMirrorHost';
+import { EditorOverviewRuler } from './EditorOverviewRuler';
+import { computeLineChanges } from '../lineChanges';
+import type { LineChanges } from '../lineChanges';
 import { DiffPane } from './DiffPane';
 import type { DiffTarget } from './DiffPane';
 import { PopupMenu } from './PopupMenu';
@@ -84,6 +87,8 @@ export type EditorPaneProps = {
   untitledRestore?: Record<string, string>;
   // 会话里因超限被丢弃的空白窗口：恢复成空窗口并提示，但编号要保留
   untitledDropped?: string[];
+  // Git 变更条目的指纹，变化时重新拉 HEAD 基准
+  gitStateKey?: string;
 };
 
 export function EditorPane({
@@ -112,6 +117,7 @@ export function EditorPane({
   onUntitledContentsChange,
   untitledRestore,
   untitledDropped,
+  gitStateKey,
 }: EditorPaneProps) {
   const onError = useCallback((message: string) => onToast(message, 'error'), [onToast]);
   const {
@@ -164,6 +170,11 @@ export function EditorPane({
   // 右键时才查一次 git 状态，只用于把「与 Git HEAD 比较」在未跟踪文件上置灰
   const [editorGitStatus, setEditorGitStatus] = useState<GitStatus | null>(null);
   const menuStatusSeqRef = useRef(0);
+  // HEAD 基准按文件缓存，避免每次按键都读一次 git；窗口重新获得焦点或
+  // Git 状态变化（提交 / 暂存 / 切分支）时整体丢弃。
+  const [changeMarkers, setChangeMarkers] = useState<LineChanges | null>(null);
+  const baseTextRef = useRef(new Map<string, { text: string; at: number }>());
+  const [baseRefreshToken, setBaseRefreshToken] = useState(0);
   const [editorMenu, setEditorMenu] = useState<{
     x: number;
     y: number;
@@ -292,6 +303,59 @@ export function EditorPane({
     },
     [group.path],
   );
+
+  const loadHeadBase = useCallback(
+    async (relPath: string): Promise<string | null> => {
+      const cached = baseTextRef.current.get(relPath);
+      if (cached && Date.now() - cached.at < 60_000) return cached.text;
+      try {
+        const result = await window.api.git.fileDiff(group.path, relPath, 'modified', 'HEAD');
+        const text = result.baseContent ?? '';
+        baseTextRef.current.set(relPath, { text, at: Date.now() });
+        return text;
+      } catch {
+        // 非 Git 项目 / git 不可用：静默不显示标记
+        return null;
+      }
+    },
+    [group.path],
+  );
+
+  // 窗口重新获得焦点时丢掉缓存：提交完切回来，标记应当自动消失
+  useEffect(() => {
+    const onFocus = () => {
+      baseTextRef.current.clear();
+      setBaseRefreshToken((value) => value + 1);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
+
+  // Git 状态条目变化（提交 / 暂存 / 放弃 / 切分支）同样让缓存失效
+  useEffect(() => {
+    baseTextRef.current.clear();
+    setBaseRefreshToken((value) => value + 1);
+  }, [gitStateKey]);
+
+  useEffect(() => {
+    if (!activePath || isUntitledPath(activePath) || !file || file.readOnly) {
+      setChangeMarkers(null);
+      return;
+    }
+    const relPath = activePath;
+    const content = file.content;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void loadHeadBase(relPath).then((base) => {
+        if (cancelled) return;
+        setChangeMarkers(base === null ? null : computeLineChanges(base, content));
+      });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activePath, file, loadHeadBase, baseRefreshToken]);
 
   // 实时重算只依赖原始字符串：object/state 作为依赖会在每次渲染时换身份，
   // 既容易触发多余计算，也容易写出无限循环。
@@ -1151,7 +1215,9 @@ export function EditorPane({
                   onFontSizeDelta={onFontSizeDelta}
                   onChange={(value) => update(activePath, value)}
                   onConflictCountChange={setConflictCount}
+                  changeMarkers={changeMarkers}
                 />
+                <EditorOverviewRuler changes={changeMarkers} />
               </div>
               {diffTarget ? (
                 <>

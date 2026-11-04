@@ -1,0 +1,135 @@
+// 编辑器 Git 变更标记。需要独占 17382 端口。
+import { _electron as electron } from 'playwright-core';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+
+const root = resolve(import.meta.dirname, '..');
+const dataDir = mkdtempSync(join(tmpdir(), 'cmdtb-marker-data-'));
+const repo = mkdtempSync(join(tmpdir(), 'cmdtb-marker-repo-'));
+
+execFileSync('git', ['init', '-b', 'main'], { cwd: repo, stdio: 'ignore' });
+execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
+execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: repo });
+
+// 提交版本：sample.txt 有改动，clean.txt 提交后保持原样
+writeFileSync(join(repo, 'sample.txt'), 'a\nb\nc\nd\n');
+writeFileSync(join(repo, 'clean.txt'), 'hello\n');
+execFileSync('git', ['add', '.'], { cwd: repo });
+execFileSync('git', ['commit', '-m', '初始提交'], { cwd: repo });
+
+// 工作区版本：第 2 行改掉（modified，同时有删除锚点），第 4 行插入一行（added）。
+// 不要写成 a/B/X/d——那样 Myers 会算成「2、3 行都修改」，没有 added 色条可断言。
+writeFileSync(join(repo, 'sample.txt'), 'a\nB\nc\nX\nd\n');
+// 未跟踪文件对 HEAD 对比时整篇算新增
+writeFileSync(join(repo, 'new.txt'), 'brand new\n');
+
+let passed = 0;
+function assert(condition, message) {
+  if (!condition) throw new Error(`断言失败：${message}`);
+  passed += 1;
+  console.log('  ok  ' + message);
+}
+
+const env = { ...process.env };
+delete env.ELECTRON_RUN_AS_NODE;
+env.CMDTOOLBOX_NO_UPDATE = '1';
+
+const app = await electron.launch({
+  executablePath: resolve(root, 'node_modules/electron/dist/electron.exe'),
+  cwd: root,
+  args: ['.', `--data-dir=${dataDir}`],
+  env,
+});
+const page = await app.firstWindow();
+page.on('pageerror', (error) => console.log('  [pageerror]', error.message));
+await page.waitForLoadState('domcontentloaded');
+await page.locator('.app').waitFor();
+await page.waitForFunction(() => !document.querySelector('.boot-screen'));
+await page.waitForTimeout(1200);
+
+// 若窗口被其他程序遮挡，Chromium 不会投递合成的鼠标事件；确保窗口置于最前
+await app.evaluate(({ BrowserWindow }) => {
+  const win = BrowserWindow.getAllWindows()[0];
+  win?.show();
+  win?.focus();
+  win?.moveTop();
+});
+
+async function click(locator) {
+  const deadline = Date.now() + 15000;
+  for (;;) {
+    try {
+      await locator.click({ timeout: 3000, force: true });
+      return;
+    } catch (error) {
+      const box = await locator.boundingBox().catch(() => null);
+      if (box) {
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        return;
+      }
+      if (Date.now() > deadline) throw error;
+      await page.waitForTimeout(300);
+    }
+  }
+}
+
+// 主进程不认 --project 参数，项目必须走界面添加
+async function addProject(path, name) {
+  const modal = page.locator('.modal-card');
+  const deadline = Date.now() + 20000;
+  while ((await modal.count()) === 0) {
+    if (Date.now() > deadline) throw new Error('等待超时：添加项目弹窗未出现');
+    await click(page.locator('.add-project-btn'));
+    await page.waitForTimeout(600);
+  }
+  await page.locator('#project-path').fill(path);
+  await page.locator('#project-name').fill(name);
+  await click(page.getByRole('button', { name: '保存项目', exact: true }));
+  await modal.waitFor({ state: 'detached', timeout: 15000 });
+  await page.waitForTimeout(600);
+}
+
+await addProject(repo, 'marker-proj');
+
+// 添加项目后应用默认停在终端/Git 面板，编辑器页签必须手动打开
+await page.locator('.group-item').filter({ hasText: 'marker-proj' }).locator('.group-main').click();
+await page.waitForTimeout(600);
+await page.locator('.group-item').filter({ hasText: 'marker-proj' }).click({ button: 'right' });
+await page.locator('.popup-menu').waitFor({ timeout: 8000 });
+await page.getByRole('menuitem', { name: '打开编辑器', exact: true }).click();
+await page.locator('.editor-pane').waitFor();
+
+async function openFile(name) {
+  await click(page.locator(`.file-tree .file-row[title="${name}"]`));
+  await page.locator('.cm-editor').first().waitFor();
+  await page.waitForTimeout(1200);
+}
+
+console.log('1. 修改与新增行显示色条');
+await openFile('sample.txt');
+assert(
+  (await page.locator('.cm-change-marker.is-modified').count()) >= 1,
+  '出现 modified 色条',
+);
+assert((await page.locator('.cm-change-marker.is-added').count()) >= 1, '出现 added 色条');
+assert((await page.locator('.cm-change-triangle').count()) >= 1, '出现删除三角');
+
+console.log('2. 概览标尺');
+assert((await page.locator('.editor-overview-ruler .editor-overview-mark').count()) >= 2, '标尺有标记');
+
+console.log('3. 干净文件没有标记');
+await openFile('clean.txt');
+await page.waitForTimeout(600);
+assert((await page.locator('.cm-change-marker').count()) === 0, '干净文件没有色条');
+assert((await page.locator('.editor-overview-ruler').count()) === 0, '干净文件不画标尺');
+
+console.log('3b. 未跟踪文件整篇算新增');
+await openFile('new.txt');
+await page.waitForTimeout(600);
+assert((await page.locator('.cm-change-marker.is-added').count()) >= 1, '未跟踪文件显示 added 色条');
+
+await app.close();
+console.log(`\n全部通过：${passed} 项`);

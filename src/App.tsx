@@ -1032,6 +1032,14 @@ export default function App() {
     },
   });
 
+  // 编辑器标记的失效指纹：提交 / 暂存 / 放弃 / 切分支都会改变条目与状态
+  const editorGitStateKey = useMemo(() => {
+    if (!gitStatus?.ok) return '';
+    return gitStatus.changes
+      .map((change) => `${change.path}:${change.indexStatus ?? ''}:${change.worktreeStatus ?? ''}`)
+      .join('|');
+  }, [gitStatus]);
+
   const [gitBranches, setGitBranches] = useState<{ current: string; list: string[] }>({
     current: '',
     list: [],
@@ -3337,6 +3345,7 @@ export default function App() {
           }
           untitledRestore={pickGroupUntitled(untitledContentsRef.current, group.key)}
           untitledDropped={pickGroupUntitledDropped(untitledDroppedRef.current, group.key)}
+          gitStateKey={editorGitStateKey}
           onDirtyChange={handleDirtyChange}
           themeMode={terminalThemeMode}
           wordWrap={prefs.editorWordWrap}
