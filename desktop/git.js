@@ -984,6 +984,91 @@ async function commitDiff(projectPath, hash) {
   return { patch: result.stdout };
 }
 
+const BLAME_TIMEOUT = 15000;
+const PATCH_CHAR_LIMIT = 204800;
+
+// porcelain 首行是 `<hash> <origLine> <finalLine> [行数]`，其余是按前缀区分的键值。
+function parseBlamePorcelain(raw) {
+  const lines = String(raw || '').split('\n');
+  const head = (lines[0] || '').trim().match(/^([0-9a-f]{40})\s+(\d+)\s+(\d+)/);
+  if (!head) return null;
+  // 全 0 是「尚未提交」的行，没有可展示的提交
+  if (/^0{40}$/.test(head[1])) return null;
+
+  let author = '';
+  let authorTime = 0;
+  let summary = '';
+  for (const line of lines.slice(1)) {
+    if (line.startsWith('author ')) author = line.slice(7);
+    else if (line.startsWith('author-time ')) authorTime = Number(line.slice(12));
+    else if (line.startsWith('summary ')) summary = line.slice(8);
+  }
+
+  return {
+    hash: head[1],
+    short: head[1].slice(0, 7),
+    author,
+    authorTime: Number.isFinite(authorTime) ? authorTime : 0,
+    summary,
+    origLine: Number(head[2]),
+  };
+}
+
+async function blame(projectPath, filePath, line) {
+  const root = path.resolve(projectPath);
+  const target = resolveWithin(root, String(filePath || ''));
+  const relative = path.relative(root, target);
+  if (!relative) throw new Error('文件路径不在项目目录内');
+
+  const lineNo = Math.max(1, Math.trunc(Number(line) || 1));
+  const blameLine = (number) =>
+    runGit(
+      projectPath,
+      ['--no-pager', 'blame', '--line-porcelain', '-L', `${number},${number}`, '--', relative],
+      { timeout: BLAME_TIMEOUT },
+    );
+
+  let result = await blameLine(lineNo);
+  // git 的 -L 不会自己钳制上界，越界直接 fatal；按报错里的实际行数重试一次
+  if (!result.ok) {
+    const overflow = result.stderr.match(/has only (\d+) lines?/i);
+    if (overflow) {
+      const last = Number(overflow[1]);
+      if (last < 1) return null;
+      result = await blameLine(Math.min(lineNo, last));
+    }
+  }
+  if (!result.ok) {
+    // 未跟踪 / 不在索引里：没有可归属的提交，按「查不到」处理
+    if (/no such path|does not exist|no such ref|not a valid object|fatal: no such/i.test(result.stderr)) {
+      return null;
+    }
+    throw new Error(cleanError(result.error, result.stderr));
+  }
+  return parseBlamePorcelain(result.stdout);
+}
+
+async function showFileDiff(projectPath, hash, filePath) {
+  const root = path.resolve(projectPath);
+  const target = resolveWithin(root, String(filePath || ''));
+  const relative = path.relative(root, target);
+  if (!relative) throw new Error('文件路径不在项目目录内');
+  const revision = assertCommitHash(hash);
+
+  const result = await runGit(projectPath, [
+    '--no-pager',
+    'show',
+    '--no-color',
+    '--no-ext-diff',
+    '-U3',
+    revision,
+    '--',
+    relative,
+  ]);
+  if (!result.ok) throw new Error(cleanError(result.error, result.stderr));
+  return { patch: result.stdout.slice(0, PATCH_CHAR_LIMIT) };
+}
+
 module.exports = {
   log,
   status,
@@ -1014,4 +1099,6 @@ module.exports = {
   stashPop,
   stashDrop,
   commitDiff,
+  blame,
+  showFileDiff,
 };

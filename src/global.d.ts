@@ -196,6 +196,23 @@ declare global {
         ) => Promise<{ ok: true; conflicts: string[] }>;
         stashDrop: (projectPath: string, ref: string) => Promise<{ ok: true }>;
         commitDiff: (projectPath: string, hash: string) => Promise<{ patch: string }>;
+        blame: (
+          projectPath: string,
+          filePath: string,
+          line: number,
+        ) => Promise<{
+          hash: string;
+          short: string;
+          author: string;
+          authorTime: number;
+          summary: string;
+          origLine: number;
+        } | null>;
+        showFileDiff: (
+          projectPath: string,
+          hash: string,
+          filePath: string,
+        ) => Promise<{ patch: string }>;
       };
       files: {
         list: (projectPath: string, relDir: string) => Promise<{ entries: FileEntry[] }>;
