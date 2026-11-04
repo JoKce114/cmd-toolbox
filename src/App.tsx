@@ -1870,6 +1870,17 @@ export default function App() {
     [applyTabs, inheritedTabGroupId, pushToast],
   );
 
+  // 统一「激活项目 + 页签 + 右栏焦点」。三处入口原本各写了一遍，
+  // 漏掉右栏分支会让分屏时点了没反应。
+  const activateTab = useCallback((groupKey: string, tab: Tab) => {
+    setActiveGroupKey(groupKey);
+    setActiveTabByGroup((previous) => ({ ...previous, [groupKey]: tab.id }));
+    if ((rightIdsByGroupRef.current[groupKey] || []).includes(tab.id)) {
+      setRightActiveByGroup((previous) => ({ ...previous, [groupKey]: tab.id }));
+      setFocusSideByGroup((previous) => ({ ...previous, [groupKey]: 'right' }));
+    }
+  }, []);
+
   const openDiffTab = useCallback(
     (group: Group, change: GitChange) => {
       if (!group.exists) {
@@ -1877,12 +1888,25 @@ export default function App() {
         return;
       }
       const groupTabs = tabsRef.current[group.key] || [];
+
+      // 差异页签读的是磁盘，文件有未保存修改时看到的是旧内容。
+      // 这条必须排在「已有同路径差异页签」之前，否则会切到一个过期视图。
+      const dirtyEditor = groupTabs.find(
+        (item) =>
+          item.shellId === 'editor' &&
+          item.filePath === change.path &&
+          dirtyTabsRef.current.get(item.id),
+      );
+      if (dirtyEditor) {
+        activateTab(group.key, dirtyEditor);
+        pushToast('文件有未保存修改，已切到编辑器页签', 'info');
+        return;
+      }
       const existing = groupTabs.find(
         (item) => item.shellId === 'diff' && item.diffChange?.path === change.path,
       );
       if (existing) {
-        setActiveGroupKey(group.key);
-        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: existing.id }));
+        activateTab(group.key, existing);
         return;
       }
       const tab: Tab = {
@@ -1902,7 +1926,7 @@ export default function App() {
       setActiveGroupKey(group.key);
       setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
     },
-    [applyTabs, pushToast],
+    [activateTab, applyTabs, pushToast],
   );
 
   const openCommitDiffTab = useCallback(
@@ -1916,8 +1940,7 @@ export default function App() {
         (item) => item.shellId === 'diff' && item.diffCommit?.hash === commit.hash,
       );
       if (existing) {
-        setActiveGroupKey(group.key);
-        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: existing.id }));
+        activateTab(group.key, existing);
         return;
       }
       const tab: Tab = {
@@ -1937,7 +1960,7 @@ export default function App() {
       setActiveGroupKey(group.key);
       setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
     },
-    [applyTabs, pushToast],
+    [activateTab, applyTabs, pushToast],
   );
 
   const openEditorFile = useCallback(
@@ -1951,8 +1974,7 @@ export default function App() {
         (item) => item.shellId === 'editor' && item.filePath === relPath,
       );
       if (existing) {
-        setActiveTabByGroup((previous) => ({ ...previous, [group.key]: existing.id }));
-        setActiveGroupKey(group.key);
+        activateTab(group.key, existing);
         return;
       }
 
@@ -1983,7 +2005,7 @@ export default function App() {
 
       createEditor(group, relPath);
     },
-    [applyTabs, createEditor, pushToast],
+    [activateTab, applyTabs, createEditor, pushToast],
   );
 
   const createTerminal = useCallback(
