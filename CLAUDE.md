@@ -482,6 +482,43 @@ node tests/device-emulation-probe.mjs
   编辑过时 `dirty` 与 `sessionOnly` 同时成立，关闭文案要把两种后果都说清楚。
 - **另存为用 `SaveAsModal`，不要用 `window.prompt`**——Electron 渲染进程里它直接抛错。
 
+### 编辑器变更标记
+
+- **基准是 Git HEAD，不是暂存区**：打开文件时用 `git.fileDiff(path, relPath, 'modified', 'HEAD')`
+  取 `baseContent`，差异在渲染进程用 `computeLineChanges` 算。不要改成读暂存区——
+  那需要新增 IPC，且与右键菜单的「与 Git HEAD 比较」语义不一致。
+- **非 Git 项目必须在所有标记计算前按 `gitRepo !== true` 提前返回**：后端 `fileDiff`
+  在非仓库里不会报错，而是把文件当「未跟踪」返回空基准，不门控就会整篇误标为新增。
+  `gitRepo` 由 `App.tsx` 下发给 `EditorPane`，只有激活项目才下发明确布尔值
+  （`gitStatus.ok`）；加载中或隐藏页签是 `undefined`，表示「状态未知」，
+  同样不能出标记，要等真实状态到了再算。
+- **标记字段存文档位置，不存行号；`tr.changes.mapPos` 之后必须再吸附回行首**：
+  行号在渲染时现算。存行号会让「在标记上方插入一行」把下面所有标记错开一整行，
+  直到 300ms 防抖重算完成，表现为打字时标记乱跳。`mapPos` 的结果可能落在行中间
+  （行首回车、跨行删除、行首打字都会），而标记以 `line.from` 为键，不吸附到
+  行首（`doc.lineAt(pos).from`）这一行的标记会凭空消失。
+- **失效指纹必须含分支名**：`editorGitStateKey` 拼的是
+  `[gitStatus.branch, ...changes条目].join('|')`。只拼文件变更的话，工作区干净时
+  切分支指纹不变，变更基准缓存（60 秒 TTL）不失效，标记会按旧 HEAD 算最多 60 秒。
+- **变更 gutter 必须显式声明 `lineMarkerChange`**：纯 `StateEffect` 更新
+  （`setChangeMarkers`）既不改变文档也不改变高度和视口，`lineMarker` 又只在
+  `syncGutters` 里调用，不写这个回调 gutter 不会重绘。
+- **变更 gutter 是独立 gutter，不在 `displayExtensions` 的 Compartment 里**：
+  关掉「显示行号」后变更色条照常显示。
+- **替换行同时有色条和删除三角**（VS Code 也是这样）：色条表示这一行变了，
+  三角表示这里吞掉了原文。不要为了「一个改动只画一个记号」去掉其中一个。
+- **blame 的 hunk 匹配要优先按 patch 新侧**：`git blame` 返回的 `origLine` 对应
+  **提交自身版本**的行号，也就是 `git show` 的 `+` 侧，所以要优先用新侧匹配；
+  只按旧侧匹配会让首次提交（`@@ -0,0 +1,4 @@`）永远取不到片段。
+- **中键选择必须 `view.focus()`**：中键不触发 CodeMirror 的聚焦逻辑，不聚焦时选区
+  只存在于 state 里，DOM 上看不到。
+- **中键的 mousemove / mouseup 必须挂在 `window` 上**：只挂编辑器 DOM 时，拖到
+  编辑器外松手收不到 mouseup，选区会一直跟着鼠标走。
+- **Alt+F5 只跳有色条的行**：纯删除的锚点不是跳转目标；到末尾回绕到第一个。
+- **未跟踪文件整篇显示为新增**（`fileDiff` 对未跟踪返回 `baseContent: ''` +
+  `untracked: true`），与 VS Code 一致。不要按 `untracked` 字段跳过标记——那样
+  新文件反而看不到自己「全是新的」。
+
 ### 文件树与对比
 
 - **所有文件操作都经 `resolveWithin`**（`desktop/file-api.js`）。`createFile` 用
