@@ -589,15 +589,23 @@ export function EditorPane({
     onFilePathChangeRef.current?.(next);
   }, [activePath, files, tab.filePath]);
 
-  // 编辑器内切换文件时要回写上层：运行时会话恢复靠它，
-  // App 侧「已打开的文件」去重与未保存拦截也依赖 tab.filePath 是最新的。
+  // 本轮渲染开始时的「已应用路径」。上面的 effect 会在同一轮被动 effect 里
+  // 把它改成 App 请求的新路径，判断编辑器是否已跟上时得用改动前的值。
+  const appliedAtRender = appliedPathRef.current;
+
+  // 编辑器内切换文件时回写上层：会话恢复、页签去重与未保存拦截都依赖 tab.filePath 与编辑器实际内容一致；文件全关时回写空串。
   useEffect(() => {
-    if (!activePath || !files[activePath] || isUntitledPath(activePath)) return;
-    if (activePath === tab.filePath) return;
-    // 必须先更新 appliedPathRef 再回调，否则上层 filePath 变化会让
-    // 上面那个 effect 重新 open()，撤销栈和光标全丢。
-    appliedPathRef.current = activePath;
-    onFilePathChangeRef.current?.(activePath);
+    const next = activePath && files[activePath] && !isUntitledPath(activePath) ? activePath : '';
+    // 空白窗口的另一半（`untitled://N`）归上面那个 effect 管，这里不碰
+    if (next === '' && activePath && isUntitledPath(activePath)) return;
+    if (next === (tab.filePath || '')) return;
+    // App 主动换了路径（复用空闲页签）时，这一轮 activePath 还是旧文件：只有
+    // 上一轮渲染时编辑器已接受的路径就是 tab.filePath，才说明是用户切了文件；
+    // 否则等编辑器跟上新路径后再回写，免得把旧路径写回去形成 B→A→B 往返。
+    if (tab.filePath && appliedAtRender !== tab.filePath) return;
+    // 先记下新路径再回调，否则上层 filePath 变化会让上面的 effect 重新 open()。
+    appliedPathRef.current = next;
+    onFilePathChangeRef.current?.(next);
   }, [activePath, files, tab.filePath]);
 
   // 空白窗口内容快照：只比较各空白条目的内容引用并维护版本号，不把全部内容

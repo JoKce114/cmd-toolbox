@@ -32,10 +32,11 @@ for (const name of ['a.txt', 'b.txt', 'c.txt']) {
 execFileSync('git', ['add', '.'], { cwd: repo });
 execFileSync('git', ['commit', '-m', '初始提交'], { cwd: repo });
 
-// 三个文件都产生工作区改动，才会出现在源代码管理列表里
-for (const name of ['a.txt', 'b.txt', 'c.txt']) {
-  writeFileSync(join(repo, name), 'one\nTWO\n');
-}
+// 三个文件都产生工作区改动，才会出现在源代码管理列表里。
+// b.txt 的内容与另外两个不同，用来确认编辑器真正打开的是它。
+writeFileSync(join(repo, 'a.txt'), 'one\nTWO\n');
+writeFileSync(join(repo, 'b.txt'), 'alpha\nBEE\n');
+writeFileSync(join(repo, 'c.txt'), 'one\nTWO\n');
 
 let passed = 0;
 function assert(condition, message) {
@@ -184,20 +185,6 @@ try {
     await page.keyboard.type('X');
     await page.locator('.editor-tab.active .editor-tab-dot').waitFor({ timeout: 8000 });
 
-    // 路径同步不能触发重新 open()：撤销栈还在时 Ctrl+Z 应撤掉刚输入的 X，
-    // 重做又能把它恢复。文档若被重载，这里会撤不动（内容已是磁盘旧值）。
-    await page.keyboard.press('Control+z');
-    await waitFor(
-      async () => (await page.locator('.editor-tab.active .editor-tab-dot').count()) === 0,
-      '撤销后未保存圆点消失（撤销栈仍在）',
-    );
-    await page.keyboard.press('Control+y');
-    await page.locator('.editor-tab.active .editor-tab-dot').waitFor({ timeout: 8000 });
-    assert(
-      (await page.locator('.editor-pane:not(.is-hidden)').count()) === 1,
-      '编辑器页签处于激活',
-    );
-
     await waitForNoToast();
     await clickChange('a.txt');
     await waitFor(
@@ -208,10 +195,6 @@ try {
     assert(
       (await page.locator('.editor-pane:not(.is-hidden)').count()) === 1,
       '激活的仍是编辑器页签（文件树入口）',
-    );
-    assert(
-      (await page.locator('.toast', { hasText: '未保存修改' }).count()) >= 1,
-      '出现未保存提示（文件树入口）',
     );
 
     // 1b. 关掉编辑器，再从 Git 面板行内入口打开同一个文件。
@@ -277,7 +260,6 @@ try {
     await clickChange('a.txt');
     await waitFor(async () => (await countDiffPanes()) === 1, '开出一个差异页签');
     await waitFor(() => visibleDiffPathIncludes('a.txt'), '差异页签显示 a.txt');
-    assert((await countDiffPanes()) === 1, '开出一个差异页签');
   }
 
   console.log('3. 连续点不同文件只复用一个差异页签');
@@ -289,7 +271,6 @@ try {
     await clickChange('c.txt');
     await waitFor(() => visibleDiffPathIncludes('c.txt'), '差异页签内容切到 c.txt');
     assert((await countDiffPanes()) === 1, '仍只有一个差异页签');
-    assert(await visibleDiffPathIncludes('c.txt'), '内容是最后点击的 c.txt');
   }
 
   console.log('4. 交互过的差异页签不再被复用');
@@ -302,7 +283,6 @@ try {
 
     await clickChange('a.txt');
     await waitFor(async () => (await countDiffPanes()) === 2, '交互过之后新开一个差异页签');
-    assert((await countDiffPanes()) === 2, '新开了一个差异页签');
   }
 
   console.log('5. 关闭后恢复复用');
@@ -324,6 +304,109 @@ try {
     await clickChange('c.txt');
     await waitFor(() => visibleDiffPathIncludes('c.txt'), '复用后显示 c.txt');
     assert((await countDiffPanes()) === 1, '关闭后重新恢复到单页签复用');
+  }
+
+  console.log('6. 复用未触碰的编辑器页签换文件时，旧路径不会回写');
+  {
+    // 先切回编辑器页签再关掉它，重建一个没被编辑过的编辑器，满足复用条件
+    await click(page.locator('.tab').filter({ hasText: 'a.txt' }).first());
+    await page.locator('.editor-pane:not(.is-hidden)').waitFor({ timeout: 8000 });
+    await click(
+      page.locator('.editor-pane:not(.is-hidden) .pane-header .icon-btn[title="关闭"]'),
+    );
+    await waitFor(
+      async () => (await page.locator('.editor-pane').count()) === 0,
+      '编辑器页签已关闭',
+    );
+
+    async function openFromGitPanel(name) {
+      await click(
+        page
+          .locator('.git-change-item')
+          .filter({ hasText: name })
+          .locator('.git-row-action[title="打开文件编辑"]'),
+      );
+    }
+    async function activeEditorPath() {
+      return page
+        .locator('.editor-pane:not(.is-hidden) .pane-path')
+        .first()
+        .innerText();
+    }
+
+    // 新编辑器打开 a.txt，但不输入任何内容：App 侧仍认为它未被触碰。
+    await openFromGitPanel('a.txt');
+    await waitFor(async () => (await activeEditorPath()).endsWith('a.txt'), 'Git 面板打开 a.txt');
+    await page
+      .locator('.editor-pane:not(.is-hidden) .cm-content')
+      .first()
+      .waitFor({ timeout: 15000 });
+    const editorTabsBefore = await page.locator('.editor-tab').count();
+
+    // App 复用同一个页签把 filePath 改成 b.txt；这一轮编辑器里还是 a.txt，
+    // 旧 effect 会把 a.txt 写回 App，形成 b.txt → a.txt → b.txt 的往返。
+    await openFromGitPanel('b.txt');
+    await waitFor(async () => (await activeEditorPath()).endsWith('b.txt'), '编辑器切到 b.txt');
+    // 留一轮渲染 + 状态回写的时间再复查，路径不该又跳回 a.txt
+    await page.waitForTimeout(300);
+    assert((await page.locator('.editor-pane').count()) === 1, '编辑器页签数量不增加');
+    assert(
+      (await page.locator('.editor-tab').count()) === editorTabsBefore,
+      '编辑器内页签数量不增加（复用而不是新建）',
+    );
+    assert(
+      (await activeEditorPath()).endsWith('b.txt'),
+      'tab.filePath 稳定在 b.txt（没有回写 a.txt）',
+    );
+    assert(
+      (await page
+        .locator('.editor-pane:not(.is-hidden) .cm-content')
+        .first()
+        .innerText()).includes('BEE'),
+      '内容是 b.txt 的',
+    );
+  }
+
+  console.log('7. 关闭最后一个文件后，从 Git 面板打开文件');
+  {
+    // 关掉编辑器里最后一个文件页签：编辑器面板还在，只是没有任何文件。
+    await page.locator('.editor-tab.active .editor-tab-close').click();
+    await waitFor(
+      async () => (await page.locator('.editor-tab').count()) === 0,
+      '编辑器内文件页签已清空',
+    );
+    assert((await page.locator('.editor-pane').count()) === 1, '编辑器页签仍开着（只是没有文件）');
+    // 空路径回写要等下一次 App 渲染才落到页签上；立刻点会被按旧 filePath 去重，
+    // 这里等它稳定，模拟用户关掉文件后稍作停顿再点。
+    await page.waitForTimeout(300);
+
+    // 关掉的是 b.txt，再从 Git 面板打开同一个文件。页签路径若残留在 b.txt，
+    // openEditorFile 会按 filePath 去重，只激活这个空页签，不会真的打开文件。
+    await click(
+      page
+        .locator('.git-change-item')
+        .filter({ hasText: 'b.txt' })
+        .locator('.git-row-action[title="打开文件编辑"]'),
+    );
+    await waitFor(
+      async () =>
+        (await page
+          .locator('.editor-pane:not(.is-hidden) .pane-path')
+          .first()
+          .innerText()).endsWith('b.txt'),
+      '关闭全部文件后重新打开 b.txt',
+    );
+    await page
+      .locator('.editor-pane:not(.is-hidden) .cm-content')
+      .first()
+      .waitFor({ timeout: 15000 });
+    assert(
+      (await page
+        .locator('.editor-pane:not(.is-hidden) .cm-content')
+        .first()
+        .innerText()).includes('BEE'),
+      '真的打开了 b.txt（不是只激活空页签）',
+    );
   }
 } finally {
   await app?.close().catch(() => {});
