@@ -9,6 +9,8 @@ import {
   WidgetType,
   showTooltip,
   ViewPlugin,
+  gutter,
+  GutterMarker,
 } from '@codemirror/view';
 import type { DecorationSet, Tooltip } from '@codemirror/view';
 import {
@@ -41,6 +43,7 @@ import type { SymbolCardState } from './SymbolCard';
 import { lookupSymbol, wordAndReceiverAt } from '../symbolLookup';
 import type { SymbolMatch } from '../types';
 import { isUntitledPath } from '../untitledPath';
+import type { LineChangeKind, LineChanges } from '../lineChanges';
 
 export type CodeMirrorHostProps = {
   value: string;
@@ -71,6 +74,8 @@ export type CodeMirrorHostProps = {
   onFontSizeDelta?: (delta: number) => void;
   onChange: (value: string) => void;
   onConflictCountChange?: (count: number) => void;
+  // 与 Git HEAD 的行级差异；null 表示不显示标记
+  changeMarkers?: LineChanges | null;
 };
 
 type CardFieldValue = { pos: number; card: SymbolCardState; seq: number } | null;
@@ -104,6 +109,103 @@ function createCardDom(
   root.render(<SymbolCard card={card} onJump={onJump} onClose={onClose} />);
   return { dom: host, destroy: () => root.unmount() };
 }
+
+const setChangeMarkers = StateEffect.define<LineChanges | null>();
+
+type MarkerSpans = {
+  // 行首位置 → 类型；存位置而不是行号，用户编辑时才能用 mapPos 跟随
+  bars: Map<number, LineChangeKind>;
+  deletes: Map<number, string[]>;
+};
+
+const EMPTY_SPANS: MarkerSpans = { bars: new Map(), deletes: new Map() };
+
+function spansFromLines(state: EditorStateType, changes: LineChanges): MarkerSpans {
+  const doc = state.doc;
+  const startOf = (line: number) => doc.line(Math.min(Math.max(1, line), doc.lines)).from;
+
+  const bars = new Map<number, LineChangeKind>();
+  for (const chunk of changes.chunks) {
+    const from = Math.max(1, chunk.startLine);
+    const to = Math.min(chunk.endLine, doc.lines);
+    for (let line = from; line <= to; line += 1) bars.set(startOf(line), chunk.kind);
+  }
+
+  const deletes = new Map<number, string[]>();
+  for (const anchor of changes.deletes) deletes.set(startOf(anchor.line), anchor.texts);
+  return { bars, deletes };
+}
+
+const changeMarkerField = StateField.define<MarkerSpans>({
+  create: () => EMPTY_SPANS,
+  update(value, tr) {
+    let next = value;
+    for (const effect of tr.effects) {
+      if (effect.is(setChangeMarkers)) {
+        next = effect.value ? spansFromLines(tr.state, effect.value) : EMPTY_SPANS;
+      }
+    }
+    // 上一次标记还没被新行号覆盖时，按位置跟随，避免打字时下方标记整体错行
+    if (tr.docChanged && next === value && value !== EMPTY_SPANS) {
+      const bars = new Map<number, LineChangeKind>();
+      for (const [pos, kind] of value.bars) bars.set(tr.changes.mapPos(pos, -1), kind);
+      const deletes = new Map<number, string[]>();
+      for (const [pos, texts] of value.deletes) deletes.set(tr.changes.mapPos(pos, 1), texts);
+      next = { bars, deletes };
+    }
+    return next;
+  },
+});
+
+function sameTexts(a: string[] | null, b: string[] | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+class ChangeGutterMarker extends GutterMarker {
+  constructor(
+    readonly kind: LineChangeKind | null,
+    readonly deleted: string[] | null,
+  ) {
+    super();
+  }
+
+  eq(other: GutterMarker): boolean {
+    const target = other as ChangeGutterMarker;
+    return this.kind === target.kind && sameTexts(this.deleted, target.deleted);
+  }
+
+  toDOM(): HTMLElement {
+    const host = document.createElement('div');
+    host.className = 'cm-change-marker';
+    if (this.kind) host.classList.add(`is-${this.kind}`);
+    if (this.deleted) {
+      const triangle = document.createElement('span');
+      triangle.className = 'cm-change-triangle';
+      const head = this.deleted.slice(0, 5);
+      const rest = this.deleted.length - head.length;
+      triangle.title = head.join('\n') + (rest > 0 ? `\n… 还有 ${rest} 行` : '');
+      host.appendChild(triangle);
+    }
+    return host;
+  }
+}
+
+const changeGutter = gutter({
+  class: 'cm-change-gutter',
+  lineMarker(view, line) {
+    const spans = view.state.field(changeMarkerField, false);
+    if (!spans) return null;
+    const kind = spans.bars.get(line.from) ?? null;
+    const deleted = spans.deletes.get(line.from) ?? null;
+    if (!kind && !deleted) return null;
+    return new ChangeGutterMarker(kind, deleted);
+  },
+});
 
 function referenceExtension(options: {
   isEnabled: () => boolean;
@@ -361,6 +463,7 @@ export function CodeMirrorHost({
   onFontSizeDelta,
   onChange,
   onConflictCountChange,
+  changeMarkers,
 }: CodeMirrorHostProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -382,6 +485,7 @@ export function CodeMirrorHost({
   const activeFileRef = useRef(filePath);
   const jumpRef = useRef(onJumpToSymbol);
   const onGotoLineAppliedRef = useRef(onGotoLineApplied);
+  const changeMarkersRef = useRef(changeMarkers);
   onChangeRef.current = onChange;
   onCountRef.current = onConflictCountChange;
   onFontDeltaRef.current = onFontSizeDelta;
@@ -390,6 +494,7 @@ export function CodeMirrorHost({
   activeFileRef.current = filePath;
   jumpRef.current = onJumpToSymbol;
   onGotoLineAppliedRef.current = onGotoLineApplied;
+  changeMarkersRef.current = changeMarkers;
 
   // 空白窗口另存为只换路径、不换文件：编辑器实例与撤销栈必须保留。
   // 重建 effect 的依赖里有 filePath，正常切文件要重建（各文件自带撤销历史），
@@ -486,6 +591,8 @@ export function CodeMirrorHost({
           wrapRef.current.of(wordWrap ? EditorView.lineWrapping : []),
           themeRef.current.of(themeExtensions(themeMode)),
           conflictField,
+          changeMarkerField,
+          changeGutter,
           languageRef.current.of([]),
           diagnosticsRef.current.of([]),
           referenceRef.current.of(referenceExtensionOption()),
@@ -500,6 +607,8 @@ export function CodeMirrorHost({
       }),
     });
     viewRef.current = view;
+    // 首次创建时补一次：effect 依赖相同引用时不会重跑
+    view.dispatch({ effects: setChangeMarkers.of(changeMarkersRef.current ?? null) });
     onCountRef.current?.(parseConflicts(value).length);
 
     void languageFor(filePath).then((extension) => {
@@ -519,6 +628,12 @@ export function CodeMirrorHost({
     // value 故意不放进依赖：由外部内容变化通过下方 effect 同步
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({ effects: setChangeMarkers.of(changeMarkers ?? null) });
+  }, [changeMarkers]);
 
   // 只读状态变化只重配这一扩展，不重建编辑器。
   // readOnly 必须在 Compartment 里：保留实例的路径（空白窗口另存为、
