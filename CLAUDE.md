@@ -396,6 +396,29 @@ node tests/device-emulation-probe.mjs
   bundle，运行时不从 node_modules 读），主进程也 `require` 的必须放 `dependencies`；
   后果见「打包 → 依赖必须放对位置」。
 
+### 代码折叠与路径导航
+
+- **折叠直接复用语言包的 `foldNodeProp`，不要自己写节点判定**。`@codemirror/lang-php`
+  已定义 `Block / SwitchBody / ArrayExpression / DeclarationList` 等节点，
+  `@codemirror/lang-json` 定义了 `Object / Array`，只要在 extensions 里挂
+  `foldGutter()` + `foldKeymap` 就能用。`editorTheme.ts` 里原本就有
+  `.cm-foldPlaceholder` 配色，说明这套样式一直留着，只是没接上。
+- **`foldGutter()` 不能放进 `displayExtensions` 的 Compartment**：那组 Compartment
+  由「显示行号」开关驱动重配，放进去会在关掉行号时一起消失。
+- **面包屑（`EditorBreadcrumb`）只对磁盘文件渲染**：`activePath` 为空或是
+  虚拟路径（`isUntitledPath()`）时整条不出现，空白窗口没有真实路径可点。
+- **目录内容在菜单打开时才 `files.list()`**，不要缓存成常驻状态：刚在文件树里
+  新建的文件、外部工具刚建的文件都要能立刻选中。读失败时显示空列表，不抛错。
+- **面包屑菜单的关闭判定用 `closest('.editor-breadcrumb')` 判祖先，不能用
+  `menuRef.contains()`**：菜单挂在第 N 段按钮的兄弟节点里，用户点同一段按钮
+  想收起菜单时，`contains()` 判定会把它当成外部点击，结果「关掉又立刻以新坐标
+  打开」，表现为点不灭。
+- **菜单用 `position: fixed` + 视口夹取**（左右各留 8px，`maxHeight` 按剩余高度
+  算），和 `PopupMenu` 同一套思路；不要放进 `PopupMenu` 本身——它只支持纯文字项，
+  没有图标和当前项高亮。
+- **长路径超过 5 段时把中间收成「…」**，只保留首段和末三段（`buildCrumbs`）。
+  段数阈值改的时候注意「…」自己也要能点开，它打开的是被藏起来的**第一层**目录。
+
 ### 编辑器自动重新加载
 
 - **激活页签的外部改动会自动重新载入，静默不提示**（2 秒一轮，`reloadFromDisk`）。

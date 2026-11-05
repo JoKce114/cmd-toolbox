@@ -24,7 +24,12 @@ import {
 } from '@codemirror/state';
 import type { EditorState as EditorStateType, Extension } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { bracketMatching as bracketMatchingExtension, indentUnit } from '@codemirror/language';
+import {
+  bracketMatching as bracketMatchingExtension,
+  foldGutter,
+  foldKeymap,
+  indentUnit,
+} from '@codemirror/language';
 import { bindingsExtension } from '../editorKeymap';
 import type { KeyBindingMap } from '../editorKeymap';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
@@ -1014,7 +1019,7 @@ export function CodeMirrorHost({
           // 自定义键位放在 searchKeymap 之前：CodeMirror 按顺序匹配，
           // 先命中的生效。否则 Ctrl+G 会被 searchKeymap 的「查找下一个」抢走。
           keysRef.current.of(bindingsExtension(keybindings)),
-          keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+          keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, ...foldKeymap]),
           changeKeymap,
           indentRef.current.of([
             EditorState.tabSize.of(tabSize),
@@ -1026,6 +1031,9 @@ export function CodeMirrorHost({
           conflictField,
           changeMarkerField,
           changeGutter,
+          // 折叠箭头放在变更色条之后，紧贴代码；关掉行号时它仍要在，
+          // 所以不能塞进 displayExtensions 的 Compartment。
+          foldGutter(),
           middleClickSelection,
           languageRef.current.of([]),
           diagnosticsRef.current.of([]),

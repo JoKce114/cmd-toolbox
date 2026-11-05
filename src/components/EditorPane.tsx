@@ -14,6 +14,7 @@ import {
 import { SaveAsModal } from './SaveAsModal';
 import { FileTree } from './FileTree';
 import type { FileTreeHandle } from './FileTree';
+import { EditorBreadcrumb } from './EditorBreadcrumb';
 import { EditorSidebar } from './EditorSidebar';
 import { OpenEditors } from './OpenEditors';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -1128,6 +1129,15 @@ export function EditorPane({
           <Plus size={12} />
         </button>
       </div>
+
+      {/* 面包屑只对磁盘文件有意义：空白窗口没有真实路径 */}
+      {activePath && !isUntitledPath(activePath) ? (
+        <EditorBreadcrumb
+          projectPath={group.path}
+          relPath={activePath}
+          onOpen={requestOpen}
+        />
+      ) : null}
 
       {file.readOnly && activePath ? (
         <p className="editor-notice">该文件为只读（二进制、过大或无法解码）</p>

@@ -75,6 +75,13 @@ const lightTheme = EditorView.theme(
       border: 'none',
       color: '#616161',
     },
+    '.cm-foldGutter .cm-gutterElement': {
+      color: '#9da3ae',
+      paddingLeft: '2px',
+    },
+    '.cm-foldGutter .cm-gutterElement:hover': {
+      color: '#1f1f1f',
+    },
     '.cm-change-gutter': { width: '14px' },
     '.cm-change-gutter .cm-gutterElement': { display: 'flex', alignItems: 'center' },
     '.cm-change-marker': { position: 'relative', width: '100%', height: '100%' },
@@ -175,6 +182,13 @@ const darkTheme = EditorView.theme(
       backgroundColor: '#3a3d41',
       border: 'none',
       color: '#c6c6c6',
+    },
+    '.cm-foldGutter .cm-gutterElement': {
+      color: '#6b7280',
+      paddingLeft: '2px',
+    },
+    '.cm-foldGutter .cm-gutterElement:hover': {
+      color: '#e6e6e6',
     },
     '.cm-change-gutter': { width: '14px' },
     '.cm-change-gutter .cm-gutterElement': { display: 'flex', alignItems: 'center' },
