@@ -9,6 +9,8 @@ import {
   WidgetType,
   showTooltip,
   ViewPlugin,
+  drawSelection,
+  rectangularSelection,
   gutter,
   GutterMarker,
 } from '@codemirror/view';
@@ -245,64 +247,31 @@ const changeGutter = gutter({
     update.state.field(changeMarkerField, false),
 });
 
-// 中键与左键一样做普通文本选择。必须把 mousemove / mouseup 挂在 window 上：
-// 拖到编辑器外再松手时，只挂编辑器 DOM 会收不到 mouseup，选区会一直跟着鼠标走。
-const middleClickSelection = ViewPlugin.fromClass(
-  class {
-    private readonly view: EditorView;
-    private anchor: number | null = null;
+// 中键拖出矩形块（VS Code 的列选择）：每行只选中同一段横向范围，
+// 宽度为 0 时每行各留一个光标。真正的矩形计算交给 CodeMirror 的
+// rectangularSelection，这里只做一件事：拦掉中键的浏览器默认行为。
+//
+// 为什么必须拦：Chromium 对中键 mousedown 会进入自动滚动模式，不 preventDefault
+// 的话拖动变成滚页面，用户看到的就是「拖了半天什么都没选中」。监听挂在 view.dom
+// 上而不是 domEventHandlers——后者只覆盖 .cm-content，gutter 上按中键漏网。
+const middleAutoscrollGuard = ViewPlugin.fromClass(
+    class {
+        private readonly view: EditorView;
 
-    private readonly onMove = (event: MouseEvent) => {
-      if (this.anchor === null) return;
-      if ((event.buttons & 4) === 0) {
-        this.stop();
-        return;
-      }
-      const pos = this.view.posAtCoords({ x: event.clientX, y: event.clientY });
-      // 拖出编辑器外时 posAtCoords 返回 null，保留上一次的位置，不跳回
-      if (pos === null) return;
-      this.view.dispatch({ selection: EditorSelection.range(this.anchor, pos) });
-    };
+        private readonly onMouseDown = (event: MouseEvent) => {
+            if (event.button !== 1) return;
+            event.preventDefault();
+        };
 
-    private readonly onUp = () => this.stop();
+        constructor(view: EditorView) {
+            this.view = view;
+            view.dom.addEventListener('mousedown', this.onMouseDown);
+        }
 
-    constructor(view: EditorView) {
-      this.view = view;
-    }
-
-    destroy() {
-      this.stop();
-    }
-
-    private stop() {
-      this.anchor = null;
-      window.removeEventListener('mousemove', this.onMove);
-      window.removeEventListener('mouseup', this.onUp);
-    }
-
-    handleMouseDown(event: MouseEvent): boolean {
-      if (event.button !== 1) return false;
-      const pos = this.view.posAtCoords({ x: event.clientX, y: event.clientY });
-      if (pos === null) return false;
-      // 不 preventDefault 会让 Chromium 进入中键自动滚动模式
-      event.preventDefault();
-      this.stop();
-      this.anchor = pos;
-      // 中键不会触发 CodeMirror 的聚焦逻辑；不聚焦时选区只存在于 state 里，DOM 上看不到。
-      this.view.focus();
-      this.view.dispatch({ selection: EditorSelection.cursor(pos) });
-      window.addEventListener('mousemove', this.onMove);
-      window.addEventListener('mouseup', this.onUp);
-      return true;
-    }
-  },
-  {
-    eventHandlers: {
-      mousedown(event) {
-        return this.handleMouseDown(event);
-      },
+        destroy() {
+            this.view.dom.removeEventListener('mousedown', this.onMouseDown);
+        }
     },
-  },
 );
 
 // bars 以行首位置为键，多行变更块的每一行都有一条。直接拿所有 key 排序会把
@@ -1015,6 +984,11 @@ export function CodeMirrorHost({
             editorAppearanceExtension({ fontSize, lineHeight, fontFamily }),
           ),
           history(),
+          // 选区自己画：全局 body 是 user-select: none，靠浏览器原生渲染会时有时无
+          drawSelection(),
+          // 矩形选择要按行产生多个选区，必须显式开启多选，否则会被折叠成单个
+          EditorState.allowMultipleSelections.of(true),
+          rectangularSelection({ eventFilter: (event) => event.button === 1 }),
           highlightSelectionMatches(),
           // 自定义键位放在 searchKeymap 之前：CodeMirror 按顺序匹配，
           // 先命中的生效。否则 Ctrl+G 会被 searchKeymap 的「查找下一个」抢走。
@@ -1034,7 +1008,7 @@ export function CodeMirrorHost({
           // 折叠箭头放在变更色条之后，紧贴代码；关掉行号时它仍要在，
           // 所以不能塞进 displayExtensions 的 Compartment。
           foldGutter(),
-          middleClickSelection,
+          middleAutoscrollGuard,
           languageRef.current.of([]),
           diagnosticsRef.current.of([]),
           referenceRef.current.of(referenceExtensionOption()),

@@ -533,10 +533,27 @@ node tests/device-emulation-probe.mjs
 - **blame 的 hunk 匹配要优先按 patch 新侧**：`git blame` 返回的 `origLine` 对应
   **提交自身版本**的行号，也就是 `git show` 的 `+` 侧，所以要优先用新侧匹配；
   只按旧侧匹配会让首次提交（`@@ -0,0 +1,4 @@`）永远取不到片段。
-- **中键选择必须 `view.focus()`**：中键不触发 CodeMirror 的聚焦逻辑，不聚焦时选区
-  只存在于 state 里，DOM 上看不到。
-- **中键的 mousemove / mouseup 必须挂在 `window` 上**：只挂编辑器 DOM 时，拖到
-  编辑器外松手收不到 mouseup，选区会一直跟着鼠标走。
+- **中键拖动是矩形块选择（列选择），不是线性选择**。每行只选中同一段横向范围，
+  宽度为 0 时每行各留一个光标。实现直接用 CodeMirror 的
+  `rectangularSelection({ eventFilter: (e) => e.button === 1 })`，**不要自己写
+  anchor/head 的线性选区**——那样拖出来是一条斜向的连续文本，和 VS Code 的列选择
+  完全不是一回事，用户会描述成「只选中了换行」。
+- **矩形选择必须配 `EditorState.allowMultipleSelections.of(true)`**。不开的话
+  `EditorState` 会在 apply 时把多选区 `asSingle()` 折叠成一条，表现为「明明拖了三行
+  却只高亮一行」。这两个要和 `drawSelection()` 一起加，缺一不可。
+- **中键的 mousedown 必须 `preventDefault()`，且监听要挂在 `view.dom` 上**。
+  Chromium 对中键 mousedown 会进入**自动滚动模式**，不拦的话拖动变成滚页面。
+  `EditorView.domEventHandlers` 只覆盖 `.cm-content`，gutter 上按中键会漏网，
+  所以用 ViewPlugin 直接 `view.dom.addEventListener`，并且**返回 false 语义上不能拦
+  CodeMirror 自己的 mousedown**——这里只是阻止浏览器默认行为，不要 `stopPropagation`。
+- **矩形选择的落点由 CodeMirror 自己算**（`rectangleSelectionStyle` 内部用
+  `posAtCoords(..., false)`），空白处也能起手；不要再去兜底改写锚点。
+- **选区必须启用 `drawSelection()`**。全局 `body` 是 `user-select: none`，
+  实测 `.cm-content` 的计算值也是 `none`；靠浏览器原生选区渲染会时有时无
+  （只画光标不画高亮）。多选区的高亮和每行光标也都靠它。
+- **拖到边缘自动滚动由 CodeMirror 的 `MouseSelection` 负责**，不要再自己写定时器。
+- **左键行为不受影响**：`rectangularSelection` 的 `eventFilter` 只认中键，
+  左键走 CodeMirror 的 `basicMouseSelection`。
 - **Alt+F5 跳到下一个变更块的首行**：一个多行变更块只算一个目标——`bars` 按
   `doc.lineAt(pos).number` 把相邻行（差值 1）合并成块。纯删除的锚点不是跳转目标；
   到末尾回绕到第一个。
