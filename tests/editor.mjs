@@ -215,9 +215,15 @@ await waitFor(
 await click(page.locator('.tab').first());
 await page.waitForTimeout(400);
 const activePane = page.locator('.editor-pane:not(.is-hidden)');
+// 侧栏里「打开的编辑器」和「文件」两处都有 .file-row，同名文件会匹配到两个，
+// 要点文件树就限定在 is-grow 那个区块里
+const fileTreeRow = (name) =>
+  activePane
+    .locator('.editor-sidebar-section.is-grow .file-row')
+    .filter({ hasText: name });
 
 console.log('8. 关闭脏页签需确认');
-await click(activePane.locator('.file-row').filter({ hasText: 'index.php' }));
+await click(fileTreeRow('index.php'));
 await waitFor(
   async () => (await activePane.locator('.cm-content').count()) > 0,
   'index.php 在编辑器加载',

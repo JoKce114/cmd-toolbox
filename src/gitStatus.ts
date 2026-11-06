@@ -19,7 +19,7 @@ export function useGitStatus(activeGroup: Group | null, options: GitStatusOption
   groupRef.current = activeGroup;
   optionsRef.current = options;
 
-  const refresh = useCallback(async (): Promise<GitStatus | null> => {
+  const load = useCallback(async (fetchRemote: boolean): Promise<GitStatus | null> => {
     const group = groupRef.current;
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
@@ -33,7 +33,7 @@ export function useGitStatus(activeGroup: Group | null, options: GitStatusOption
     setRefreshing(true);
     try {
       // 先静默 fetch，让 ahead/behind 反映远端真实状态；无网络或没有上游时忽略即可
-      await window.api.git.fetch(group.path).catch(() => {});
+      if (fetchRemote) await window.api.git.fetch(group.path).catch(() => {});
       const next = await window.api.git.status(group.path);
       // 请求被更新的一次刷新取代时，调用方不该用这份过期数据做判断
       if (requestId !== requestIdRef.current) return null;
@@ -52,6 +52,11 @@ export function useGitStatus(activeGroup: Group | null, options: GitStatusOption
       if (requestId === requestIdRef.current) setRefreshing(false);
     }
   }, []);
+
+  const refresh = useCallback(() => load(true), [load]);
+
+  // 编辑器保存只改工作区，远端不可能变，不值得每次都跑一遍 fetch
+  const refreshLocal = useCallback(() => load(false), [load]);
 
   useEffect(() => {
     setStatus(null);
@@ -82,5 +87,5 @@ export function useGitStatus(activeGroup: Group | null, options: GitStatusOption
     };
   }, [refresh]);
 
-  return { status, refreshing, refresh, setStatus };
+  return { status, refreshing, refresh, refreshLocal, setStatus };
 }

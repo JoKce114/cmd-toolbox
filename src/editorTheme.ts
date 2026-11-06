@@ -5,6 +5,24 @@ import { tags } from '@lezer/highlight';
 import { EDITOR_FONT_STACKS } from './prefs';
 import type { EditorFontFamily } from './prefs';
 
+// 选区底色必须用与 CodeMirror 基础主题同形的选择器才盖得住。基础主题写的是
+// `.ͼ1.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground`（5 个类），
+// 简写的 `.cm-selectionBackground` 只有 1 个类，优先级不够，永远被它压住。
+// 深色下基础主题用 #233，和 #1e1e1e 的背景几乎同色，表现成「选了但看不出选在哪」。
+function selectionTheme(active: string, inactive: string) {
+  return {
+    // 失焦时用暗一档的底色，选中范围仍然看得见
+    '&.cm-editor > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+      backgroundColor: inactive,
+    },
+    '&.cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+      backgroundColor: active,
+    },
+    // 关掉 drawSelection 的兜底路径（原生选区）也要有颜色
+    '.cm-content ::selection': { backgroundColor: active },
+  };
+}
+
 // VS Code Light+ 的取色，尽量贴近同一套语义
 const vscodeLight = HighlightStyle.define([
   { tag: [tags.comment, tags.lineComment, tags.blockComment], color: '#008000', fontStyle: 'italic' },
@@ -33,15 +51,13 @@ const lightTheme = EditorView.theme(
       color: '#1f1f1f',
       backgroundColor: '#ffffff',
     },
+    ...selectionTheme('#add6ff', '#e5ebf1'),
     '.cm-content': {
       caretColor: '#000000',
       padding: '8px 0',
     },
     '.cm-cursor, .cm-dropCursor': {
       borderLeftColor: '#000000',
-    },
-    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-      backgroundColor: '#add6ff',
     },
     '.cm-gutters': {
       backgroundColor: '#ffffff',
@@ -53,8 +69,10 @@ const lightTheme = EditorView.theme(
       backgroundColor: '#f5f5f5',
       color: '#1f1f1f',
     },
+    // 必须半透明：选区层在 z-index -2，比它上面的行内容更靠后，
+    // 不透明的当前行底色会把这一行的选区整个盖掉（深色下尤其明显）
     '.cm-activeLine': {
-      backgroundColor: '#f5f5f5',
+      backgroundColor: 'rgba(0, 0, 0, 0.04)',
     },
     '.cm-selectionMatch': {
       backgroundColor: '#e5ebf1',
@@ -141,15 +159,13 @@ const darkTheme = EditorView.theme(
       color: '#d4d4d4',
       backgroundColor: '#1e1e1e',
     },
+    ...selectionTheme('#264f78', '#3a3d41'),
     '.cm-content': {
       caretColor: '#aeafad',
       padding: '8px 0',
     },
     '.cm-cursor, .cm-dropCursor': {
       borderLeftColor: '#aeafad',
-    },
-    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-      backgroundColor: '#264f78',
     },
     '.cm-gutters': {
       backgroundColor: '#1e1e1e',
@@ -161,8 +177,9 @@ const darkTheme = EditorView.theme(
       backgroundColor: '#2a2d2e',
       color: '#c6c6c6',
     },
+    // 同浅色主题：底色必须半透明，否则当前行上的选区看不见
     '.cm-activeLine': {
-      backgroundColor: '#2a2d2e',
+      backgroundColor: 'rgba(255, 255, 255, 0.05)',
     },
     '.cm-selectionMatch': {
       backgroundColor: '#3a3d41',

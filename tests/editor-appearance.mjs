@@ -111,6 +111,9 @@ const readStyle = () =>
       lineHeight: ss.lineHeight,
       fontFamily: ss.fontFamily,
       gutters: Boolean(document.querySelector('.cm-gutters')),
+      // 变更色条和折叠箭头会一直占着 .cm-gutters 容器，
+      // 判断「行号关掉了」只能看行号槽自己
+      lineNumbers: Boolean(document.querySelector('.cm-lineNumbers')),
       whitespace: Boolean(document.querySelector('.cm-highlightSpace')),
       matching: Boolean(document.querySelector('.cm-matchingBracket')),
       activeLine: document.querySelectorAll('.cm-activeLine').length,
@@ -157,7 +160,7 @@ console.log('2. 关闭行号');
 await seedPrefs({ editorLineNumbers: false });
 await openEditor();
 style = await readStyle();
-ok(style.gutters === false, '行号槽消失');
+ok(style.lineNumbers === false, '行号槽消失');
 
 console.log('3. 高亮当前行开关');
 await seedPrefs({ editorHighlightActiveLine: false });

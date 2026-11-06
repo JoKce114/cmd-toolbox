@@ -216,19 +216,24 @@ console.log('2c. 中键拖拽选择');
   const end = await lines.nth(4).boundingBox();
   await page.mouse.move(start.x + 4, start.y + start.height / 2);
   await page.mouse.down({ button: 'middle' });
-  await page.mouse.move(end.x + 4, end.y + end.height / 2, { steps: 8 });
+  // 中键是列选择：起点和终点要横向拉开，同 x 拖出来是宽度 0 的矩形，每行只剩一个光标
+  await page.mouse.move(end.x + 120, end.y + end.height / 2, { steps: 8 });
   await page.mouse.up({ button: 'middle' });
-  // CodeMirror 把选区同步到 DOM 是异步的，松手后立刻读可能还是空的。
-  const selected = await page
-    .waitForFunction(() => {
-      const text = window.getSelection()?.toString() || '';
-      return text.length > 0 ? text : false;
-    }, null, { timeout: 5000 })
+  // 列选择是多选区，window.getSelection() 只反映主范围（第一行），
+  // 所以要看 drawSelection 画出来的矩形：跨两行就该有两块，且都有实际宽度。
+  const boxes = await page.waitForFunction(
+    () => {
+      const found = [...document.querySelectorAll('.cm-selectionBackground')].map((box) =>
+        Math.round(box.getBoundingClientRect().width),
+      );
+      return found.length >= 2 && found.every((width) => width > 0) ? found : false;
+    },
+    null,
+    { timeout: 5000 },
+  )
     .then((handle) => handle.jsonValue())
-    .catch(() => '');
-  // 实测拖第 3→5 行得到的是 "c\nX\n"，.cm-selectionBackground 数量为 0：
-  // CodeMirror 的选区由原生 Selection 承载，所以直接断言选中的行内容。
-  assert(selected.includes('c\nX'), '中键拖拽选中了第 3、4 行的内容，实际：' + JSON.stringify(selected));
+    .catch(() => []);
+  assert(boxes.length >= 2, '中键列选择跨两行各画出一块选区，实际：' + JSON.stringify(boxes));
 }
 
 console.log('2d. Alt+F5 跳转下一个改动');

@@ -1,5 +1,10 @@
-import { useRef, useState } from 'react';
-import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
+import type {
+  DragEvent as ReactDragEvent,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+} from 'react';
 import {
   AlertTriangle,
   ChevronRight,
@@ -16,6 +21,39 @@ import type { Group } from '../types';
 import { MODEL_STATUS_LABEL, type ModelStatus } from '../sessionStatus';
 
 const PROJECT_DRAG_TYPE = 'text/cmd-toolbox-project';
+
+const MIN_SIDEBAR_WIDTH = 180;
+// 上限按应用主体宽度的比例算，避免把右边的终端挤没
+const MAX_WIDTH_RATIO = 0.4;
+const WIDTH_STORAGE_KEY = 'cmd-toolbox.sidebar-width';
+
+// 没存过值时返回 null，表示「跟随 CSS 的默认宽度」。
+// 不要在这里回落到 272：窄窗口的媒体查询会给出 248，写死数值会把那条规则盖掉。
+function readStoredWidth(): number | null {
+  try {
+    const raw = window.localStorage.getItem(WIDTH_STORAGE_KEY);
+    if (raw === null) return null;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < MIN_SIDEBAR_WIDTH) return null;
+    return Math.round(value);
+  } catch {
+    return null;
+  }
+}
+
+function persistWidth(width: number | null) {
+  try {
+    if (width === null) window.localStorage.removeItem(WIDTH_STORAGE_KEY);
+    else window.localStorage.setItem(WIDTH_STORAGE_KEY, String(Math.round(width)));
+  } catch {
+    // 存不进去只影响下次启动的宽度，不值得打断交互
+  }
+}
+
+function maxWidthFor(element: HTMLElement | null | undefined): number {
+  const total = element?.getBoundingClientRect().width ?? 0;
+  return total > 0 ? Math.max(MIN_SIDEBAR_WIDTH, total * MAX_WIDTH_RATIO) : Infinity;
+}
 
 type GroupRowProps = {
   group: Group;
@@ -178,12 +216,70 @@ export function Sidebar({
   const globalGroup = groups.find((group) => group.kind === 'global');
   const projects = groups.filter((group) => group.kind === 'project');
   const [projectsCollapsed, toggleProjects] = useCollapsedSection('projects');
+  const sidebarRef = useRef<HTMLElement>(null);
+  const [width, setWidth] = useState<number | null>(readStoredWidth);
+  const [maxWidth, setMaxWidth] = useState(Infinity);
+  const [resizing, setResizing] = useState(false);
+  const resizeRef = useRef<{ startX: number; startWidth: number; currentWidth: number } | null>(
+    null,
+  );
   const draggingIdRef = useRef<string | null>(null);
   const dropHintRef = useRef<{ id: string; position: 'before' | 'after' } | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropHint, setDropHint] = useState<{ id: string; position: 'before' | 'after' } | null>(
     null,
   );
+
+  // 上限随窗口变化重算；存下来的宽度不跟着改，窗口变宽后用户原来的偏好还能回来
+  useLayoutEffect(() => {
+    const updateMax = () => setMaxWidth(maxWidthFor(sidebarRef.current?.parentElement));
+    updateMax();
+    window.addEventListener('resize', updateMax);
+    return () => window.removeEventListener('resize', updateMax);
+  }, []);
+
+  const handleResizeDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    const node = sidebarRef.current;
+    if (!node) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const startWidth = node.getBoundingClientRect().width;
+    resizeRef.current = { startX: event.clientX, startWidth, currentWidth: startWidth };
+    setResizing(true);
+  };
+
+  const handleResizeMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = resizeRef.current;
+    if (!drag || event.buttons === 0) return;
+    const next = Math.round(
+      Math.min(
+        maxWidth,
+        Math.max(MIN_SIDEBAR_WIDTH, drag.startWidth + (event.clientX - drag.startX)),
+      ),
+    );
+    drag.currentWidth = next;
+    setWidth((current) => (current === next ? current : next));
+  };
+
+  const handleResizeUp = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = resizeRef.current;
+    if (!drag) return;
+    resizeRef.current = null;
+    setResizing(false);
+    // 只在松手时落盘，拖动过程中每帧写 localStorage 没有必要
+    persistWidth(drag.currentWidth);
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // already released
+    }
+  };
+
+  const resetWidth = () => {
+    persistWidth(null);
+    setWidth(null);
+  };
 
   const updateDropHint = (hint: { id: string; position: 'before' | 'after' } | null) => {
     dropHintRef.current = hint;
@@ -237,8 +333,23 @@ export function Sidebar({
     onReorderProjects(fromId, group.projectId, position);
   };
 
+  const appliedWidth = width === null ? null : Math.round(Math.min(width, maxWidth));
+
   return (
-    <aside className={cn('sidebar', collapsed && 'is-collapsed')}>
+    <aside
+      ref={sidebarRef}
+      className={cn(
+        'sidebar',
+        collapsed && 'is-collapsed',
+        resizing && 'is-resizing',
+      )}
+      // 折叠宽度由 .is-collapsed 决定，内联宽度会盖掉它，所以折叠时不施加
+      style={
+        collapsed || appliedWidth === null
+          ? undefined
+          : { flexBasis: `${appliedWidth}px`, width: `${appliedWidth}px` }
+      }
+    >
       <button
         type="button"
         className="sidebar-toggle"
@@ -325,6 +436,20 @@ export function Sidebar({
           <span>添加项目</span>
         </button>
       </div>
+
+      {collapsed ? null : (
+        <button
+          type="button"
+          className={cn('sidebar-resizer', resizing && 'is-dragging')}
+          aria-label="调整侧栏宽度"
+          title="拖动调整侧栏宽度，双击恢复默认"
+          onPointerDown={handleResizeDown}
+          onPointerMove={handleResizeMove}
+          onPointerUp={handleResizeUp}
+          onPointerCancel={handleResizeUp}
+          onDoubleClick={resetWidth}
+        />
+      )}
     </aside>
   );
 }

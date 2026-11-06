@@ -1027,13 +1027,27 @@ export default function App() {
   const {
     status: gitStatus,
     refreshing: gitRefreshing,
-    refresh: refreshGit,
+    refresh: refreshGitRaw,
+    refreshLocal: refreshGitLocal,
   } = useGitStatus(gitGroup, {
     isSessionActive: (sessionId) => {
       const key = activeGroupKeyRef.current;
       return (tabsRef.current[key] || []).some((tab) => tab.sessionId === sessionId);
     },
   });
+
+  // 差异页签的内容是打开那一刻的磁盘快照，任何改动磁盘的操作之后都要让它重取。
+  // 只挂在「上层主动刷新」上：后台轮询（终端输出、窗口获得焦点）太频繁，
+  // 每次都让差异页签跑一遍 git 会把 AI 跑命令时的 git 进程数放大到没必要。
+  const [diffRefreshToken, setDiffRefreshToken] = useState(0);
+  const bumpDiffRefresh = useCallback(() => {
+    setDiffRefreshToken((token) => token + 1);
+  }, []);
+  const refreshGit = useCallback(async () => {
+    const next = await refreshGitRaw();
+    bumpDiffRefresh();
+    return next;
+  }, [refreshGitRaw, bumpDiffRefresh]);
 
   // 编辑器标记的失效指纹：提交 / 暂存 / 放弃 / 切分支都会改变条目与状态。
   // 分支名必须参与指纹：干净工作区切分支时 changes 始终为空，只拼条目会让
@@ -1826,6 +1840,13 @@ export default function App() {
     else dirtyPathsByTabRef.current.delete(tabId);
   }, []);
 
+  // 编辑器保存后磁盘变了：更改列表和已打开的差异页签都要跟上。
+  // 保存只改工作区，远端不可能变，所以走不带 fetch 的轻量刷新。
+  const handleEditorSaved = useCallback(() => {
+    void refreshGitLocal();
+    bumpDiffRefresh();
+  }, [refreshGitLocal, bumpDiffRefresh]);
+
   const createEditor = useCallback(
     (group: Group, filePath = '') => {
       if (!group.exists) {
@@ -1925,6 +1946,9 @@ export default function App() {
       );
       if (existing) {
         activateTab(group.key, existing);
+        // 页签可能已经开着很久了；用户再点一次这个文件，就是「我要看现在的差异」，
+        // 即使它本来就是激活页签（active 不会翻转）也要强制重取一次
+        bumpDiffRefresh();
         return;
       }
 
@@ -1972,7 +1996,7 @@ export default function App() {
       setActiveGroupKey(group.key);
       setActiveTabByGroup((previous) => ({ ...previous, [group.key]: tab.id }));
     },
-    [activateTab, applyTabs, pushToast],
+    [activateTab, applyTabs, bumpDiffRefresh, pushToast],
   );
 
   const openCommitDiffTab = useCallback(
@@ -3402,6 +3426,7 @@ export default function App() {
           onOpenFile={(relPath) => openEditorFile(group, relPath)}
           onToast={pushToast}
           onInteract={() => touchedTabsRef.current.add(tab.id)}
+          refreshToken={diffRefreshToken}
         />
       );
     }
@@ -3425,6 +3450,7 @@ export default function App() {
           gitRepo={gitGroup?.key === group.key && gitStatus ? gitStatus.ok : undefined}
           onDirtyChange={handleDirtyChange}
           onDirtyPathsChange={handleDirtyPathsChange}
+          onSaved={handleEditorSaved}
           themeMode={terminalThemeMode}
           wordWrap={prefs.editorWordWrap}
           tabSize={prefs.editorTabSize}

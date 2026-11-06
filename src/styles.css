@@ -205,6 +205,40 @@ p {
   padding: 8px 4px 12px;
 }
 
+/* 拖动时关掉宽度过渡，否则侧栏会慢半拍追着鼠标走 */
+.sidebar.is-resizing {
+  transition: none;
+}
+
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.sidebar-resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.sidebar-resizer:hover::before,
+.sidebar-resizer.is-dragging::before {
+  background: var(--accent);
+}
+
 .sidebar-toggle {
   flex: 0 0 28px;
   width: 28px;
@@ -2559,6 +2593,11 @@ p {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.git-change-row .file-type-icon {
+  flex: 0 0 auto;
+  margin-right: -2px;
 }
 
 .git-resolve-btn {

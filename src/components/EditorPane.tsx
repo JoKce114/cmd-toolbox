@@ -69,6 +69,8 @@ export type EditorPaneProps = {
   // 有未保存修改的路径集合。SCM 拦截要按「具体文件」判断，
   // 只用页签级的 dirty 布尔值会把无关文件也拦下来。
   onDirtyPathsChange: (tabId: string, dirtyPaths: string[]) => void;
+  // 写盘成功后触发：磁盘已变，更改列表与差异页签都要重新取
+  onSaved?: (relPath: string) => void;
   themeMode: TerminalThemeMode;
   wordWrap: boolean;
   tabSize: number;
@@ -111,6 +113,7 @@ export function EditorPane({
   onTitleChange,
   onDirtyChange,
   onDirtyPathsChange,
+  onSaved,
   themeMode,
   wordWrap,
   tabSize,
@@ -493,6 +496,8 @@ export function EditorPane({
   onDirtyChangeRef.current = onDirtyChange;
   const onDirtyPathsChangeRef = useRef(onDirtyPathsChange);
   onDirtyPathsChangeRef.current = onDirtyPathsChange;
+  const onSavedRef = useRef(onSaved);
+  onSavedRef.current = onSaved;
   const onFilePathChangeRef = useRef(onFilePathChange);
   onFilePathChangeRef.current = onFilePathChange;
   const onUntitledContentsChangeRef = useRef(onUntitledContentsChange);
@@ -727,8 +732,10 @@ export function EditorPane({
     const outcome = await save(target);
     // 没改动时也要给反馈：否则按了 Ctrl+S 却什么都不发生，会让人以为保存失灵。
     // 失败路径由 useEditorFiles 内部的 onError 提示，这里不重复。
-    if (outcome === 'saved') onToast('已保存', 'success');
-    else if (outcome === 'unchanged') onToast('文件没有改动', 'info');
+    if (outcome === 'saved') {
+      onToast('已保存', 'success');
+      onSavedRef.current?.(target);
+    } else if (outcome === 'unchanged') onToast('文件没有改动', 'info');
   }, [onToast, save]);
 
   // 页签栏的 ＋ 与右键菜单共用：算最小可用编号，建空白窗口并把页签路径同步给上层。
@@ -1381,6 +1388,7 @@ export function EditorPane({
             // 根目录与已缓存目录都会提前返回，必须显式重列一次才看得到新文件。
             setTreeRefreshToken((token) => token + 1);
             onToast('已保存', 'success');
+            onSavedRef.current?.(relPath);
             return null;
           }}
         />

@@ -193,6 +193,7 @@ node tests/untitled-path.mjs  # 虚拟路径判断与编号分配（离线）
 ```bash
 node tests/settings.mjs
 node tests/editor-appearance.mjs
+node tests/editor-selection.mjs   # 选区颜色：深色/浅色、左键拖选、中键列选择、当前行、失焦
 node tests/prefs-migration.mjs
 node tests/git-panel.mjs
 node tests/update-notify.mjs
@@ -208,6 +209,7 @@ node tests/editor-untitled.mjs   # 空白窗口新建、另存为、编号复用
 node tests/module-catalog.mjs    # 模块清单与默认开关（离线）
 node tests/clipboard-image.mjs   # 剪贴板图片识别（会占用系统剪贴板）
 node tests/device-emulation-probe.mjs
+node tests/change-icons-sidebar.mjs  # 更改列表文件图标与左侧栏拖拽
 ```
 
 - **UI 测试必须独占，先关掉正在运行的 Cmd Toolbox。** `desktop/pane-api.js` 写死了
@@ -551,6 +553,16 @@ node tests/device-emulation-probe.mjs
 - **选区必须启用 `drawSelection()`**。全局 `body` 是 `user-select: none`，
   实测 `.cm-content` 的计算值也是 `none`；靠浏览器原生选区渲染会时有时无
   （只画光标不画高亮）。多选区的高亮和每行光标也都靠它。
+- **自定义选区颜色要用和基础主题同形的选择器**。CodeMirror 基础主题写的是
+  `&light/&dark.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground`
+  （生成后是 5 个类），简写的 `.cm-selectionBackground` 只有 1 个类，永远被压住：
+  深色下落到基础的 `#233`，和 `#1e1e1e` 背景几乎同色，表现成**「选了但看不出选在哪」**。
+  `editorTheme.ts` 的 `selectionTheme()` 用 `&.cm-editor.cm-focused > .cm-scroller >
+  .cm-selectionLayer .cm-selectionBackground`（6 个类）才盖得住。
+- **当前行底色必须半透明**（`rgba(...)`）。选区层在 `z-index: -2`，比行内容更靠后，
+  当前行写不透明色会把这一行的选区整个盖掉——列选择很明显：光标所在行的选区消失，
+  相邻行还在。浅色写 `rgba(0,0,0,0.04)`、深色 `rgba(255,255,255,0.05)`，
+  观感和原来的 `#f5f5f5` / `#2a2d2e` 一样。`tests/editor-selection.mjs` 锁这两条。
 - **拖到边缘自动滚动由 CodeMirror 的 `MouseSelection` 负责**，不要再自己写定时器。
 - **左键行为不受影响**：`rectangularSelection` 的 `eventFilter` 只认中键，
   左键走 CodeMirror 的 `basicMouseSelection`。
@@ -616,6 +628,18 @@ node tests/device-emulation-probe.mjs
 - **对比打开期间编辑器仍可编辑，patch 必须跟内存内容实时重算（300ms 防抖）**。
   基准文本在打开对比时就取好存进 `DiffSource`，重算只依赖两个 content 字符串；
   不要每次按键都重读磁盘 / git，也不要不防抖。
+- **SCM 面板开的差异页签（`DiffPane` 的 `change` 变体）读的是「打开那一刻」的磁盘快照**，
+  磁盘改过之后必须重新取，否则用户改完文件回来看到的还是旧差异——典型表现是
+  「明明已经把某几行补回去了，对比里还是显示成删除」。重取有三个触发：页签重新激活
+  （`active` 由 false 变 true）、窗口获得焦点、上层的 `refreshToken` 变化
+  （编辑器保存完 / 再次点同一个变更行 / 任何 App 主动发起的 Git 刷新）。
+  已有内容时走静默刷新（`loadedKeyRef` 记目标 key），不要每次都闪一下「正在读取差异…」。
+  这套机制只属于 SCM 面板的差异页签，编辑器内嵌对比（`text` 变体）靠内存实时重算，别混。
+- **保存只改工作区，用 `useGitStatus` 的 `refreshLocal`，不要用带 `fetch` 的 `refresh`**
+  （后者每次都会打一次远端）。`App` 里包了一层 `refreshGit`，它在刷新后递增
+  `diffRefreshToken`，所以 Git 操作（暂存 / 放弃 / 提交 / 切分支）后差异页签会自己跟上；
+  后台轮询（终端输出、窗口焦点）走的是 hook 内部的 `refresh`，不会递增，避免 AI 跑命令时
+  把 git 进程数放大。
 - **开关对比不能卸载编辑器**：`CodeMirrorHost` 始终挂在同一位置，对比只改父容器
   `.editor-diff-split` 的 flex。撤销栈、光标和滚动位置才能保留；不要写成
   `diffTarget ? 对比 : 编辑器` 的条件渲染。
@@ -650,6 +674,16 @@ node tests/device-emulation-probe.mjs
 - `tests/git-pull.mjs` 覆盖发布、远端优先级、空仓库与游离 HEAD；`tests/git-panel.mjs` 的 5e 覆盖界面。
 
 ## 界面约定
+- **左侧栏宽度可拖拽，但默认宽度仍由 CSS 决定**：`Sidebar.tsx` 只在用户真的拖过之后
+  才施加内联 `flexBasis/width`，存储里没有值（`cmd-toolbox.sidebar-width`）时**不加内联样式**，
+  宽屏 272 / 窄屏 248 的媒体查询才不被盖掉。`tests/smoke.mjs` 断言窄窗口是 248，写死数值会挂。
+- **折叠时不施加内联宽度**：折叠宽度靠 `.sidebar.is-collapsed` 的 40px，内联值会把它盖掉。
+- **拖拽上限按 `.app-body` 宽度的 40% 算**，每次 `resize` 重算；存下来的值不跟着改，
+  窗口变宽后用户原来的偏好还能回来。拖动时给 `.sidebar` 加 `is-resizing` 关掉宽度过渡，
+  否则侧栏慢半拍追鼠标。双击拖拽条清掉存储值、恢复默认。
+- **「更改」列表的文件类型图标在 `src/fileIcons.tsx`**，纯装饰（`aria-hidden`），
+  不改变行点击语义；测试靠 `.git-change-row` 的文字定位，不受影响。
+  新增扩展名只改那一张表，不要在 `GitPanel` 里内联判断。
 - 标题栏底色是 `--surface: #ffffff`，红点（`.titlebar-update-dot`）用
   `box-shadow: 0 0 0 2px #fff` 贴合
 - 滚动条样式是全局的 `::-webkit-scrollbar`（10px）和 `::-webkit-scrollbar-thumb`

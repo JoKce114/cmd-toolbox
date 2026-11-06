@@ -449,6 +449,31 @@ await waitFor(
 );
 assert(true, '新增行以绿色标记呈现');
 
+// 差异页签的内容是打开那一刻的快照，磁盘改了之后必须能重新读出来，
+// 否则用户改完文件回来看到的还是旧差异（会把已经补回去的行显示成删除）
+const addedBefore = await page
+  .locator('.diff-pane:not(.is-hidden) .diff-row.is-added')
+  .count();
+writeFileSync(join(plain, 'b.txt'), 'b\nc\n');
+await click(page.locator('.git-change-row').filter({ hasText: 'b.txt' }));
+await waitFor(
+  async () =>
+    (await page.locator('.diff-pane:not(.is-hidden) .diff-row.is-added').count()) ===
+    addedBefore + 1,
+  '再点同一个变更时差异重新读取',
+);
+assert(true, '再点同一个变更时差异重新读取');
+
+writeFileSync(join(plain, 'b.txt'), 'b\nc\nd\n');
+await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+await waitFor(
+  async () =>
+    (await page.locator('.diff-pane:not(.is-hidden) .diff-row.is-added').count()) ===
+    addedBefore + 2,
+  '窗口重新获得焦点时差异重新读取',
+);
+assert(true, '窗口重新获得焦点时差异重新读取');
+
 console.log('7. 分组与行内操作');
 await selectProject('git-proj');
 writeFileSync(join(repo, 'index.php'), '<?php echo 7;\n');

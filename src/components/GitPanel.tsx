@@ -20,6 +20,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { cn } from '../lib';
+import { FileTypeIcon } from '../fileIcons';
 import { useCollapsedSection } from '../useCollapsedSection';
 import type {
   GitChange,
@@ -370,6 +371,7 @@ export function GitPanel({
           onClick={() => onOpenDiff(change)}
         >
           <span className={cn('git-change-badge', `is-${badge}`)}>{STATUS_LABEL[badge]}</span>
+          <FileTypeIcon path={change.path} />
           <span className="git-change-path">
             {change.origPath ? `${change.origPath} → ${change.path}` : change.path}
           </span>

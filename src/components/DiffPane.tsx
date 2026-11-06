@@ -21,6 +21,8 @@ export type DiffPaneProps = {
   onToast: (message: string, kind?: 'info' | 'success' | 'error') => void;
   // 用户第一次在这个页签里按下鼠标或滚动时回调一次；上层据此不再复用它
   onInteract?: () => void;
+  // 外部改动磁盘后递增（编辑器保存、暂存/放弃/提交），用来重新读取最新差异
+  refreshToken?: number;
 };
 
 export function DiffPane({
@@ -32,10 +34,13 @@ export function DiffPane({
   onOpenFile,
   onToast,
   onInteract,
+  refreshToken = 0,
 }: DiffPaneProps) {
   const [patch, setPatch] = useState('');
   const [loading, setLoading] = useState(true);
   const [selectedPath, setSelectedPath] = useState('');
+  // 页签切回来、窗口重新获得焦点时磁盘可能已经被改过，各补一次重新读取
+  const [reloadTick, setReloadTick] = useState(0);
 
   // 只上报第一次交互：页签被复用时不重建组件，标记随之保留
   const interactedRef = useRef(false);
@@ -55,6 +60,24 @@ export function DiffPane({
       ? target.change.worktreeStatus ?? target.change.indexStatus ?? 'modified'
       : '';
 
+  // 同一个页签会被复用成别的文件，加载状态要按「当前看的到底是哪份 diff」判断
+  const targetKey = `${commitHash}|${changePath}`;
+  const loadedKeyRef = useRef('');
+
+  // 隐藏页签不重建组件，只有 active 翻转时才知道「用户又回来看了」
+  const wasActiveRef = useRef(active);
+  useEffect(() => {
+    if (active && !wasActiveRef.current) setReloadTick((tick) => tick + 1);
+    wasActiveRef.current = active;
+  }, [active]);
+
+  useEffect(() => {
+    if (!active) return;
+    const handleFocus = () => setReloadTick((tick) => tick + 1);
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [active]);
+
   useEffect(() => {
     setSelectedPath('');
     // text 变体的 patch 是上层算好的，直接渲染，不发起任何 IPC
@@ -64,7 +87,8 @@ export function DiffPane({
       return;
     }
     let cancelled = false;
-    setLoading(true);
+    // 目标文件没变时静默刷新，别让每次切回页签都闪一下「正在读取差异…」
+    setLoading(loadedKeyRef.current !== targetKey);
     const load = async () => {
       const result = commitHash
         ? await window.api.git.commitDiff(projectPath, commitHash)
@@ -73,7 +97,9 @@ export function DiffPane({
     };
     void load()
       .then((next) => {
-        if (!cancelled) setPatch(next);
+        if (cancelled) return;
+        loadedKeyRef.current = targetKey;
+        setPatch(next);
       })
       .catch((error) => {
         if (!cancelled) onToast(toErrorMessage(error), 'error');
@@ -84,7 +110,18 @@ export function DiffPane({
     return () => {
       cancelled = true;
     };
-  }, [isText, textPatch, projectPath, commitHash, changePath, changeStatus, onToast]);
+  }, [
+    isText,
+    textPatch,
+    projectPath,
+    commitHash,
+    changePath,
+    changeStatus,
+    targetKey,
+    refreshToken,
+    reloadTick,
+    onToast,
+  ]);
 
   const files = useMemo(
     () => (commitHash ? splitCommitPatch(patch) : []),
