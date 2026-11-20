@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -365,5 +365,42 @@ assert(
 updates.configure({ cacheFile: null });
 updates.resetCache();
 await rm(dir, { recursive: true, force: true });
+
+console.log('8. 限流时旧缓存不能盖掉 latest.yml');
+// 真实场景：缓存是发新版之前抓的（里面没有新版本），latest.yml 已经指向新版本，
+// 这时 API 被限流。旧代码拿缓存当结论，会报「已是最新版本」且一直持续到缓存过期。
+const staleDir = await mkdtemp(join(tmpdir(), 'cmdtb-stale-'));
+const staleFile = join(staleDir, 'update-cache.json');
+await writeFile(
+  staleFile,
+  JSON.stringify({
+    at: Date.now() - 10 * 60 * 1000,
+    releases: [
+      { tag_name: 'v1.0.0', html_url: 'u', body: '', draft: false, prerelease: false },
+    ],
+    blockedUntil: 0,
+  }),
+  'utf8',
+);
+updates.configure({ cacheFile: staleFile });
+updates.resetCache({ keepDisk: true });
+const staleLimited = await updates.checkForUpdate(
+  '1.0.0',
+  '1.0.0',
+  routerFetch({
+    yml: { body: 'version: 1.1.0\n' },
+    api: { status: 403, headers: { 'x-ratelimit-reset': String(resetSoon) } },
+  }),
+);
+assert(staleLimited.hasUpdate === true, '旧缓存说没新版时，以 latest.yml 为准报出新版本');
+assert(staleLimited.latest === 'v1.1.0', '版本号取自 latest.yml');
+assert(
+  Boolean(staleLimited.warning) && staleLimited.warning.includes('频繁'),
+  '仍然说明更新说明取不到的原因',
+);
+
+updates.configure({ cacheFile: null });
+updates.resetCache();
+await rm(staleDir, { recursive: true, force: true });
 
 console.log(`\n全部通过：${passed} 项`);

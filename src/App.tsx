@@ -873,6 +873,7 @@ export default function App() {
             version: result.latest || result.current,
             releases: releases || [],
             url: result.url,
+            hint: result.warning,
           });
         } else {
           const suffix = result.warning ? `（${result.warning}）` : '';
@@ -886,6 +887,7 @@ export default function App() {
         version: result.announce === 'available' ? result.latest || result.current : result.current,
         releases: result.releases,
         url: result.url,
+        hint: result.warning,
       });
     } catch (error) {
       if (mode !== 'background') {

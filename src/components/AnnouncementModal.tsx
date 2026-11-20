@@ -70,6 +70,9 @@ export type Announcement = {
   version: string;
   releases: ReleaseNote[];
   url: string;
+  // 说明没取到时的原因（限流 / 断网）。有它就不显示「没有填写更新说明」，
+  // 否则会把「暂时拿不到」说成作者没写。
+  hint?: string;
 };
 
 type AnnouncementModalProps = {
@@ -136,7 +139,11 @@ export function AnnouncementModal({
           ))}
         </div>
       ) : (
-        <p className="announcement-body is-empty">这个版本没有填写更新说明。</p>
+        <p className="announcement-body is-empty">
+          {announcement.hint
+            ? `更新说明暂时取不到：${announcement.hint}`
+            : '这个版本没有填写更新说明。'}
+        </p>
       )}
 
       {available && phase === 'error' && updater?.message ? (

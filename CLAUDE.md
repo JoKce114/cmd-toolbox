@@ -145,6 +145,13 @@ node-pty 1.1.0 用的是 node-addon-api（Node-API，ABI 稳定），已在 Elec
   请求 API。有旧缓存就返回旧数据并带 `warning`，设置面板显示为
   「已是最新版本（…）（GitHub 接口请求过于频繁，约 N 分钟后自动恢复）」。
   这种情况下 latest.yml 仍然能回答「有没有新版」，只是公告里没有正文。
+- **latest.yml 的结论不能被旧缓存盖掉**（`checkForUpdate` 里 `probeHasUpdate` 那段）：
+  缓存最多留 24 小时，可能是发新版**之前**抓的，里面根本没有新版本。若此时 API 被限流，
+  单看缓存会得出「已是最新」，把 yml 已经确认的「有新版本」抹掉，而且会一直错到缓存过期
+  ——1.9.5 刚发布时就是这样，用户明明有新版却看到「已是最新版本」。限流期间只要
+  `latest.yml` 的版本高于当前版本，就必须用 `probeResult()` 的结论。
+- **拿不到说明时不能显示「这个版本没有填写更新说明」**：那是「暂时取不到」。
+  `Announcement` 带 `hint`（取不到的原因），弹窗据此显示真实原因。
 - 测试用 `CMDTOOLBOX_UPDATE_API` / `CMDTOOLBOX_UPDATE_YML` 覆盖两个地址。
   **假服务器必须同时提供 `latest.yml`**，只提供 `/releases` 会让检查停在 yml 分支。
 

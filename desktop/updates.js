@@ -366,9 +366,16 @@ async function checkForUpdate(current, seenVersion, fetchImpl = defaultFetch) {
   }
 
   const loaded = await loadReleaseList(fetchImpl);
+  const probeHasUpdate = Boolean(probe) && (compareVersions(probe.tag, current) || 0) > 0;
 
   if (loaded.releases) {
     const result = evaluateRelease(current, loaded.releases, seenVersion);
+    // 限流期间退回的缓存可能停在发新版之前，它会说「已是最新」；latest.yml 是发版
+    // 当时写进 Release 的附件，比旧缓存可信。只要它报出新版本，就不能被缓存盖掉，
+    // 否则用户明明有新版却看到「已是最新版本」，这条提示会一直持续到缓存过期。
+    if (loaded.error && probeHasUpdate && !result.hasUpdate) {
+      return { ...probeResult(current, probe, seenVersion), warning: loaded.error };
+    }
     const stale = Date.now() - loaded.at > CACHE_TTL;
     return loaded.error
       ? { ...result, stale, warning: loaded.error }
