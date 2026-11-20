@@ -47,9 +47,18 @@ const STATUS_LABEL: Record<GitChangeStatus, string> = {
   added: 'A',
   deleted: 'D',
   renamed: 'R',
-  untracked: '?',
+  // 未跟踪用 U 而不是 ?：与 VS Code / Trae 一致，一眼能认出「新文件」
+  untracked: 'U',
   conflicted: '!',
 };
+
+// 未跟踪目录展开成逐个文件后，同一目录下的行会共享一长串前缀。
+// 拆成「目录 + 文件名」两段渲染，目录过长时从尾部省略，文件名始终完整。
+function splitPath(relPath: string): { dir: string; name: string } {
+  const index = relPath.lastIndexOf('/');
+  if (index < 0) return { dir: '', name: relPath };
+  return { dir: relPath.slice(0, index + 1), name: relPath.slice(index + 1) };
+}
 
 export type GitPanelProps = {
   status: GitStatus | null;
@@ -359,6 +368,7 @@ export function GitPanel({
     const display = staged ? change.indexStatus : change.worktreeStatus;
     const badge = display ?? 'modified';
     const busy = busyPaths.has(change.path) || groupBusy;
+    const { dir, name } = splitPath(change.path);
     const conflicted =
       change.indexStatus === 'conflicted' || change.worktreeStatus === 'conflicted';
 
@@ -373,7 +383,16 @@ export function GitPanel({
           <span className={cn('git-change-badge', `is-${badge}`)}>{STATUS_LABEL[badge]}</span>
           <FileTypeIcon path={change.path} />
           <span className="git-change-path">
-            {change.origPath ? `${change.origPath} → ${change.path}` : change.path}
+            {change.origPath ? (
+              <span className="git-change-rename">
+                {`${change.origPath} → ${change.path}`}
+              </span>
+            ) : (
+              <>
+                {dir ? <span className="git-change-dir">{dir}</span> : null}
+                <span className="git-change-name">{name}</span>
+              </>
+            )}
           </span>
         </button>
 

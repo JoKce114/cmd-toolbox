@@ -684,6 +684,19 @@ node tests/change-icons-sidebar.mjs  # 更改列表文件图标与左侧栏拖�
 - **「更改」列表的文件类型图标在 `src/fileIcons.tsx`**，纯装饰（`aria-hidden`），
   不改变行点击语义；测试靠 `.git-change-row` 的文字定位，不受影响。
   新增扩展名只改那一张表，不要在 `GitPanel` 里内联判断。
+- **`git status` 必须带 `--untracked-files=all`**（`desktop/git.js` 的 `status`）。
+  默认行为会把未跟踪目录折叠成一条 `? dir/`，面板里只看到目录名、看不到里面有哪些
+  新文件，条数也比 VS Code / Trae 少。展开后未跟踪条目是逐个文件，所以放弃时要用
+  `pruneEmptyParents()` 清掉因此变空的目录，否则会留下空目录壳子（Git 不跟踪空目录，
+  面板已经显示干净，磁盘却没清）。
+- **未跟踪状态标记是绿色 `U`，不是 `?`**：`?` 用的是浅灰，和「没变动」看不出区别。
+- **更改行的路径拆成「目录 + 文件名」两段渲染**（`.git-change-dir` / `.git-change-name`），
+  目录段过长时从尾部省略，文件名始终完整。不要退回单段 `text-overflow`：同一目录下
+  的多个新文件会渲染成同一串被截断的目录名，完全分不清是哪一行。
+- **文件树的改盘操作必须通知源代码管理面板**：新建 / 重命名 / 粘贴（`FileTree` 的
+  `onDiskChange`）和编辑器删除（`EditorPane.confirmDelete`）都要调，最终接到 `App`
+  的 `handleEditorSaved` → `refreshGitLocal`（不带 fetch）。漏了就是「在文件树里新建了
+  文件，左侧『更改』列表不动」。
 - 标题栏底色是 `--surface: #ffffff`，红点（`.titlebar-update-dot`）用
   `box-shadow: 0 0 0 2px #fff` 贴合
 - 滚动条样式是全局的 `::-webkit-scrollbar`（10px）和 `::-webkit-scrollbar-thumb`

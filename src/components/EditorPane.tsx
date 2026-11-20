@@ -71,6 +71,8 @@ export type EditorPaneProps = {
   onDirtyPathsChange: (tabId: string, dirtyPaths: string[]) => void;
   // 写盘成功后触发：磁盘已变，更改列表与差异页签都要重新取
   onSaved?: (relPath: string) => void;
+  // 文件树 / 删除等非保存路径改盘后触发，用途与 onSaved 相同（不带新路径）
+  onDiskChange?: () => void;
   themeMode: TerminalThemeMode;
   wordWrap: boolean;
   tabSize: number;
@@ -114,6 +116,7 @@ export function EditorPane({
   onDirtyChange,
   onDirtyPathsChange,
   onSaved,
+  onDiskChange,
   themeMode,
   wordWrap,
   tabSize,
@@ -929,11 +932,13 @@ export function EditorPane({
       // 必须等真正删掉之后再关页签：trash 失败时用户既没删成文件、又丢了页签。
       if (doomed.length > 0) closeMany(doomed);
       setTreeRefreshToken((token) => token + 1);
+      // 已跟踪文件删除后会变成「已删除」条目，面板要重读才能显示
+      onDiskChange?.();
       onToast(`已删除 ${relPath}`, 'success');
     } catch (error) {
       onToast(toErrorMessage(error), 'error');
     }
-  }, [pendingDelete, openPaths, closeMany, group.path, onToast]);
+  }, [pendingDelete, openPaths, closeMany, group.path, onDiskChange, onToast]);
 
   // 删除确认文案：目录里有未保存文件时必须点名数量，否则用户会以为只是删个空目录。
   const deleteConfirmMessage = (pending: { relPath: string; dirtyPaths: string[] }) => {
@@ -1245,6 +1250,7 @@ export function EditorPane({
                 onClipChange={setFileClip}
                 onRequestDelete={requestDelete}
                 onAfterRename={handleAfterRename}
+                onDiskChange={onDiskChange}
                 refreshToken={treeRefreshToken}
               />
             )

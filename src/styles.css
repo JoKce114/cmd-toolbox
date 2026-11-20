@@ -2580,15 +2580,38 @@ p {
 }
 
 .git-change-badge.is-untracked {
-  color: var(--faint);
+  color: #0e9f6e;
 }
 
 .git-change-badge.is-conflicted {
   color: #d92d20;
 }
 
+/* 未跟踪目录展开后，同一目录下会有多行共享长前缀：
+   目录段在空间不足时从尾部省略，文件名始终完整显示，行之间才分得清 */
 .git-change-path {
+  display: flex;
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.git-change-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--faint);
+}
+
+.git-change-name {
+  flex: 0 0 auto;
+}
+
+.git-change-rename {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

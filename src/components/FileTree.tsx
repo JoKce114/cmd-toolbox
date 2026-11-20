@@ -41,6 +41,9 @@ type FileTreeProps = {
   onRequestDelete: (relPath: string) => void;
   // 文件操作只负责改磁盘；页签路径属于编辑器状态，由上层同步。
   onAfterRename: (fromRel: string, toRel: string) => void;
+  // 文件树直接改盘（新建 / 重命名 / 粘贴）后通知上层刷新源代码管理面板。
+  // 编辑器保存走的是 onSaved，两条路径互不覆盖，都要接。
+  onDiskChange?: () => void;
   // 外部（编辑器删除等）改盘后通知文件树重列；数值变化即触发一次 reloadAll。
   refreshToken: number;
   ref?: Ref<FileTreeHandle>;
@@ -86,6 +89,7 @@ export function FileTree({
   onClipChange,
   onRequestDelete,
   onAfterRename,
+  onDiskChange,
   refreshToken,
   ref,
 }: FileTreeProps) {
@@ -201,9 +205,11 @@ export function FileTree({
       await loadDir(relDir);
       setExpanded((previous) => new Set(previous).add(relDir));
       setPendingCreate(null);
+      // 新建的是未跟踪条目，源代码管理面板不会自己知道，必须显式通知
+      onDiskChange?.();
       if (kind === 'file') onOpen(relPath);
     },
-    [group.path, loadDir, onOpen, pendingCreate],
+    [group.path, loadDir, onDiskChange, onOpen, pendingCreate],
   );
 
   const createFile = useCallback((relDir: string) => {
@@ -241,8 +247,10 @@ export function FileTree({
       onAfterRename(relPath, toRel);
       setPendingRename(null);
       await loadDir(relDir);
+      // 重命名的结果可能是「删除 + 未跟踪」，面板要重读才能显示对
+      onDiskChange?.();
     },
-    [group.path, loadDir, onAfterRename, pendingRename],
+    [group.path, loadDir, onAfterRename, onDiskChange, pendingRename],
   );
 
   useEffect(() => {
@@ -329,11 +337,13 @@ export function FileTree({
         setExpanded((previous) => new Set(previous).add(targetDir));
         // 目录被移动后原目录的内容也失效了，整棵树重列一次最稳
         await reloadAll();
+        // 粘贴会新增未跟踪条目（复制）或删除旧条目（剪切），面板都要跟上
+        onDiskChange?.();
       } catch (error) {
         onError(toErrorMessage(error));
       }
     },
-    [clip, group.path, loadDir, onAfterRename, onClipChange, onError, onToast, reloadAll],
+    [clip, group.path, loadDir, onAfterRename, onClipChange, onDiskChange, onError, onToast, reloadAll],
   );
 
   // 绝对路径要转成 Windows 分隔符，相对路径保持树里的 / 写法。

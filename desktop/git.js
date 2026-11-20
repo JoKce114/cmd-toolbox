@@ -18,7 +18,8 @@ function isDirectory(target) {
   }
 }
 
-// 未跟踪目录在 porcelain 里显示为 `? dir/`，fs.rm 不加 recursive 时不会删除目录
+// status 用了 --untracked-files=all，未跟踪条目是逐个文件而不是 `? dir/`；
+// 这里仍按路径实际类型判断，调用方传入目录时也能整棵删除
 async function removePath(projectPath, item) {
   const target = resolveWithin(projectPath, item);
   let recursive = false;
@@ -28,6 +29,25 @@ async function removePath(projectPath, item) {
     // 路径已不存在时由 rm 的 force 静默处理
   }
   await fsp.rm(target, { force: true, recursive });
+}
+
+// 未跟踪目录展开成文件后，删掉文件会留下空目录。Git 不跟踪空目录，面板已经
+// 显示干净了，磁盘上却残留空壳。逐个向上清理，碰到非空目录或项目根就停。
+async function pruneEmptyParents(projectPath, item) {
+  const root = path.resolve(projectPath);
+  let current = path.dirname(resolveWithin(projectPath, item));
+  while (current !== root) {
+    // 词法上必须仍在项目内，path.dirname 循环不会自己兜住越界
+    if (!current.startsWith(`${root}${path.sep}`)) return;
+    try {
+      if ((await fsp.readdir(current)).length > 0) return;
+      await fsp.rmdir(current);
+    } catch {
+      // 目录被别处占用或已删除，放弃清理即可，不影响放弃操作的返回值
+      return;
+    }
+    current = path.dirname(current);
+  }
 }
 
 // OpenSSH 9 之后的每次连接都会往 stderr 打「抗量子」提示，与操作结果无关；
@@ -226,6 +246,10 @@ async function status(projectPath) {
     'status',
     '--porcelain=v2',
     '--branch',
+    // 默认会把未跟踪目录折叠成一条 `? dir/`，面板里只看到目录名、看不到里面有哪些
+    // 新文件（VS Code / Trae 都是逐个列出的）。展开成文件后，新目录里的每个文件
+    // 都有自己的行和图标。被 .gitignore 忽略的内容仍然不会出现。
+    '--untracked-files=all',
     '-z',
   ]);
   if (result.enoent) {
@@ -298,6 +322,7 @@ async function discard(projectPath, payload) {
 
   for (const item of untracked) {
     await removePath(projectPath, item);
+    await pruneEmptyParents(projectPath, item);
   }
 
   return { ok: true };
@@ -332,6 +357,7 @@ async function discardAll(projectPath) {
     for (const change of current.changes) {
       if (change.worktreeStatus !== 'untracked') continue;
       await removePath(projectPath, change.path);
+      await pruneEmptyParents(projectPath, change.path);
     }
   }
 

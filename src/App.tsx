@@ -3451,6 +3451,7 @@ export default function App() {
           onDirtyChange={handleDirtyChange}
           onDirtyPathsChange={handleDirtyPathsChange}
           onSaved={handleEditorSaved}
+          onDiskChange={handleEditorSaved}
           themeMode={terminalThemeMode}
           wordWrap={prefs.editorWordWrap}
           tabSize={prefs.editorTabSize}

@@ -138,6 +138,30 @@ assert(!existsSync(join(repo, 'newdir')), '未跟踪目录被递归删除');
 const afterDirDiscard = await git.status(repo);
 assert(!afterDirDiscard.hasChanges, '放弃目录后状态干净');
 
+console.log('5d3. 未跟踪目录展开为逐个文件');
+mkdirSync(join(repo, 'newdir2', 'nested'), { recursive: true });
+writeFileSync(join(repo, 'newdir2', 'a.txt'), 'a\n');
+writeFileSync(join(repo, 'newdir2', 'nested', 'b.txt'), 'b\n');
+writeFileSync(join(repo, 'newdir2', 'nested', 'c.txt'), 'c\n');
+const expandedStatus = await git.status(repo);
+const expandedPaths = expandedStatus.changes
+  .filter((c) => c.worktreeStatus === 'untracked')
+  .map((c) => c.path)
+  .sort();
+assert(
+  JSON.stringify(expandedPaths) ===
+    JSON.stringify(['newdir2/a.txt', 'newdir2/nested/b.txt', 'newdir2/nested/c.txt']),
+  '未跟踪目录不再折叠，逐个文件列出',
+);
+// 面板「放弃」逐个文件删除，删完不能留下空目录壳子
+await git.discard(repo, {
+  tracked: [],
+  untracked: ['newdir2/a.txt', 'newdir2/nested/b.txt', 'newdir2/nested/c.txt'],
+});
+assert(!existsSync(join(repo, 'newdir2')), '逐个放弃后空目录被清理');
+const afterPrune = await git.status(repo);
+assert(!afterPrune.hasChanges, '逐个放弃后状态干净');
+
 console.log('5e. 全部暂存与全部放弃');
 writeFileSync(join(repo, 'index.php'), '<?php echo 4;\n');
 await git.stageAll(repo);
